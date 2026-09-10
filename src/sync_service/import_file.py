@@ -20,6 +20,48 @@ DEFAULT_CATEGORIES = (
 )
 
 
+def compare_catalogs(
+    moysklad: list[dict[str, Any]],
+    novicloud: list[dict[str, Any]],
+    categories: tuple[str, ...] = DEFAULT_CATEGORIES,
+) -> list[dict[str, Any]]:
+    novicloud_by_code = {str(item.get("kod", "")): item for item in novicloud}
+    comparison: list[dict[str, Any]] = []
+    for product in moysklad:
+        category = str(product.get("pathName") or "")
+        if category not in categories:
+            continue
+        code = str(product.get("code") or "")
+        if not code:
+            continue
+        novicloud_item = novicloud_by_code.get(code)
+        price = _price(product)
+        if novicloud_item is None:
+            status = "missing"
+            label = "Нет в Novicloud"
+        elif novicloud_item.get("aktywny") is False or product.get("archived"):
+            status = "archive"
+            label = "Архивировать"
+        elif float(novicloud_item.get("cena_det") or 0) != price:
+            status = "price"
+            label = "Изменить цену"
+        else:
+            status = "same"
+            label = "Совпадает"
+        comparison.append({
+            "code": code,
+            "name": str(product.get("name") or ""),
+            "category": category,
+            "price": price,
+            "novicloud_price": novicloud_item.get("cena_det") if novicloud_item else None,
+            "status": status,
+            "label": label,
+            "archived": bool(product.get("archived")) or (novicloud_item is not None and novicloud_item.get("aktywny") is False),
+            "product": product,
+        })
+    return sorted(comparison, key=lambda item: (item["status"] == "same", item["name"].lower()))
+
+
 def _barcode(product: dict[str, Any]) -> str:
     barcodes = product.get("barcodes") or []
     if isinstance(barcodes, list) and barcodes and isinstance(barcodes[0], dict):
@@ -36,7 +78,12 @@ def _price(product: dict[str, Any]) -> float:
     return 0.0
 
 
-def build_rows(moysklad: list[dict[str, Any]], novicloud: list[dict[str, Any]], categories: tuple[str, ...] = DEFAULT_CATEGORIES) -> list[list[str]]:
+def build_rows(
+    moysklad: list[dict[str, Any]],
+    novicloud: list[dict[str, Any]],
+    categories: tuple[str, ...] = DEFAULT_CATEGORIES,
+    include_missing: bool = False,
+) -> list[list[str]]:
     active_by_code = {str(item.get("kod", "")): item for item in novicloud}
     rows: list[list[str]] = []
     for product in moysklad:
@@ -45,9 +92,9 @@ def build_rows(moysklad: list[dict[str, Any]], novicloud: list[dict[str, Any]], 
             continue
         code = str(product.get("code") or "")
         novicloud_item = active_by_code.get(code)
-        if novicloud_item is None:
+        if novicloud_item is None and not include_missing:
             continue
-        archived = bool(product.get("archived")) or novicloud_item.get("aktywny") is False
+        archived = bool(product.get("archived")) or (novicloud_item is not None and novicloud_item.get("aktywny") is False)
         price = _price(product)
         barcode = _barcode(product)
         name = f"{code} - {product.get('name', '')}".strip(" -")
@@ -58,6 +105,16 @@ def build_rows(moysklad: list[dict[str, Any]], novicloud: list[dict[str, Any]], 
             code, "", "", str(product.get("id", "")), "", "", "", "", "", changed, "",
         ])
     return sorted(rows, key=lambda row: row[1].lower())
+
+
+def rows_for_codes(
+    moysklad: list[dict[str, Any]],
+    novicloud: list[dict[str, Any]],
+    codes: set[str],
+    categories: tuple[str, ...] = DEFAULT_CATEGORIES,
+) -> list[list[str]]:
+    selected_moysklad = [item for item in moysklad if str(item.get("code") or "") in codes]
+    return build_rows(selected_moysklad, novicloud, categories, include_missing=True)
 
 
 def csv_bytes(rows: list[list[str]]) -> bytes:
