@@ -27,5 +27,7 @@ jobs:
             git fetch --prune origin
             git checkout master
             git reset --hard origin/master
+            sed -i 's/^NOVICLOUD_API_VERSION=v1$/NOVICLOUD_API_VERSION=v2/' .env
+            grep NOVICLOUD_API_VERSION .env
             docker compose up -d --build --remove-orphans
             docker image prune -f
