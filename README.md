@@ -37,6 +37,22 @@ docker run --rm --env-file .env novicloud-moysklad-sync novicloud-products
 
 Do not copy `.env`, generated files, or the `data/` directory into the image.
 
+## Automatic deployment
+
+The repository includes a GitHub Actions deployment workflow. Configure these
+repository secrets before enabling it:
+
+- `DEPLOY_HOST` — VPS public IP or hostname;
+- `DEPLOY_USER` — deployment user, not necessarily `root`;
+- `DEPLOY_SSH_KEY` — private key for a dedicated deploy key;
+- `DEPLOY_PATH` — checkout path on the VPS, for example `/opt/novicloud-sync`;
+- `DEPLOY_PORT` — optional SSH port (defaults to `22`).
+
+The matching public key must be installed in the deployment user's
+`~/.ssh/authorized_keys`. The VPS checkout must already exist and have its
+GitHub remote configured. Keep API credentials only in the VPS `.env`; do not
+put them in GitHub or the repository.
+
 ## Initial API checks
 
 ```bash
