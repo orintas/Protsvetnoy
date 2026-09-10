@@ -64,6 +64,15 @@ sync-cli moysklad-stocks
 The commands only read data. They print a compact summary and do not create or
 change documents.
 
+## Test synchronization worker
+
+The `worker` service checks Novicloud sales and returns every five minutes and
+shows the results in the web interface under “Журнал синхронизации”. In the
+current test mode it only reads data and writes an idempotent SQLite log to the
+shared `sync-data` volume; it does not create documents in MoySklad. Keep
+`DRY_RUN=true` until document mapping and duplicate protection are explicitly
+verified.
+
 ## Web import generator
 
 Start the private generator on the VPS with `docker compose up -d --build`.

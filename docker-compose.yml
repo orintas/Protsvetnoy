@@ -6,3 +6,14 @@ services:
     command: ["web-server"]
     ports:
       - "8080:8080"
+    volumes:
+      - sync-data:/app/data
+  worker:
+    build: .
+    env_file:
+      - .env
+    command: ["sync-worker"]
+    volumes:
+      - sync-data:/app/data
+volumes:
+  sync-data:

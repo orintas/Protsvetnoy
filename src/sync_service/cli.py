@@ -17,11 +17,16 @@ def main() -> None:
     sales.add_argument("--from", dest="date_from", required=True)
     subparsers.add_parser("moysklad-stocks")
     subparsers.add_parser("web-server")
+    subparsers.add_parser("sync-worker")
     args = parser.parse_args()
 
     if args.command == "web-server":
         from .web import main as web_main
         web_main()
+        return
+    if args.command == "sync-worker":
+        from .sync_log import worker
+        worker()
         return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):
