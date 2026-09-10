@@ -18,7 +18,7 @@ def application(environ, start_response):
 <html lang="ru">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Novicloud Sync</title>
+<title>Varvikas Grupp System</title>
 <style>
 :root{color-scheme:dark;--bg:#090b12;--panel:#121622;--line:#252b3b;--text:#f6f7fb;--muted:#9aa3b8;--accent:#8b7cff;--accent2:#5eead4}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0,#25204c 0,transparent 35%),var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
@@ -31,7 +31,7 @@ def application(environ, start_response):
 .note{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px}.note strong{color:var(--text)}.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:24px 0 14px;color:var(--muted);font-size:13px}.toolbar input[placeholder]{flex:1;min-width:220px;background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text)}.table{overflow:auto;border:1px solid var(--line);border-radius:12px}.table table{border-collapse:collapse;width:100%;min-width:680px}.table th,.table td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}.table th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.table td span{color:var(--muted);font-size:13px}.badge{display:inline-block!important;padding:4px 8px;border-radius:7px;font-size:12px!important;color:#fff!important;background:#334155}.badge.missing{background:#2563eb}.badge.archive{background:#b45309}.badge.price{background:#7c3aed}.export{margin-top:18px}.error{color:#fca5a5;margin-top:20px}@media(max-width:650px){.wrap{padding-top:24px}.top{margin-bottom:42px}.grid{grid-template-columns:1fr}.actions{flex-direction:column}.button{width:100%}}
 </style></head>
 <body><main class="wrap">
-<header class="top"><div class="brand"><span class="mark">↗</span><span>Novicloud Sync</span></div><span class="status">Система готова</span></header>
+<header class="top"><div class="brand"><span class="mark">↗</span><span>Varvikas Grupp System</span></div><span class="status">Система готова</span></header>
 <section class="hero"><div class="eyebrow">Ассортимент · экспорт</div><h1>Готовьте импорт<br>без ручной работы.</h1><p>Соберите актуальный файл ассортимента для Novicloud из данных МойСклад и Novicloud за один клик.</p></section>
 <section class="grid"><article class="card"><div class="icon">↔</div><h2>Два источника</h2><p>Синхронизация данных выполняется на сервере. Ваши API-ключи не покидают VPS.</p></article>
 <article class="card"><div class="icon">✓</div><h2>Готово к импорту</h2><p>Поддерживаются CSV и XLSX с нужными колонками, ценами и статусами товаров.</p></article></section>
