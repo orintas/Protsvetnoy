@@ -53,3 +53,14 @@ def test_build_rows_reads_russian_polish_price_type():
         [{"kod": "A2", "aktywny": True}],
     )
     assert rows[0][8] == "9.99"
+
+
+def test_compare_catalogs_excludes_categories_not_in_original_import():
+    product = {
+        "id": "ms-3",
+        "code": "PUZZLE",
+        "name": "Puzzle",
+        "pathName": "3D puzzles",
+        "salePrices": [{"priceType": {"name": "Цена в Польше"}, "value": 1000}],
+    }
+    assert compare_catalogs([product], [{"kod": "PUZZLE", "aktywny": True}]) == []

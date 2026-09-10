@@ -15,8 +15,7 @@ HEADERS = [
     "Description5", "Symbol GTU", "Masa własna", "Ważony", "Ostatnia zmiana", "Ostatnia zmiana cen",
 ]
 DEFAULT_CATEGORIES = (
-    "Painting by numbers", "Diamond painting", "3D puzzles", "Accessories",
-    "Products for Shops", "Doll making kit",
+    "Painting by numbers", "Diamond painting", "Products for Shops", "Accessories",
 )
 
 
