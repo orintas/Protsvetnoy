@@ -39,3 +39,17 @@ def test_compare_catalogs_reports_missing_and_price_changes():
     result = compare_catalogs(moysklad, novicloud)
     assert {row["status"] for row in result} == {"missing", "price"}
     assert rows_for_codes(moysklad, novicloud, {"NEW"})[0][1].startswith("NEW -")
+
+
+def test_build_rows_reads_russian_polish_price_type():
+    rows = build_rows(
+        [{
+            "id": "ms-2",
+            "code": "A2",
+            "name": "Item",
+            "pathName": "Accessories",
+            "salePrices": [{"priceType": {"name": "Цена в Польше"}, "value": "999,00"}],
+        }],
+        [{"kod": "A2", "aktywny": True}],
+    )
+    assert rows[0][8] == "9.99"

@@ -3,8 +3,8 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
-from datetime import datetime, timezone
 from html import escape
+import unicodedata
 from typing import Any
 
 
@@ -73,8 +73,21 @@ def _price(product: dict[str, Any]) -> float:
     prices = product.get("salePrices") or []
     if isinstance(prices, list):
         for item in prices:
-            if isinstance(item, dict) and str(item.get("priceType", {}).get("name", "")).lower() == "cena w polsce":
-                return round(float(item.get("value", 0)) / 100, 2)
+            if not isinstance(item, dict):
+                continue
+            price_type = item.get("priceType")
+            type_name = price_type.get("name", "") if isinstance(price_type, dict) else ""
+            normalized_name = "".join(
+                char for char in unicodedata.normalize("NFKD", str(type_name).lower())
+                if not unicodedata.combining(char)
+            ).strip()
+            if normalized_name not in {"cena w polsce", "cena polska", "цена в польше", "polish price"}:
+                continue
+            raw_value = item.get("value", 0)
+            try:
+                return round(float(str(raw_value).replace(",", ".")) / 100, 2)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Invalid MoySklad price value: {raw_value!r}") from error
     return 0.0
 
 
