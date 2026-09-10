@@ -17,6 +17,19 @@ class NovicloudClient:
         params = {"kod": barcode} if barcode else None
         return self._client.get("/towary", params=params)
 
+    def all_products(self) -> list[dict[str, Any]]:
+        payload = self.products()
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("dane", [])
+            if not isinstance(rows, list):
+                raise ValueError("Novicloud products response has invalid dane")
+            result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("links", {}).get("next") if isinstance(payload.get("links"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
     def stores(self) -> dict[str, Any]:
         return self._client.get("/sklepy")
 

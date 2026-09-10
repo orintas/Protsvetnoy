@@ -18,6 +18,19 @@ class MoySkladClient:
     def stock_report(self) -> dict[str, Any]:
         return self._client.get("/report/stock/all")
 
+    def products(self) -> list[dict[str, Any]]:
+        payload = self._client.get("/entity/product", params={"limit": 1000})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad products response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
     def create_retail_sale(
         self,
         *,

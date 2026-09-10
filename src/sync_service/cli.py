@@ -16,8 +16,13 @@ def main() -> None:
     sales = subparsers.add_parser("novicloud-sales")
     sales.add_argument("--from", dest="date_from", required=True)
     subparsers.add_parser("moysklad-stocks")
+    subparsers.add_parser("web-server")
     args = parser.parse_args()
 
+    if args.command == "web-server":
+        from .web import main as web_main
+        web_main()
+        return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):
         client = NovicloudClient(

@@ -44,6 +44,15 @@ class JsonClient:
             raise ApiError(f"GET {response.url} returned a non-object JSON response")
         return payload
 
+    def get_url(self, url: str) -> dict[str, Any]:
+        response = self._client.get(url)
+        if response.is_error:
+            raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ApiError(f"GET {response.url} returned a non-object JSON response")
+        return payload
+
     def post(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         response = self._client.post(path, json=payload)
         if response.is_error:

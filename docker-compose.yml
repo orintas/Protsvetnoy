@@ -1,6 +1,8 @@
 services:
-  sync:
+  web:
     build: .
     env_file:
       - .env
-    command: ["novicloud-products"]
+    command: ["web-server"]
+    ports:
+      - "8080:8080"

@@ -64,6 +64,14 @@ sync-cli moysklad-stocks
 The commands only read data. They print a compact summary and do not create or
 change documents.
 
+## Web import generator
+
+Start the private generator on the VPS with `docker compose up -d --build`.
+Open `http://SERVER_IP:8080/` and choose CSV or XLSX. The page keeps API
+credentials on the server and only returns the generated file. Restrict port
+8080 with the VPS firewall or put it behind an HTTPS reverse proxy before
+exposing it publicly.
+
 ## Store mapping
 
 The verified Make Data Store mappings are kept in
