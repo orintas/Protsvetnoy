@@ -15,8 +15,26 @@ class MoySkladClient:
             },
         )
 
+    @property
+    def base_url(self) -> str:
+        return self._client.base_url
+
     def stock_report(self) -> dict[str, Any]:
         return self._client.get("/report/stock/all")
+
+    def documents(self, entity: str, *, document_filter: str, limit: int = 1000) -> list[dict[str, Any]]:
+        """Fetch all rows of a document entity (e.g. retaildemand) matching a filter."""
+        payload = self._client.get(f"/entity/{entity}", params={"filter": document_filter, "limit": limit})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError(f"MoySklad {entity} response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
 
     def products(self) -> list[dict[str, Any]]:
         payload = self._client.get("/entity/product", params={"limit": 1000})

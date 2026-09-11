@@ -73,13 +73,37 @@ shared `sync-data` volume; it does not create documents in MoySklad. Keep
 `DRY_RUN=true` until document mapping and duplicate protection are explicitly
 verified.
 
-## Web import generator
+## Web interface
 
-Start the private generator on the VPS with `docker compose up -d --build`.
-Open `http://SERVER_IP:8080/` and choose CSV or XLSX. The page keeps API
-credentials on the server and only returns the generated file. Restrict port
-8080 with the VPS firewall or put it behind an HTTPS reverse proxy before
-exposing it publicly.
+Start the private web app on the VPS with `docker compose up -d --build`. Open
+`http://SERVER_IP:8080/` and switch between three tabs, each covering a
+distinct task:
+
+- **Ассортимент** — compares the Novicloud and MoySklad catalogs and generates
+  the CSV/XLSX import file for Novicloud;
+- **Журнал синхронизации** — shows the read-only sales/returns check log from
+  the `worker` service (test mode, no documents are created yet);
+- **Аналитика продаж** — aggregates MoySklad `retaildemand`/`retailsalesreturn`
+  sums and counts per country storefront (Poland, Lithuania, Latvia, Estonia)
+  for a selected date range.
+
+The page keeps API credentials on the server and only returns generated files
+or JSON summaries. Restrict port 8080 with the VPS firewall or put it behind
+an HTTPS reverse proxy before exposing it publicly.
+
+## Sales analytics by country
+
+`src/sync_service/sales_analytics.py` maps each country storefront to its
+MoySklad organization (legal entity):
+
+- Poland — `Varvikas Grupp OU Filiale Poland`;
+- Lithuania — `Varvikas Grupp OU Filiale Lithuania`;
+- Latvia — `Varvikas Grupp OU Filiale Latvia`;
+- Estonia — `Varvikas Grupp OU Filiale Estonia`.
+
+Novicloud is only used for Poland; the other three countries are read
+directly from MoySklad `retaildemand` (sales) and `retailsalesreturn`
+(returns), filtered by organization and `moment` range.
 
 ## Store mapping
 
