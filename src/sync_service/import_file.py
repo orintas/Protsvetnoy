@@ -19,12 +19,32 @@ DEFAULT_CATEGORIES = (
 )
 
 
+def _novicloud_index(novicloud: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index Novicloud items by article code.
+
+    Novicloud stores the article/SKU in ``pkwiu`` for newer items and used to
+    store it in ``kod`` for older ones (``kod`` now mostly holds barcodes).
+    Index by both so lookups work regardless of which field is populated,
+    preferring ``pkwiu`` when both are present.
+    """
+    index: dict[str, dict[str, Any]] = {}
+    for item in novicloud:
+        kod = str(item.get("kod") or "")
+        if kod:
+            index.setdefault(kod, item)
+    for item in novicloud:
+        pkwiu = str(item.get("pkwiu") or "")
+        if pkwiu:
+            index[pkwiu] = item
+    return index
+
+
 def compare_catalogs(
     moysklad: list[dict[str, Any]],
     novicloud: list[dict[str, Any]],
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
 ) -> list[dict[str, Any]]:
-    novicloud_by_code = {str(item.get("kod", "")): item for item in novicloud}
+    novicloud_by_code = _novicloud_index(novicloud)
     comparison: list[dict[str, Any]] = []
     for product in moysklad:
         category = str(product.get("pathName") or "")
@@ -96,7 +116,7 @@ def build_rows(
     categories: tuple[str, ...] = DEFAULT_CATEGORIES,
     include_missing: bool = False,
 ) -> list[list[str]]:
-    active_by_code = {str(item.get("kod", "")): item for item in novicloud}
+    active_by_code = _novicloud_index(novicloud)
     rows: list[list[str]] = []
     for product in moysklad:
         category = str(product.get("pathName") or "")
