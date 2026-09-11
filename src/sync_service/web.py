@@ -74,7 +74,7 @@ let rows=[];
 const labels={missing:'Нет в Novicloud',archive:'Архивировать',price:'Изменить цену',same:'Совпадает'};
 compare.onclick=async()=>{compare.disabled=true;compare.textContent='Загружаем каталоги…';result.innerHTML='';
 try{const response=await fetch('/api/compare');if(!response.ok)throw new Error(await response.text());rows=await response.json();render();}
-catch(error){result.innerHTML='<p class="error">Не удалось сравнить каталоги: '+error.message+'</p>';}
+catch(error){result.innerHTML='<p class="error">Не удалось сравнить каталоги: '+error.message+'<br><span class="muted">Novicloud иногда отвечает с временной ошибкой — сервер уже делает несколько попыток автоматически. Нажмите «Сравнить каталоги» ещё раз через минуту.</span></p>';}
 compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
 function render(){const diff=rows.filter(r=>r.status!=='same');result.innerHTML=
 '<div class="toolbar"><input id="search" placeholder="Поиск по коду или названию"><select id="category"><option value="">Все категории</option>'+[...new Set(rows.map(r=>r.category))].sort().map(c=>'<option>'+c+'</option>').join('')+'</select><label><input id="onlyDiff" type="checkbox" checked> Только отличия</label><span id="count"></span></div>'+
