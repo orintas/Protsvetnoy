@@ -49,6 +49,23 @@ class SyncLog:
             return [dict(row) for row in db.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
 
 
+def _sale_summary(item: dict[str, Any]) -> str:
+    doc = item.get("nr_dok") or item.get("nr_systemowy") or ""
+    amount = item.get("brutto")
+    shop = ((item.get("sklep") or {}).get("id")) if isinstance(item.get("sklep"), dict) else None
+    when = item.get("data") or ""
+    parts = []
+    if doc:
+        parts.append(f"чек {doc}")
+    if amount is not None:
+        parts.append(f"на сумму {amount} PLN")
+    if shop is not None:
+        parts.append(f"магазин №{shop}")
+    if when:
+        parts.append(f"от {when}")
+    return ", ".join(parts) if parts else "Продажа"
+
+
 def run_once(settings: Settings, log: SyncLog) -> None:
     client = NovicloudClient(
         base_url=settings.novicloud_base_url,
@@ -63,9 +80,11 @@ def run_once(settings: Settings, log: SyncLog) -> None:
             external_id = str(item.get("id") or item.get("numer") or item.get("nr") or "")
             operation_type = str(item.get("typ") or item.get("typ_sprzedazy") or item.get("type") or "")
             if operation_type == "60":
-                log.add("return", "dry-run", "Возврат найден; документ не создавался", external_id, item)
+                summary = _sale_summary(item)
+                log.add("return", "dry-run", f"Возврат найден ({summary}); документ в МойСклад не создавался — тестовый режим, синхронизация ещё не включена", external_id, item)
             elif operation_type in ("21", ""):
-                log.add("sale", "dry-run", "Продажа найдена; документ не создавался", external_id, item)
+                summary = _sale_summary(item)
+                log.add("sale", "dry-run", f"Продажа найдена ({summary}); документ в МойСклад не создавался — тестовый режим, синхронизация ещё не включена", external_id, item)
         log.add("run", "success", "Проверка завершена в тестовом режиме")
     except Exception as error:
         log.add("run", "error", f"Ошибка проверки: {error}")
