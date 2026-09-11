@@ -14,6 +14,10 @@ class Settings:
     novicloud_base_url: str
     moysklad_token: str
     moysklad_base_url: str
+    yandex_market_api_key: str
+    yandex_market_business_id: str
+    yandex_market_campaign_id: str
+    yandex_market_base_url: str
     dry_run: bool
 
     @classmethod
@@ -29,6 +33,12 @@ class Settings:
             moysklad_token=_required("MOYSKLAD_TOKEN"),
             moysklad_base_url=os.getenv(
                 "MOYSKLAD_BASE_URL", "https://api.moysklad.ru/api/remap/1.2"
+            ).rstrip("/"),
+            yandex_market_api_key=os.getenv("YANDEX_MARKET_API_KEY", ""),
+            yandex_market_business_id=os.getenv("YANDEX_MARKET_BUSINESS_ID", ""),
+            yandex_market_campaign_id=os.getenv("YANDEX_MARKET_CAMPAIGN_ID", ""),
+            yandex_market_base_url=os.getenv(
+                "YANDEX_MARKET_BASE_URL", "https://api.partner.market.yandex.ru"
             ).rstrip("/"),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )

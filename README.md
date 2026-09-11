@@ -73,19 +73,44 @@ shared `sync-data` volume; it does not create documents in MoySklad. Keep
 `DRY_RUN=true` until document mapping and duplicate protection are explicitly
 verified.
 
+## Yandex Market synchronization (replacing TopSeller's connector)
+
+`src/sync_service/yandex_market.py` is a Partner API client (`Api-Key` auth,
+orders/status/stocks/prices/returns endpoints). `src/sync_service/
+yandex_market_sync.py` runs a separate `yandex-market-sync-worker` service that
+polls orders updated in the last 24 hours every five minutes and writes an
+idempotent SQLite log (`data/yandex_market_sync.sqlite3`), shown in the web
+interface under the “Яндекс.Маркет” tab. It is currently read-only (test
+mode): orders and returns/cancellations are logged but no `customerorder`
+documents are created in MoySklad yet.
+
+Configuration (`.env`):
+
+- `YANDEX_MARKET_API_KEY` — Partner API key created in the seller cabinet
+  (Настройки → API и модули);
+- `YANDEX_MARKET_BUSINESS_ID` — business/cabinet id (`GET /campaigns`);
+- `YANDEX_MARKET_CAMPAIGN_ID` — the storefront (campaign) to sync, e.g. one
+  FBS shop at a time during testing;
+- `YANDEX_MARKET_BASE_URL` — defaults to `https://api.partner.market.yandex.ru`.
+
+`offerId` in Yandex Market orders matches the MoySklad product `article`/
+`code` directly, so no extra SKU mapping table is required.
+
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open
-`http://SERVER_IP:8080/` and switch between three tabs, each covering a
+`http://SERVER_IP:8080/` and switch between four tabs, each covering a
 distinct task:
 
 - **Ассортимент** — compares the Novicloud and MoySklad catalogs and generates
   the CSV/XLSX import file for Novicloud;
-- **Журнал синхронизации** — shows the read-only sales/returns check log from
-  the `worker` service (test mode, no documents are created yet);
+- **Журнал синхронизации** — shows the read-only Novicloud sales/returns check
+  log from the `worker` service (test mode, no documents are created yet);
 - **Аналитика продаж** — aggregates MoySklad `retaildemand`/`retailsalesreturn`
   sums and counts per country storefront (Poland, Lithuania, Latvia, Estonia)
-  for a selected date range.
+  for a selected date range;
+- **Яндекс.Маркет** — shows the read-only Yandex Market orders check log from
+  the `yandex-market-sync-worker` service (test mode).
 
 The page keeps API credentials on the server and only returns generated files
 or JSON summaries. Restrict port 8080 with the VPS firewall or put it behind

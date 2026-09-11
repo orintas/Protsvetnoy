@@ -12,6 +12,7 @@ from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .sales_analytics import country_sales_summary
 from .sync_log import SyncLog
+from .yandex_market_sync import YandexMarketSyncLog
 
 
 def application(environ, start_response):
@@ -45,6 +46,7 @@ def application(environ, start_response):
 <button class="tab-btn active" data-tab="catalog" type="button">Ассортимент</button>
 <button class="tab-btn" data-tab="log" type="button">Журнал синхронизации</button>
 <button class="tab-btn" data-tab="analytics" type="button">Аналитика продаж</button>
+<button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 </nav>
 <section id="tab-catalog" class="tab-panel active">
 <section class="grid"><article class="card"><div class="icon">↔</div><h2>Два источника</h2><p>Синхронизация данных выполняется на сервере. Ваши API-ключи не покидают VPS.</p></article>
@@ -68,6 +70,9 @@ def application(environ, start_response):
 <div id="analytics-result"></div>
 </section>
 </section>
+<section id="tab-ym-log" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Тестовый режим: заказы читаются каждые 5 минут, документы в МойСклад пока не создаются.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div><div id="ym-sync-log" class="log"></div></section>
+</section>
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
 let rows=[];
@@ -87,6 +92,8 @@ function draw(){const visibleRows=visible(), tbody=document.getElementById('tbod
 function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;location.href='/generate?format='+format+'&codes='+codes;}
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map(e=>'<div class="log-row"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 document.getElementById('refresh-log').onclick=loadLog;loadLog();
+async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map(e=>'<div class="log-row"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+btn.dataset.tab).classList.add('active');});
 const flags={PL:'🇵🇱',LT:'🇱🇹',LV:'🇱🇻',EE:'🇪🇪'};
 function defaultPeriod(){const to=new Date(),from=new Date();from.setDate(to.getDate()-30);const fmt=d=>d.toISOString().slice(0,10);document.getElementById('date-from').value=fmt(from);document.getElementById('date-to').value=fmt(to);}
@@ -124,6 +131,10 @@ analyticsResult.innerHTML='<div class="country-grid">'+data.map(c=>
         return [payload]
     if path == "/api/sync-log":
         payload = dumps(SyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/yandex-market-sync-log":
+        payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/sales-analytics":
