@@ -100,6 +100,7 @@ def _dispatch(path, environ, start_response):
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
+<button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
 </nav>
@@ -125,6 +126,9 @@ def _dispatch(path, environ, start_response):
 </section>
 <section id="tab-ozon" class="tab-panel">
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
+</section>
+<section id="tab-shopify" class="tab-panel">
+<section class="card"><h2 style="margin:0 0 6px">Shopify</h2><p style="margin:0" class="muted">Интеграция с Shopify пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
 </section>
 <section id="tab-ym-log" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Тестовый режим: заказы читаются каждые 5 минут, документы в МойСклад пока не создаются.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div><div id="ym-sync-log" class="log"></div></section>
