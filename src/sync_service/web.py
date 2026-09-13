@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from html import escape
-from json import dumps
+from json import dumps, loads
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
+from .category_sync import CategorySyncConfig
 from .config import Settings
 from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
@@ -13,6 +14,15 @@ from .novicloud import NovicloudClient
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .sync_log import SyncLog
 from .yandex_market_sync import YandexMarketSyncLog
+
+
+def _read_json_body(environ) -> dict:
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        length = 0
+    raw = environ["wsgi.input"].read(length) if length else b""
+    return loads(raw.decode("utf-8")) if raw else {}
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -41,7 +51,8 @@ def _compare_stream():
         yield _ndjson_line({"stage": "novicloud"})
         novicloud_products = novicloud.all_products()
         yield _ndjson_line({"stage": "matching"})
-        comparison = compare_catalogs(moysklad_products, novicloud_products)
+        categories = tuple(CategorySyncConfig().load()["novicloud"])
+        comparison = compare_catalogs(moysklad_products, novicloud_products, categories)
         public_rows = [{key: value for key, value in row.items() if key != "product"} for row in comparison]
         yield _ndjson_line({"stage": "done", "rows": public_rows})
     except Exception as error:
@@ -101,6 +112,7 @@ def _dispatch(path, environ, start_response):
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
+<button class="tab-btn" data-tab="categories" type="button">Категории</button>
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
@@ -134,6 +146,13 @@ def _dispatch(path, environ, start_response):
 <div id="shift-open-list" class="log"></div>
 <h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Журнал закрытий</h3>
 <div id="shift-close-log" class="log"></div></section>
+</section>
+<section id="tab-categories" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
+<div><h2 style="margin:0 0 6px">Категории для синхронизации</h2><p style="margin:0">Категории из МойСклад (группа «ProTsvetnoy OU»). Отметьте, какие синхронизировать с Novicloud, какие — с Shopify. Выбор для Shopify пока просто сохраняется — сама интеграция ещё не подключена.</p></div>
+<button class="button" id="save-categories" type="button">Сохранить</button>
+</div>
+<div id="categories-list" class="log"></div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
@@ -225,6 +244,17 @@ try{const response=await fetch('/api/shift-open');const data=await response.json
 target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
 catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
 loadOpenShifts();loadShiftCloseLog();
+async function loadCategories(){const target=document.getElementById('categories-list');
+try{const response=await fetch('/api/categories');const data=await response.json();const cats=data.categories||[], sel=data.selection||{novicloud:[],shopify:[]};
+target.innerHTML=cats.length?cats.map(c=>'<div class="log-row"><span style="flex:1"><strong>'+escapeHtml(c)+'</strong></span><label style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" class="cat-novicloud" value="'+encodeURIComponent(c)+'" '+(sel.novicloud.includes(c)?'checked':'')+'> Novicloud</label><label style="display:flex;align-items:center;gap:6px;white-space:nowrap;margin-left:18px"><input type="checkbox" class="cat-shopify" value="'+encodeURIComponent(c)+'" '+(sel.shopify.includes(c)?'checked':'')+'> Shopify</label></div>').join(''):'<p class="muted">Категории не найдены.</p>';}
+catch(error){target.innerHTML='<p class="error">Список категорий недоступен: '+escapeHtml(error.message)+'</p>';}}
+document.getElementById('save-categories').onclick=async()=>{const btn=document.getElementById('save-categories');btn.disabled=true;btn.textContent='Сохраняем…';
+const novicloud=[...document.querySelectorAll('.cat-novicloud:checked')].map(x=>decodeURIComponent(x.value));
+const shopify=[...document.querySelectorAll('.cat-shopify:checked')].map(x=>decodeURIComponent(x.value));
+try{await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})});}
+catch(error){}
+btn.disabled=false;btn.textContent='Сохранить';};
+loadCategories();
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
@@ -278,6 +308,25 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         ).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    if path == "/api/categories" and environ.get("REQUEST_METHOD") == "POST":
+        selection = CategorySyncConfig().save(_read_json_body(environ))
+        payload = dumps(selection, ensure_ascii=False).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/categories":
+        settings = Settings.from_env()
+        client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+        try:
+            categories = [str(folder.get("name") or "") for folder in client.product_categories()]
+        finally:
+            client.close()
+        categories = sorted(name for name in categories if name)
+        payload = dumps(
+            {"categories": categories, "selection": CategorySyncConfig().load()},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
     if path == "/api/shift-open":
         # Read-only: shows what's currently open. Closing only ever happens
         # from the scheduled worker at 23:50 Europe/Warsaw — there is no way
@@ -312,7 +361,8 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
     try:
         params = parse_qs(environ.get("QUERY_STRING", ""))
         codes = set(params.get("codes", [""])[0].split(",")) if params.get("codes") else set()
-        rows = rows_for_codes(moysklad.products(), novicloud.all_products(), codes)
+        categories = tuple(CategorySyncConfig().load()["novicloud"])
+        rows = rows_for_codes(moysklad.products(), novicloud.all_products(), codes, categories)
     finally:
         novicloud.close()
         moysklad.close()

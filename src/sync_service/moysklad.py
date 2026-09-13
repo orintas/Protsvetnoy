@@ -5,6 +5,10 @@ from typing import Any
 
 from .http import JsonClient
 
+# The "ProTsvetnoy OU" group — the org's non-Russian retail arm. Product
+# categories live under this group; Russia-side categories are excluded.
+PROTSVETNOY_GROUP_ID = "62a11082-1b25-11ea-0a80-030300038a2c"
+
 
 class MoySkladClient:
     def __init__(self, *, base_url: str, token: str) -> None:
@@ -45,6 +49,21 @@ class MoySkladClient:
             if not isinstance(rows, list):
                 raise ValueError("MoySklad products response has invalid rows")
             result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
+    def product_categories(self, group_id: str = PROTSVETNOY_GROUP_ID) -> list[dict[str, Any]]:
+        """Non-archived top-level product folders belonging to a MoySklad group."""
+        href = f"{self._client.base_url}/entity/group/{group_id}"
+        payload = self._client.get("/entity/productfolder", params={"filter": f"group={href}", "limit": 100})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad productfolder response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict) and not row.get("archived"))
             next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
             if not next_link:
                 return result

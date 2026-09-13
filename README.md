@@ -108,6 +108,12 @@ distinct task:
   are created yet);
 - **МойСклад** — closes stale retail shifts for the Poland/Lithuania/Latvia/
   Estonia stores (see below);
+- **Категории** — checkboxes for which MoySklad product categories (group
+  "ProTsvetnoy OU") sync to Novicloud and which to Shopify; replaces the
+  categories that used to be hardcoded in `import_file.py`. The Novicloud
+  compare/export endpoints read the saved selection
+  (`data/category-sync.json`) instead of a fixed list. Shopify's selection is
+  only stored for when that integration exists;
 - **OZON** — reserved placeholder tab for a future OZON integration;
 - **Shopify** — reserved placeholder tab for a future Shopify integration;
 - **Яндекс.Маркет** — shows the read-only Yandex Market orders check log from
