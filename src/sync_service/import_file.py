@@ -16,6 +16,7 @@ HEADERS = [
 ]
 DEFAULT_CATEGORIES = (
     "Painting by numbers", "Diamond painting", "Products for Shops", "Accessories",
+    "Wooden constructors", "Roombox",
 )
 
 
