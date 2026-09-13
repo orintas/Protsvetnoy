@@ -103,10 +103,13 @@ Configuration (`.env`):
 
 ### Push notifications
 
-`POST /api/yandex-market/webhook` receives Market's push notifications (new
-orders, status changes, cancellations, returns, chats, reviews, questions —
-see the [notification API spec](https://github.com/yandex-market/yandex-market-notification-api))
-as an alternative/complement to the 5-minute poll above. Every notification
+`POST /api/yandex-market/webhook/notification` receives Market's push
+notifications (new orders, status changes, cancellations, returns, chats,
+reviews, questions — see the
+[notification API spec](https://github.com/yandex-market/yandex-market-notification-api))
+as an alternative/complement to the 5-minute poll above. Market appends
+`/notification` itself to whatever base URL you register — see below.
+Every notification
 is logged into the same `data/yandex_market_sync.sqlite3` (kind `webhook`),
 visible in the “Яндекс.Маркет” tab; nothing is created in MoySklad from it
 yet, matching the read-only stance of the rest of this service.
@@ -123,11 +126,14 @@ remains the sole, directly-connected proxy in front of `web`.
 
 Registration is manual, in the seller cabinet UI — there's no API for it:
 **Аккаунт → Настройки → API и модули → API-уведомления → Подключить
-уведомления**, pointing it at `https://protsvetnoy.us/api/yandex-market/webhook`
-and picking which event types to send. Market sends a `PING` once you save,
-expecting a `200` within 1 second to confirm the endpoint is live; repeated
-failures on real notifications back off from retrying every minute up to
-hourly, and disable the integration after 14 days of being unreachable.
+уведомления**, entering `https://protsvetnoy.us/api/yandex-market/webhook`
+as the base URL (confirmed from a live PING: Market itself appends
+`/notification`, arriving at `.../webhook/notification`, which is the exact
+path this app listens on) and picking which event types to send. Market
+sends that `PING` once you save, expecting a `200` within 1 second to
+confirm the endpoint is live; repeated failures on real notifications back
+off from retrying every minute up to hourly, and disable the integration
+after 14 days of being unreachable.
 
 `offerId` in Yandex Market orders matches the MoySklad product `article`/
 `code` directly, so no extra SKU mapping table is required.

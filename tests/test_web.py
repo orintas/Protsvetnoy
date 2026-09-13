@@ -18,7 +18,7 @@ def test_webhook_rejects_spoofed_first_forwarded_for_entry():
     # the check — only the last (Caddy-appended) entry is trusted.
     body = json.dumps({"notificationType": "PING"}).encode()
     environ = {
-        "PATH_INFO": "/api/yandex-market/webhook", "QUERY_STRING": "", "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/yandex-market/webhook/notification", "QUERY_STRING": "", "REQUEST_METHOD": "POST",
         "HTTP_X_FORWARDED_FOR": "5.45.207.10, 172.18.0.5",
         "REMOTE_ADDR": "172.18.0.5",
         "CONTENT_LENGTH": str(len(body)), "wsgi.input": io.BytesIO(body),

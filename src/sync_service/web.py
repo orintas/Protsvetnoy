@@ -363,7 +363,7 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
-    if path == "/api/yandex-market/webhook" and environ.get("REQUEST_METHOD") == "POST":
+    if path == "/api/yandex-market/webhook/notification" and environ.get("REQUEST_METHOD") == "POST":
         return _yandex_market_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
