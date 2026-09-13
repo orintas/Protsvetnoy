@@ -26,7 +26,10 @@ def test_export_formats_have_headers():
 
 def test_compare_catalogs_reports_missing_and_price_changes():
     moysklad = [
-        {"id": "1", "code": "NEW", "name": "New", "pathName": "Accessories", "salePrices": []},
+        {
+            "id": "1", "code": "NEW", "name": "New", "pathName": "Accessories",
+            "salePrices": [{"priceType": {"name": "Cena w Polsce"}, "value": 1500}],
+        },
         {
             "id": "2",
             "code": "PRICE",
@@ -39,6 +42,15 @@ def test_compare_catalogs_reports_missing_and_price_changes():
     result = compare_catalogs(moysklad, novicloud)
     assert {row["status"] for row in result} == {"missing", "price"}
     assert rows_for_codes(moysklad, novicloud, {"NEW"})[0][1].startswith("NEW -")
+
+
+def test_compare_catalogs_flags_zero_price_and_build_rows_excludes_it():
+    product = {"id": "3", "code": "NOPRICE", "name": "No price", "pathName": "Accessories", "salePrices": []}
+    novicloud = [{"kod": "NOPRICE", "cena_det": 0, "aktywny": True}]
+    result = compare_catalogs([product], novicloud)
+    assert result[0]["status"] == "no_price"
+    assert build_rows([product], novicloud) == []
+    assert rows_for_codes([product], novicloud, {"NOPRICE"}) == []
 
 
 def test_build_rows_reads_russian_polish_price_type():

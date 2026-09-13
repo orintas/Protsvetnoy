@@ -66,7 +66,10 @@ def compare_catalogs(
             continue
         novicloud_item = novicloud_by_code.get(code)
         price = _price(product)
-        if novicloud_item is None:
+        if price <= 0:
+            status = "no_price"
+            label = "Не задана цена в МойСклад"
+        elif novicloud_item is None:
             status = "missing"
             label = "Нет в Novicloud"
         elif novicloud_item.get("aktywny") is False or product.get("archived"):
@@ -139,8 +142,10 @@ def build_rows(
         novicloud_item = active_by_code.get(code)
         if novicloud_item is None and not include_missing:
             continue
-        archived = bool(product.get("archived")) or (novicloud_item is not None and novicloud_item.get("aktywny") is False)
         price = _price(product)
+        if price <= 0:
+            continue
+        archived = bool(product.get("archived")) or (novicloud_item is not None and novicloud_item.get("aktywny") is False)
         barcode = _barcode(product)
         name = f"{code} - {product.get('name', '')}".strip(" -")
         changed = str(product.get("updated", ""))
