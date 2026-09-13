@@ -13,6 +13,36 @@ from .sync_log import SyncLog
 from .yandex_market_sync import YandexMarketSyncLog
 
 
+def _ndjson_line(payload: dict) -> bytes:
+    return dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+def _compare_stream():
+    """Yield one JSON line per real comparison stage as it actually starts.
+
+    Each stage is written to the socket before the blocking call for that
+    stage runs, so the client sees the label change in step with the real
+    work instead of a fake looping timer.
+    """
+    settings = Settings.from_env()
+    novicloud = NovicloudClient(base_url=settings.novicloud_base_url, version=settings.novicloud_api_version, account=settings.novicloud_account, password=settings.novicloud_password)
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    try:
+        yield _ndjson_line({"stage": "moysklad"})
+        moysklad_products = moysklad.products()
+        yield _ndjson_line({"stage": "novicloud"})
+        novicloud_products = novicloud.all_products()
+        yield _ndjson_line({"stage": "matching"})
+        comparison = compare_catalogs(moysklad_products, novicloud_products)
+        public_rows = [{key: value for key, value in row.items() if key != "product"} for row in comparison]
+        yield _ndjson_line({"stage": "done", "rows": public_rows})
+    except Exception as error:
+        yield _ndjson_line({"stage": "error", "message": str(error)})
+    finally:
+        novicloud.close()
+        moysklad.close()
+
+
 def application(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     if path == "/":
@@ -72,15 +102,23 @@ def application(environ, start_response):
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
 const progressWrap=document.getElementById('compare-progress'), progressLabel=document.getElementById('progress-label');
-let rows=[], progressTimer=null;
+let rows=[];
 const labels={missing:'Нет в Novicloud',archive:'Архивировать',price:'Изменить цену',same:'Совпадает',no_price:'Не задана цена в МойСклад'};
-const progressSteps=['Загружаем каталог МойСклад…','Загружаем каталог Novicloud…','Сопоставляем товары по артикулу…','Проверяем цены и статусы…','Почти готово…'];
-function startProgress(){let i=0;progressLabel.textContent=progressSteps[0];progressWrap.hidden=false;progressTimer=setInterval(()=>{i=(i+1)%progressSteps.length;progressLabel.textContent=progressSteps[i];},1600);}
-function stopProgress(){clearInterval(progressTimer);progressTimer=null;progressWrap.hidden=true;}
-compare.onclick=async()=>{compare.disabled=true;result.innerHTML='';startProgress();
-try{const response=await fetch('/api/compare');if(!response.ok)throw new Error(await response.text());rows=await response.json();render();}
+const stageLabels={moysklad:'Загружаем каталог МойСклад…',novicloud:'Загружаем каталог Novicloud…',matching:'Сопоставляем товары по артикулу и считаем статусы…'};
+async function fetchCompareStream(){
+const response=await fetch('/api/compare-stream');if(!response.ok)throw new Error(await response.text());
+const reader=response.body.getReader(), decoder=new TextDecoder();let buffer='';
+while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let newlineAt;
+while((newlineAt=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,newlineAt).trim();buffer=buffer.slice(newlineAt+1);if(!line)continue;
+const event=JSON.parse(line);
+if(event.stage==='error')throw new Error(event.message);
+if(event.stage==='done')return event.rows;
+progressLabel.textContent=stageLabels[event.stage]||'';}}
+throw new Error('Соединение прервано до получения результата');}
+compare.onclick=async()=>{compare.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;
+try{rows=await fetchCompareStream();render();}
 catch(error){result.innerHTML='<p class="error">Не удалось сравнить каталоги: '+error.message+'<br><span class="muted">Novicloud иногда отвечает с временной ошибкой — сервер уже делает несколько попыток автоматически. Нажмите «Сравнить каталоги» ещё раз через минуту.</span></p>';}
-stopProgress();compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
+progressWrap.hidden=true;compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
 function render(){const diff=rows.filter(r=>r.status!=='same');result.innerHTML=
 '<div class="toolbar"><input id="search" placeholder="Поиск по коду или названию"><select id="category"><option value="">Все категории</option>'+[...new Set(rows.map(r=>r.category))].sort().map(c=>'<option>'+c+'</option>').join('')+'</select><label><input id="onlyDiff" type="checkbox" checked> Только отличия</label><span id="count"></span></div>'+
 '<div class="table"><table><thead><tr><th>№</th><th><input id="all" type="checkbox" checked></th><th>Товар</th><th>Категория</th><th>Статус</th><th>Цена</th></tr></thead><tbody id="tbody"></tbody></table></div>'+
@@ -125,19 +163,9 @@ document.querySelectorAll('.tab-btn').forEach(btn=>btn.onclick=()=>{document.que
 </script></body></html>""".encode("utf-8")
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
-    if path == "/api/compare":
-        settings = Settings.from_env()
-        novicloud = NovicloudClient(base_url=settings.novicloud_base_url, version=settings.novicloud_api_version, account=settings.novicloud_account, password=settings.novicloud_password)
-        moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
-        try:
-            comparison = compare_catalogs(moysklad.products(), novicloud.all_products())
-        finally:
-            novicloud.close()
-            moysklad.close()
-        public_rows = [{key: value for key, value in row.items() if key != "product"} for row in comparison]
-        payload = dumps(public_rows, ensure_ascii=False).encode("utf-8")
-        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
-        return [payload]
+    if path == "/api/compare-stream":
+        start_response("200 OK", [("Content-Type", "application/x-ndjson; charset=utf-8")])
+        return _compare_stream()
     if path == "/api/sync-log":
         payload = dumps(SyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
