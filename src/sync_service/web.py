@@ -99,6 +99,8 @@ def _dispatch(path, environ, start_response):
 .card{background:#121622cc;border:1px solid var(--line);border-radius:18px;padding:22px;backdrop-filter:blur(12px)}.card h2{font-size:17px;margin:0 0 6px}.card p{color:var(--muted);margin:0}
 .accordion+.accordion{margin-top:16px}.accordion-header{display:flex;align-items:center;justify-content:space-between;gap:15px;cursor:pointer}.accordion-chevron{color:var(--muted);font-size:14px;flex-shrink:0;transition:.2s transform}.accordion.open .accordion-chevron{transform:rotate(90deg)}.accordion-body{margin-top:18px}.accordion-body[hidden]{display:none}
 .help-btn{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font:700 12px inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}.help-btn:hover{color:var(--text);border-color:var(--accent)}
+.gear-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font-size:15px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1;transition:.2s color,.2s border-color,.2s transform}.gear-btn:hover{color:var(--text);border-color:var(--accent);transform:rotate(35deg)}.gear-btn.small{width:20px;height:20px;font-size:11px}
+.tab-btn-wrap{display:inline-flex;align-items:center;gap:4px}
 .modal-overlay{position:fixed;inset:0;background:#05060bcc;display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal-overlay.open{display:flex}.modal{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;max-width:520px;width:100%;max-height:80vh;overflow:auto}.modal h3{margin:0 0 14px;font-size:18px}.modal ol{margin:0;padding-left:20px;color:var(--muted);font-size:14px;line-height:1.7}.modal ol li strong{color:var(--text)}.modal-close{margin-top:20px}.log-row.clickable{cursor:pointer}.log-row.clickable:hover{background:#ffffff08}.detail-grid{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px}.detail-grid dt{color:var(--muted)}.detail-grid dd{margin:0;color:var(--text)}
 .actions{display:flex;gap:12px;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:174px;padding:13px 18px;border:0;border-radius:11px;color:#fff;background:linear-gradient(135deg,var(--accent),#6d5dfc);font:600 14px inherit;text-decoration:none;cursor:pointer;box-shadow:0 10px 26px #6d5dfc33;transition:.2s transform,.2s filter}.button.secondary{background:#1b2130;box-shadow:none;border:1px solid #30384d}.button:hover{filter:brightness(1.12);transform:translateY(-2px)}.button:disabled{opacity:.65;cursor:wait;transform:none}
 .note{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px}.note strong{color:var(--text)}.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:24px 0 14px;color:var(--muted);font-size:13px}.toolbar input[placeholder],.toolbar select{min-width:190px;background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text)}.toolbar input[placeholder]{flex:1}.table{overflow:auto;border:1px solid var(--line);border-radius:12px}.table table{border-collapse:collapse;width:100%;min-width:720px}.table th,.table td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}.table th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.table td:first-child,.table th:first-child{width:55px;color:var(--muted);text-align:right}.table td span{color:var(--muted);font-size:13px}.badge{display:inline-block!important;padding:4px 8px;border-radius:7px;font-size:12px!important;color:#fff!important;background:#334155}.badge.missing{background:#2563eb}.badge.archive{background:#b45309}.badge.price{background:#7c3aed}.badge.no_price{background:#dc2626}.badge.success,.badge.sale{background:#16a34a}.badge.error{background:#dc2626}.badge.return{background:#d97706}.badge.dry-run{background:#475569}.table tr.blocked{opacity:.55}
@@ -107,14 +109,13 @@ def _dispatch(path, environ, start_response):
 @media(max-width:650px){.wrap{padding-top:24px}.top{margin-bottom:18px}.grid{grid-template-columns:1fr}.actions{flex-direction:column}.button{width:100%}.log-row{align-items:flex-start;flex-wrap:wrap}.log-time{min-width:130px}}
 </style></head>
 <body><main class="wrap">
-<header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><button class="status" id="status-indicator" type="button">Система готова</button></header>
+<header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><div style="display:flex;align-items:center;gap:14px"><button class="status" id="status-indicator" type="button">Система готова</button><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></div></header>
 <section class="hero" id="hero"><div class="eyebrow">Ассортимент · синхронизация</div><h1>Единый центр<br>управления интеграциями.</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
 <nav class="tabs">
-<button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
+<span class="tab-btn-wrap"><button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></span>
 <button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
-<button class="tab-btn" data-tab="categories" type="button">Категории</button>
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
-<button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
+<span class="tab-btn-wrap"><button class="tab-btn" data-tab="shopify" type="button">Shopify</button><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></span>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
 </nav>
@@ -147,13 +148,6 @@ def _dispatch(path, environ, start_response):
 <h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Журнал закрытий</h3>
 <div id="shift-close-log" class="log"></div></section>
 </section>
-<section id="tab-categories" class="tab-panel">
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
-<div><h2 style="margin:0 0 6px">Категории для синхронизации</h2><p style="margin:0">Категории из МойСклад (группа «ProTsvetnoy OU»). Отметьте, какие синхронизировать с Novicloud, какие — с Shopify. Выбор для Shopify пока просто сохраняется — сама интеграция ещё не подключена.</p></div>
-<button class="button" id="save-categories" type="button">Сохранить</button>
-</div>
-<div id="categories-list" class="log"></div></section>
-</section>
 <section id="tab-ozon" class="tab-panel">
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
 </section>
@@ -174,6 +168,12 @@ def _dispatch(path, environ, start_response):
 <li><strong>Выгрузка файла.</strong> Нажмите «Скачать XLSX» или «Скачать CSV» — сформируется файл только с отмеченными позициями в формате, готовом для импорта.</li>
 <li><strong>Загрузка в Novicloud.</strong> Зайдите в панель управления Novicloud → раздел импорта товаров → загрузите скачанный файл, чтобы применить изменения ассортимента и цен.</li>
 </ol><button class="button secondary modal-close" id="catalog-help-close" type="button">Закрыть</button></div></div>
+<div class="modal-overlay" id="categories-modal"><div class="modal">
+<h3>Категории для синхронизации</h3>
+<p class="muted" style="margin:0 0 14px">Категории из МойСклад (группа «ProTsvetnoy OU»). Отметьте, какие синхронизировать с Novicloud, какие — с Shopify. Выбор для Shopify пока просто сохраняется — сама интеграция ещё не подключена.</p>
+<div id="categories-list" class="log"></div>
+<div class="actions" style="margin-top:18px"><button class="button" id="save-categories" type="button">Сохранить</button><button class="button secondary modal-close" id="categories-close" type="button">Закрыть</button></div>
+</div></div>
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
 const progressWrap=document.getElementById('compare-progress'), progressLabel=document.getElementById('progress-label');
@@ -254,7 +254,11 @@ const shopify=[...document.querySelectorAll('.cat-shopify:checked')].map(x=>deco
 try{await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})});}
 catch(error){}
 btn.disabled=false;btn.textContent='Сохранить';};
-loadCategories();
+const categoriesModal=document.getElementById('categories-modal');
+function openCategoriesModal(){categoriesModal.classList.add('open');loadCategories();}
+document.querySelectorAll('.open-categories').forEach(btn=>btn.onclick=openCategoriesModal);
+document.getElementById('categories-close').onclick=()=>categoriesModal.classList.remove('open');
+categoriesModal.onclick=e=>{if(e.target===categoriesModal)categoriesModal.classList.remove('open');};
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
