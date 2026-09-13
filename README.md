@@ -99,20 +99,52 @@ Configuration (`.env`):
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open
-`http://SERVER_IP:8080/` and switch between three tabs, each covering a
+`http://SERVER_IP:8080/` and switch between the tabs, each covering a
 distinct task:
 
 - **Novicloud** — compares the Novicloud and MoySklad catalogs, generates the
   CSV/XLSX import file for Novicloud, and shows the read-only Novicloud
   sales/returns check log from the `worker` service (test mode, no documents
   are created yet);
+- **МойСклад** — closes stale retail shifts for the Poland/Lithuania/Latvia/
+  Estonia stores (see below);
 - **OZON** — reserved placeholder tab for a future OZON integration;
+- **Shopify** — reserved placeholder tab for a future Shopify integration;
 - **Яндекс.Маркет** — shows the read-only Yandex Market orders check log from
-  the `yandex-market-sync-worker` service (test mode).
+  the `yandex-market-sync-worker` service (test mode);
+- **Ошибки** — unified log of every error across the service (API failures,
+  worker exceptions, web request errors), with a header indicator for unread
+  entries.
 
 The page keeps API credentials on the server and only returns generated files
 or JSON summaries. Restrict port 8080 with the VPS firewall or put it behind
 an HTTPS reverse proxy before exposing it publicly.
+
+## MoySklad retail shift closing (PL/LT/LV/EE)
+
+The `moysklad-shift-close-worker` service checks, once a day at 23:50
+Europe/Warsaw time, whether any retail shift (`retailshift`) is still open
+for the Poland/Lithuania/Latvia/Estonia stores and closes it by setting
+`closeDate` to `23:50:00` of that day. Russian stores (and every other
+organization) are never touched — only shifts belonging to these four
+MoySklad organizations are considered:
+
+- `Varvikas Grupp OU Filiale Poland`
+- `Varvikas Grupp OU Filiale Lithuania`
+- `Varvikas Grupp OU Filiale Latvia`
+- `Varvikas Grupp OU Filiale Estonia`
+
+Closing uses the standard `PUT /entity/retailshift/{id}` remap API (not the
+separate fiscal POS API) — these stores have no physical cash register
+attached, so their shifts are closed the same way a human operator would in
+the MoySklad web UI.
+
+Like every other write-capable feature in this project, it respects
+`DRY_RUN`: while `DRY_RUN=true` (the default) it only detects and logs open
+shifts without closing them. Set `DRY_RUN=false` once you've verified the
+detection log looks right, to let it actually close shifts. The web
+interface's "МойСклад" tab shows which mode is active and lets you trigger
+an on-demand check.
 
 ## Store mapping
 

@@ -22,5 +22,12 @@ services:
     command: ["yandex-market-sync-worker"]
     volumes:
       - sync-data:/app/data
+  moysklad-shift-close-worker:
+    build: .
+    env_file:
+      - .env
+    command: ["moysklad-shift-close-worker"]
+    volumes:
+      - sync-data:/app/data
 volumes:
   sync-data:

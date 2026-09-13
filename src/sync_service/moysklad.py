@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from .http import JsonClient
@@ -104,6 +105,32 @@ class MoySkladClient:
                 "positions": positions,
             },
         )
+
+    def open_retail_shifts(self, organization_id: str, since: datetime) -> list[dict[str, Any]]:
+        """Retail shifts for an organization that have no closeDate yet.
+
+        Scoped to shifts opened at or after ``since`` so we don't page through
+        the full historical shift log (there can be well over 100k rows).
+        """
+        href = f"{self._client.base_url}/entity/organization/{organization_id}"
+        since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+        payload = self._client.get(
+            "/entity/retailshift",
+            params={"filter": f"organization={href};moment>={since_str}", "order": "moment,asc", "limit": 100},
+        )
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad retailshift response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict) and not row.get("closeDate"))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
+    def close_retail_shift(self, shift_id: str, close_date: str) -> None:
+        self._client.put(f"/entity/retailshift/{shift_id}", {"closeDate": close_date})
 
     def close(self) -> None:
         self._client.close()

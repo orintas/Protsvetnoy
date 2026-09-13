@@ -19,6 +19,7 @@ def main() -> None:
     subparsers.add_parser("web-server")
     subparsers.add_parser("sync-worker")
     subparsers.add_parser("yandex-market-sync-worker")
+    subparsers.add_parser("moysklad-shift-close-worker")
     args = parser.parse_args()
 
     if args.command == "web-server":
@@ -32,6 +33,10 @@ def main() -> None:
     if args.command == "yandex-market-sync-worker":
         from .yandex_market_sync import worker as ym_worker
         ym_worker()
+        return
+    if args.command == "moysklad-shift-close-worker":
+        from .shift_closer import worker as shift_worker
+        shift_worker()
         return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):

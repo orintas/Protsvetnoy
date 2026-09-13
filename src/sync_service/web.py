@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from json import dumps
 from urllib.parse import parse_qs
@@ -10,6 +11,7 @@ from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
+from .shift_closer import CLOSE_HOUR, CLOSE_MINUTE, CLOSE_TIMEZONE, ShiftCloseLog, run_once as run_shift_close_once
 from .sync_log import SyncLog
 from .yandex_market_sync import YandexMarketSyncLog
 
@@ -99,6 +101,7 @@ def _dispatch(path, environ, start_response):
 <section class="hero" id="hero"><div class="eyebrow">Ассортимент · синхронизация</div><h1>Единый центр<br>управления интеграциями.</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
+<button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
@@ -123,6 +126,13 @@ def _dispatch(path, environ, start_response):
 <div style="display:flex;justify-content:flex-end;margin-bottom:14px"><input id="log-search" placeholder="Поиск по номеру документа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"></div>
 <div id="sync-log" class="log"></div>
 </div></section>
+</section>
+<section id="tab-moysklad" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
+<div><h2 style="margin:0 0 6px">Закрытие смен — Польша, Литва, Латвия, Эстония</h2><p style="margin:0">Каждый день в 23:50 сервис проверяет, не остались ли незакрытые смены в этих магазинах, и закрывает их с датой закрытия 23:50 того же дня. Магазины России не затрагиваются.</p></div>
+<div style="display:flex;align-items:center;gap:12px"><span class="badge dry-run" id="shift-mode-badge">…</span><button class="button secondary" id="check-shifts" type="button">Проверить сейчас</button></div>
+</div>
+<div id="shift-close-log" class="log"></div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
@@ -181,7 +191,7 @@ target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clicka
 target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.logIndex)]));}
 let allLogEntries=[];
 document.getElementById('log-search').oninput=renderLog;
-function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем'};}
+function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж'};}
 function formatValue(key,value){if(value===null||value===undefined)return '—';
 if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??'');if(key==='sklep')return 'магазин #'+(value.id??'');if(key==='kasa')return 'касса #'+(value.id??'');if(key==='kasjer')return 'кассир #'+(value.id??'');if(Array.isArray(value)){if(key==='items')return value.map(it=>(it.offerId||it.offer_id||'?')+' × '+(it.count??it.quantity??'?')).join(', ');if(key==='platnosci')return value.map(p=>(p.wplata_waluta??'?')+' '+(p.kod_waluty??'')).join(', ');return value.length+' элемент(ов)';}return JSON.stringify(value);}
 return String(value);}
@@ -204,6 +214,17 @@ document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.class
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.ymLogIndex)]));}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
+async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log'), badge=document.getElementById('shift-mode-badge');
+try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
+badge.textContent=data.dry_run?'Тестовый режим':'Реальное закрытие';badge.className='badge '+(data.dry_run?'dry-run':'success');
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
+target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));}
+catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+document.getElementById('check-shifts').onclick=async()=>{const btn=document.getElementById('check-shifts');btn.disabled=true;btn.textContent='Проверяем…';
+try{await fetch('/api/shift-close-check',{method:'POST'});await loadShiftCloseLog();}
+catch(error){}
+btn.disabled=false;btn.textContent='Проверить сейчас';};
+loadShiftCloseLog();
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
@@ -247,6 +268,26 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return [payload]
     if path == "/api/yandex-market-sync-log":
         payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/shift-close-log":
+        settings = Settings.from_env()
+        payload = dumps(
+            {"dry_run": settings.dry_run, "entries": ShiftCloseLog().recent()},
+            ensure_ascii=False, default=str,
+        ).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/shift-close-check" and environ.get("REQUEST_METHOD") == "POST":
+        settings = Settings.from_env()
+        log = ShiftCloseLog()
+        close_moment = datetime.now(CLOSE_TIMEZONE).replace(hour=CLOSE_HOUR, minute=CLOSE_MINUTE, second=0, microsecond=0)
+        client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+        try:
+            open_count = run_shift_close_once(client, log, dry_run=settings.dry_run, close_moment=close_moment)
+        finally:
+            client.close()
+        payload = dumps({"open_count": open_count, "dry_run": settings.dry_run}, ensure_ascii=False).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/errors":
