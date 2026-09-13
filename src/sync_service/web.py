@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from html import escape
 from json import dumps, loads
 from urllib.parse import parse_qs
@@ -14,6 +15,7 @@ from .novicloud import NovicloudClient
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .sync_log import SyncLog
 from .yandex_market_sync import YandexMarketSyncLog
+from .yandex_market_webhook import handle_notification, is_allowed_ip
 
 
 def _read_json_body(environ) -> dict:
@@ -23,6 +25,42 @@ def _read_json_body(environ) -> dict:
         length = 0
     raw = environ["wsgi.input"].read(length) if length else b""
     return loads(raw.decode("utf-8")) if raw else {}
+
+
+def _yandex_market_notification_response() -> bytes:
+    now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return dumps({"version": "1.0.0", "name": "Varvikas sync service", "time": now}, ensure_ascii=False).encode("utf-8")
+
+
+def _yandex_market_webhook(environ, start_response):
+    """Receives Yandex Market push notifications (orders, returns, chats, ...).
+
+    No signature scheme exists for these — Yandex documents source-IP
+    filtering as the only verification, so that's enforced here. Every
+    notification is just logged (no document creation), matching the
+    read-only stance of the rest of this service so far.
+    """
+    if not is_allowed_ip(environ.get("REMOTE_ADDR", "")):
+        start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"IP not allowed"]
+    try:
+        notification = _read_json_body(environ)
+        if not isinstance(notification, dict) or not notification.get("notificationType"):
+            raise ValueError("missing notificationType")
+    except Exception as error:
+        ErrorLog().log_exception("yandex_market_webhook", error, context="Некорректное уведомление Яндекс.Маркета")
+        payload = dumps({"error": {"type": "WRONG_EVENT_FORMAT", "message": str(error)}}, ensure_ascii=False).encode("utf-8")
+        start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    try:
+        handle_notification(YandexMarketSyncLog(), notification)
+    except Exception as error:
+        ErrorLog().log_exception("yandex_market_webhook", error, context=f"Ошибка обработки уведомления {notification.get('notificationType')}")
+        payload = dumps({"error": {"type": "UNKNOWN", "message": "internal error"}}, ensure_ascii=False).encode("utf-8")
+        start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+    return [_yandex_market_notification_response()]
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -311,6 +349,8 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    if path == "/api/yandex-market/webhook" and environ.get("REQUEST_METHOD") == "POST":
+        return _yandex_market_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(

@@ -101,6 +101,33 @@ Configuration (`.env`):
   argument rather than being fixed per client instance;
 - `YANDEX_MARKET_BASE_URL` — defaults to `https://api.partner.market.yandex.ru`.
 
+### Push notifications
+
+`POST /api/yandex-market/webhook` receives Market's push notifications (new
+orders, status changes, cancellations, returns, chats, reviews, questions —
+see the [notification API spec](https://github.com/yandex-market/yandex-market-notification-api))
+as an alternative/complement to the 5-minute poll above. Every notification
+is logged into the same `data/yandex_market_sync.sqlite3` (kind `webhook`),
+visible in the “Яндекс.Маркет” tab; nothing is created in MoySklad from it
+yet, matching the read-only stance of the rest of this service.
+
+There is no request signature in Market's push API — the only verification
+it documents is filtering by source IP, so this endpoint rejects anything
+outside Market's published ranges (`5.45.207.0/25`, `141.8.142.0/25`,
+`5.255.253.0/25`). That only holds as long as nothing sits in front of this
+app and hides the real client IP — there's no reverse proxy today, but if
+one is added later it must forward/trust the real IP (e.g. via
+`X-Forwarded-For`) or this check needs updating.
+
+Registration is manual, in the seller cabinet UI — there's no API for it:
+**Аккаунт → Настройки → API и модули → API-уведомления → Подключить
+уведомления**, pointing it at `https://SERVER_IP:8080/api/yandex-market/webhook`
+(behind HTTPS in production) and picking which event types to send. Market
+sends a `PING` once you save, expecting a `200` within 1 second to confirm
+the endpoint is live; repeated failures on real notifications back off from
+retrying every minute up to hourly, and disable the integration after 14
+days of being unreachable.
+
 `offerId` in Yandex Market orders matches the MoySklad product `article`/
 `code` directly, so no extra SKU mapping table is required.
 
