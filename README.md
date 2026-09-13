@@ -109,10 +109,39 @@ reviews, questions — see the
 [notification API spec](https://github.com/yandex-market/yandex-market-notification-api))
 as an alternative/complement to the 5-minute poll above. Market appends
 `/notification` itself to whatever base URL you register — see below.
-Every notification
-is logged into the same `data/yandex_market_sync.sqlite3` (kind `webhook`),
-visible in the “Яндекс.Маркет” tab; nothing is created in MoySklad from it
-yet, matching the read-only stance of the rest of this service.
+Every notification is logged into the same `data/yandex_market_sync.sqlite3`
+(kind `webhook`), visible in the “Яндекс.Маркет” tab. `ORDER_CREATED`
+additionally runs the full fulfillment pipeline (`src/sync_service/
+yandex_market_order_sync.py`) — this is a real production write path, not
+dry-run:
+
+1. Skip entirely if a MoySklad `customerorder` with `externalCode` equal to
+   the Yandex order id already exists (the only idempotency signal — see the
+   docstring on `process_new_order` for what that does and doesn't cover on
+   partial failures).
+2. Fetch full order details (`POST /v1/businesses/{id}/orders` filtered by
+   `orderIds`, since the push payload only carries `offerId`/`count`, not
+   price) and look up each `offerId` as a MoySklad product `code`.
+3. Create the `customerorder` — organization `ООО "ЦВЕТНОЙ МИР"`
+   (`40b2d5fc-22a4-11ec-0a80-02b1002197e3`), agent `ООО "ЯНДЕКС.МАРКЕТ"`
+   (ИНН `7704357909`, id `fa685205-1cbb-11e8-9107-5048000779ee` — there are
+   several similarly-named counterparties in this account; this is the one
+   confirmed by INN), sales channel "Яндекс Маркет FBS", and the store
+   mapped from `campaignId` in `CAMPAIGN_STORES` (one physical shop per
+   campaign — ТЦ Авиапарк/Саларис/Ривьера/Мега Химки).
+4. Confirm assembly: `update_order_status(status=PROCESSING,
+   substatus=READY_TO_SHIP)` — per Market's own docs, this substatus means
+   "assembled and ready to ship".
+5. Fetch the shipping label PDF (`GET .../delivery/labels`) and send it to
+   `TELEGRAM_LABEL_CHAT_ID` via a Telegram bot (`TELEGRAM_BOT_TOKEN`).
+
+These MoySklad entities (organization/agent/store mapping) were confirmed
+against a real order from 2026-09-13 and explicit choices made when this was
+built — not something the API exposes on its own, so don't re-derive them
+from scratch if they ever need to change. TopSeller's own Yandex Market
+integration was already disconnected before this went live, so there's no
+double-order risk from that side; if it's ever reconnected, this and
+TopSeller would both create a `customerorder` for the same sale.
 
 There is no request signature in Market's push API — the only verification
 it documents is filtering by source IP, so this endpoint rejects anything

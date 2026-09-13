@@ -69,6 +69,46 @@ class MoySkladClient:
                 return result
             payload = self._client.get_url(str(next_link))
 
+    def _meta(self, entity_type: str, entity_id: str) -> dict[str, Any]:
+        return {"meta": {"href": f"{self._client.base_url}/entity/{entity_type}/{entity_id}", "type": entity_type, "mediaType": "application/json"}}
+
+    def product_by_code(self, code: str) -> dict[str, Any] | None:
+        payload = self._client.get("/entity/product", params={"filter": f"code={code}", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def customer_order_by_external_code(self, external_code: str) -> dict[str, Any] | None:
+        payload = self._client.get("/entity/customerorder", params={"filter": f"externalCode={external_code}", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def create_customer_order(
+        self,
+        *,
+        name: str,
+        moment: str,
+        organization_id: str,
+        agent_id: str,
+        store_id: str,
+        external_code: str,
+        positions: list[dict[str, Any]],
+        description: str = "",
+        sales_channel_id: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "name": name,
+            "moment": moment,
+            "externalCode": external_code,
+            "description": description,
+            "organization": self._meta("organization", organization_id),
+            "agent": self._meta("counterparty", agent_id),
+            "store": self._meta("store", store_id),
+            "positions": positions,
+        }
+        if sales_channel_id:
+            body["salesChannel"] = self._meta("saleschannel", sales_channel_id)
+        return self._client.post("/entity/customerorder", body)
+
     def create_retail_sale(
         self,
         *,

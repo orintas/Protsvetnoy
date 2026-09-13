@@ -42,5 +42,10 @@ jobs:
             SHOPIFY_ACCESS_TOKEN=
             SHOPIFY_API_VERSION=2024-07
             ENVEOF
+            grep -q '^TELEGRAM_BOT_TOKEN=' .env || cat >> .env << 'ENVEOF'
+
+            TELEGRAM_BOT_TOKEN=
+            TELEGRAM_LABEL_CHAT_ID=
+            ENVEOF
             docker compose up -d --build --remove-orphans
             docker image prune -f

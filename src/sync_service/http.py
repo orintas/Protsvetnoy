@@ -60,6 +60,18 @@ class JsonClient:
             raise ApiError(f"GET {response.url} returned a non-object JSON response")
         return payload
 
+    def get_bytes(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | list[tuple[str, Any]] | None = None,
+    ) -> bytes:
+        """For endpoints returning a binary body (e.g. a PDF label) rather than JSON."""
+        response = self._request_with_retry("GET", path, params=params)
+        if response.is_error:
+            raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        return response.content
+
     def get_url(self, url: str) -> dict[str, Any]:
         response = self._request_with_retry("GET", url)
         if response.is_error:

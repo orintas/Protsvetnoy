@@ -23,6 +23,8 @@ class Settings:
     shopify_api_version: str
     make_api_token: str
     make_base_url: str
+    telegram_bot_token: str
+    telegram_label_chat_id: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -53,6 +55,8 @@ class Settings:
             shopify_api_version=os.getenv("SHOPIFY_API_VERSION", "2024-07"),
             make_api_token=os.getenv("MAKE_API_TOKEN", ""),
             make_base_url=os.getenv("MAKE_BASE_URL", "https://eu1.make.com/api/v2").rstrip("/"),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            telegram_label_chat_id=os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )

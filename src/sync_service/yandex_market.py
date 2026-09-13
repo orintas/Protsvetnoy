@@ -35,6 +35,7 @@ class YandexMarketClient:
         update_date_from: datetime | None = None,
         update_date_to: datetime | None = None,
         statuses: list[str] | None = None,
+        order_ids: list[int] | None = None,
         page_token: str | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -53,9 +54,16 @@ class YandexMarketClient:
             body["dates"] = dates
         if statuses:
             body["statuses"] = statuses
+        if order_ids:
+            body["orderIds"] = order_ids
         if page_token:
             body["pageToken"] = page_token
         return self._client.post(f"/v1/businesses/{self._business_id}/orders", body)
+
+    def order_by_id(self, order_id: int) -> dict[str, Any] | None:
+        payload = self.orders(order_ids=[order_id], limit=1)
+        orders = payload.get("orders", [])
+        return orders[0] if orders and isinstance(orders[0], dict) else None
 
     def all_orders(self, **kwargs: Any) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -96,6 +104,10 @@ class YandexMarketClient:
                 price["vat"] = item["vat"]
             offers.append({"offerId": item["offer_id"], "price": price})
         return self._client.post(f"/v2/campaigns/{campaign_id}/offer-prices/updates", {"offers": offers})
+
+    def get_order_label(self, order_id: int, *, campaign_id: str) -> bytes:
+        """PDF with the shipping label(s) for every box in the order."""
+        return self._client.get_bytes(f"/v2/campaigns/{campaign_id}/orders/{order_id}/delivery/labels")
 
     def returns(
         self,

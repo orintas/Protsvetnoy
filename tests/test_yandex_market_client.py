@@ -67,3 +67,37 @@ def test_update_order_status_sends_status_and_substatus():
     body = requests[0].content.replace(b" ", b"")
     assert b'"status":"PROCESSING"' in body
     assert b'"substatus":"READY_TO_SHIP"' in body
+
+
+def test_order_by_id_filters_by_orderids_and_returns_first_match():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"orders": [{"orderId": 555}]})
+
+    client = _client_with_handler(handler)
+    order = client.order_by_id(555)
+    assert order == {"orderId": 555}
+    assert b'"orderIds":[555]' in requests[0].content.replace(b" ", b"")
+
+
+def test_order_by_id_returns_none_when_not_found():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"orders": []})
+
+    client = _client_with_handler(handler)
+    assert client.order_by_id(555) is None
+
+
+def test_get_order_label_returns_raw_pdf_bytes():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"%PDF-1.4 fake label")
+
+    client = _client_with_handler(handler)
+    pdf = client.get_order_label(123, campaign_id="21924355")
+    assert pdf == b"%PDF-1.4 fake label"
+    assert requests[0].url.path == "/v2/campaigns/21924355/orders/123/delivery/labels"

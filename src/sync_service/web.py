@@ -14,6 +14,9 @@ from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .sync_log import SyncLog
+from .telegram_client import TelegramClient
+from .yandex_market import YandexMarketClient
+from .yandex_market_order_sync import process_new_order
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -51,8 +54,10 @@ def _yandex_market_webhook(environ, start_response):
 
     No signature scheme exists for these — Yandex documents source-IP
     filtering as the only verification, so that's enforced here. Every
-    notification is just logged (no document creation), matching the
-    read-only stance of the rest of this service so far.
+    notification is logged; ORDER_CREATED additionally creates the MoySklad
+    order, confirms assembly, and sends the shipping label to Telegram
+    (see _handle_new_order / process_new_order) — the one write path this
+    service has for Yandex Market so far.
     """
     if not is_allowed_ip(_client_ip(environ)):
         start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
@@ -66,8 +71,11 @@ def _yandex_market_webhook(environ, start_response):
         payload = dumps({"error": {"type": "WRONG_EVENT_FORMAT", "message": str(error)}}, ensure_ascii=False).encode("utf-8")
         start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    log = YandexMarketSyncLog()
     try:
-        handle_notification(YandexMarketSyncLog(), notification)
+        handle_notification(log, notification)
+        if notification.get("notificationType") == "ORDER_CREATED":
+            _handle_new_order(notification, log)
     except Exception as error:
         ErrorLog().log_exception("yandex_market_webhook", error, context=f"Ошибка обработки уведомления {notification.get('notificationType')}")
         payload = dumps({"error": {"type": "UNKNOWN", "message": "internal error"}}, ensure_ascii=False).encode("utf-8")
@@ -75,6 +83,32 @@ def _yandex_market_webhook(environ, start_response):
         return [payload]
     start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
     return [_yandex_market_notification_response()]
+
+
+def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
+    """Create the MoySklad order, confirm assembly on Yandex Market, send the
+    label to Telegram. Any failure propagates to the webhook's own handler,
+    which logs it and answers 500 so Market retries the notification later —
+    safe because process_new_order is idempotent on the order's existence."""
+    settings = Settings.from_env()
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id)
+    telegram = TelegramClient(bot_token=settings.telegram_bot_token) if settings.telegram_bot_token else None
+    try:
+        process_new_order(
+            order_id=int(notification["orderId"]),
+            campaign_id=int(notification["campaignId"]),
+            moysklad=moysklad,
+            yandex=yandex,
+            telegram=telegram,
+            telegram_chat_id=settings.telegram_label_chat_id,
+            log=log,
+        )
+    finally:
+        moysklad.close()
+        yandex.close()
+        if telegram is not None:
+            telegram.close()
 
 
 def _ndjson_line(payload: dict) -> bytes:
