@@ -61,6 +61,7 @@ def application(environ, start_response):
 .hero{max-width:710px;transition:.2s max-height,.2s opacity,.2s margin}.eyebrow{color:var(--accent2);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}.hero h1{font-size:clamp(34px,6vw,64px);line-height:1.02;letter-spacing:-.05em;margin:14px 0 20px}.hero p{color:var(--muted);font-size:18px;max-width:610px;margin:0}
 .hero.compact{max-height:0;opacity:0;margin:0;overflow:hidden;pointer-events:none}
 .card{background:#121622cc;border:1px solid var(--line);border-radius:18px;padding:22px;backdrop-filter:blur(12px)}.card h2{font-size:17px;margin:0 0 6px}.card p{color:var(--muted);margin:0}
+.accordion+.accordion{margin-top:16px}.accordion-header{display:flex;align-items:center;justify-content:space-between;gap:15px;cursor:pointer}.accordion-chevron{color:var(--muted);font-size:14px;flex-shrink:0;transition:.2s transform}.accordion.open .accordion-chevron{transform:rotate(90deg)}.accordion-body{margin-top:18px}.accordion-body[hidden]{display:none}
 .help-btn{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font:700 12px inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}.help-btn:hover{color:var(--text);border-color:var(--accent)}
 .modal-overlay{position:fixed;inset:0;background:#05060bcc;display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal-overlay.open{display:flex}.modal{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;max-width:520px;width:100%;max-height:80vh;overflow:auto}.modal h3{margin:0 0 14px;font-size:18px}.modal ol{margin:0;padding-left:20px;color:var(--muted);font-size:14px;line-height:1.7}.modal ol li strong{color:var(--text)}.modal-close{margin-top:20px}.log-row.clickable{cursor:pointer}.log-row.clickable:hover{background:#ffffff08}.detail-grid{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px}.detail-grid dt{color:var(--muted)}.detail-grid dd{margin:0;color:var(--text)}
 .actions{display:flex;gap:12px;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:174px;padding:13px 18px;border:0;border-radius:11px;color:#fff;background:linear-gradient(135deg,var(--accent),#6d5dfc);font:600 14px inherit;text-decoration:none;cursor:pointer;box-shadow:0 10px 26px #6d5dfc33;transition:.2s transform,.2s filter}.button.secondary{background:#1b2130;box-shadow:none;border:1px solid #30384d}.button:hover{filter:brightness(1.12);transform:translateY(-2px)}.button:disabled{opacity:.65;cursor:wait;transform:none}
@@ -78,12 +79,25 @@ def application(environ, start_response):
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 </nav>
 <section id="tab-catalog" class="tab-panel active">
-<section class="card"><div style="display:flex;justify-content:space-between;gap:15px;align-items:center;flex-wrap:wrap">
-<div style="display:flex;align-items:center;gap:8px"><h2 style="margin:0">Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
-<button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button></div>
+<section class="card accordion" id="section-catalog">
+<div class="accordion-header" data-section="catalog" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" id="body-catalog" hidden>
+<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button></div>
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
-<div id="result"></div></section>
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал синхронизации Novicloud</h2><p style="margin:0">Тестовый режим: документы в МойСклад пока не создаются. Проверка выполняется каждые 5 минут.</p></div><div style="display:flex;gap:10px;align-items:center"><input id="log-search" placeholder="Поиск по номеру документа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"><button class="button secondary" id="refresh-log" type="button">Обновить</button></div></div><div id="sync-log" class="log"></div></section>
+<div id="result"></div>
+</div></section>
+<section class="card accordion" id="section-sales">
+<div class="accordion-header" data-section="sales" role="button" tabindex="0">
+<div><h2>Синхронизация продаж</h2><p>Тестовый режим: документы в МойСклад пока не создаются. Проверка выполняется каждые 5 минут.</p></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" id="body-sales" hidden>
+<div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-bottom:14px"><input id="log-search" placeholder="Поиск по номеру документа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"><button class="button secondary" id="refresh-log" type="button">Обновить</button></div>
+<div id="sync-log" class="log"></div>
+</div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
@@ -161,8 +175,14 @@ async function loadYmLog(){const target=document.getElementById('ym-sync-log');t
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
 const hero=document.getElementById('hero');
 function activateTab(name){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='tab-'+name));}
+function closeAccordions(){document.querySelectorAll('.accordion').forEach(s=>{s.classList.remove('open');s.querySelector('.accordion-body').hidden=true;});}
+function toggleAccordion(section){const willOpen=!section.classList.contains('open');closeAccordions();if(willOpen){section.classList.add('open');section.querySelector('.accordion-body').hidden=false;hero.classList.add('compact');}}
+document.querySelectorAll('.accordion-header').forEach(header=>{
+header.onclick=e=>{if(e.target.closest('.help-btn'))return;toggleAccordion(header.closest('.accordion'));};
+header.onkeydown=e=>{if(e.target.closest('.help-btn'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleAccordion(header.closest('.accordion'));}};
+});
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.onclick=()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');});
-document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');};
+document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');closeAccordions();};
 </script></body></html>""".encode("utf-8")
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]
