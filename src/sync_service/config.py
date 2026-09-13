@@ -18,6 +18,9 @@ class Settings:
     yandex_market_business_id: str
     yandex_market_campaign_id: str
     yandex_market_base_url: str
+    shopify_shop_domain: str
+    shopify_access_token: str
+    shopify_api_version: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -41,6 +44,9 @@ class Settings:
             yandex_market_base_url=os.getenv(
                 "YANDEX_MARKET_BASE_URL", "https://api.partner.market.yandex.ru"
             ).rstrip("/"),
+            shopify_shop_domain=os.getenv("SHOPIFY_SHOP_DOMAIN", ""),
+            shopify_access_token=os.getenv("SHOPIFY_ACCESS_TOKEN", ""),
+            shopify_api_version=os.getenv("SHOPIFY_API_VERSION", "2024-07"),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )
