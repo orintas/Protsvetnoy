@@ -109,7 +109,7 @@ async function fetchCompareStream(){
 const response=await fetch('/api/compare-stream');if(!response.ok)throw new Error(await response.text());
 const reader=response.body.getReader(), decoder=new TextDecoder();let buffer='';
 while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let newlineAt;
-while((newlineAt=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,newlineAt).trim();buffer=buffer.slice(newlineAt+1);if(!line)continue;
+while((newlineAt=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,newlineAt).trim();buffer=buffer.slice(newlineAt+1);if(!line)continue;
 const event=JSON.parse(line);
 if(event.stage==='error')throw new Error(event.message);
 if(event.stage==='done')return event.rows;
