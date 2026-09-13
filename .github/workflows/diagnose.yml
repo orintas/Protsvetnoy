@@ -1,0 +1,34 @@
+name: Diagnose VPS services
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect containers over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: false
+          script: |
+            cd "${{ secrets.DEPLOY_PATH }}"
+            echo "=== docker compose ps ==="
+            docker compose ps -a
+            echo
+            echo "=== moysklad-shift-close-worker logs (last 300 lines) ==="
+            docker compose logs --no-color --tail 300 moysklad-shift-close-worker
+            echo
+            echo "=== worker (novicloud sync) logs (last 50 lines) ==="
+            docker compose logs --no-color --tail 50 worker
+            echo
+            echo "=== container inspect: state/restarts ==="
+            docker inspect -f '{{.Name}}: Status={{.State.Status}} StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}' $(docker compose ps -q moysklad-shift-close-worker) || true
+            echo
+            echo "=== current server time ==="
+            date
+            date -u
