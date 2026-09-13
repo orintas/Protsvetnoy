@@ -18,6 +18,7 @@ DEFAULT_CATEGORIES = (
     "Painting by numbers", "Diamond painting", "Products for Shops", "Accessories",
     "Wooden constructors", "Roombox",
 )
+_STATUS_ORDER = {"missing": 0, "price": 1, "archive": 2, "same": 3, "no_price": 4}
 
 
 def _novicloud_index(novicloud: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -92,7 +93,7 @@ def compare_catalogs(
             "archived": bool(product.get("archived")) or (novicloud_item is not None and novicloud_item.get("aktywny") is False),
             "product": product,
         })
-    return sorted(comparison, key=lambda item: (item["status"] == "same", item["name"].lower()))
+    return sorted(comparison, key=lambda item: (_STATUS_ORDER.get(item["status"], 99), item["code"].lower()))
 
 
 def _barcode(product: dict[str, Any]) -> str:
