@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .error_log import ErrorLog
 from .novicloud import NovicloudClient
 
 
@@ -96,6 +97,10 @@ def run_once(settings: Settings, log: SyncLog) -> None:
 def worker() -> None:
     settings = Settings.from_env()
     log = SyncLog()
+    errors = ErrorLog()
     while True:
-        run_once(settings, log)
+        try:
+            run_once(settings, log)
+        except Exception as error:
+            errors.log_exception("novicloud_sync_worker", error, context="Ошибка проверки продаж/возвратов Novicloud")
         time.sleep(300)

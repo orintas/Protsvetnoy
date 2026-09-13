@@ -6,6 +6,7 @@ from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
 from .config import Settings
+from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
@@ -24,9 +25,15 @@ def _compare_stream():
     stage runs, so the client sees the label change in step with the real
     work instead of a fake looping timer.
     """
-    settings = Settings.from_env()
-    novicloud = NovicloudClient(base_url=settings.novicloud_base_url, version=settings.novicloud_api_version, account=settings.novicloud_account, password=settings.novicloud_password)
-    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    errors = ErrorLog()
+    try:
+        settings = Settings.from_env()
+        novicloud = NovicloudClient(base_url=settings.novicloud_base_url, version=settings.novicloud_api_version, account=settings.novicloud_account, password=settings.novicloud_password)
+        moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    except Exception as error:
+        errors.log_exception("web_compare", error, context="Не удалось подготовить клиентов для сравнения каталогов")
+        yield _ndjson_line({"stage": "error", "message": str(error)})
+        return
     try:
         yield _ndjson_line({"stage": "moysklad"})
         moysklad_products = moysklad.products()
@@ -37,6 +44,7 @@ def _compare_stream():
         public_rows = [{key: value for key, value in row.items() if key != "product"} for row in comparison]
         yield _ndjson_line({"stage": "done", "rows": public_rows})
     except Exception as error:
+        errors.log_exception("web_compare", error, context="Ошибка при сравнении каталогов МойСклад/Novicloud")
         yield _ndjson_line({"stage": "error", "message": str(error)})
     finally:
         novicloud.close()
@@ -44,7 +52,22 @@ def _compare_stream():
 
 
 def application(environ, start_response):
+    """Top-level entry point: dispatch the request and log any escaped error.
+
+    Every handler below builds its full response before calling
+    start_response, so on an exception here we can still safely send a 500
+    instead of leaving the connection hanging silently.
+    """
     path = environ.get("PATH_INFO", "/")
+    try:
+        return _dispatch(path, environ, start_response)
+    except Exception as error:
+        ErrorLog().log_exception("web", error, context=f"{environ.get('REQUEST_METHOD', 'GET')} {path}")
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Internal error, see error log"]
+
+
+def _dispatch(path, environ, start_response):
     if path == "/":
         body = """<!doctype html>
 <html lang="ru">
@@ -57,7 +80,8 @@ def application(environ, start_response):
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0,#25204c 0,transparent 35%),var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
 .wrap{max-width:980px;margin:0 auto;padding:42px 22px 60px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
 .brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.2px;cursor:pointer;background:none;border:0;color:inherit;font:inherit;padding:0}.mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#fff;box-shadow:0 8px 24px #8b7cff44;object-fit:contain;padding:6px}
-.status{color:var(--accent2);font-size:13px}.status:before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 0;border-radius:50%;background:var(--accent2);box-shadow:0 0 12px var(--accent2)}
+.status{color:var(--accent2);font-size:13px;background:none;border:0;font-family:inherit;cursor:pointer;padding:0}.status:before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 0;border-radius:50%;background:var(--accent2);box-shadow:0 0 12px var(--accent2)}.status.has-errors{color:#f87171}.status.has-errors:before{background:#f87171;box-shadow:0 0 12px #f87171}
+.tab-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:#dc2626;color:#fff;font-size:11px;font-weight:700}.log-row.unread{background:#dc262614}.log-row.unread .log-time{color:#f87171}
 .hero{max-width:710px;transition:.2s max-height,.2s opacity,.2s margin}.eyebrow{color:var(--accent2);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}.hero h1{font-size:clamp(34px,6vw,64px);line-height:1.02;letter-spacing:-.05em;margin:14px 0 20px}.hero p{color:var(--muted);font-size:18px;max-width:610px;margin:0}
 .hero.compact{max-height:0;opacity:0;margin:0;overflow:hidden;pointer-events:none}
 .card{background:#121622cc;border:1px solid var(--line);border-radius:18px;padding:22px;backdrop-filter:blur(12px)}.card h2{font-size:17px;margin:0 0 6px}.card p{color:var(--muted);margin:0}
@@ -71,12 +95,13 @@ def application(environ, start_response):
 @media(max-width:650px){.wrap{padding-top:24px}.top{margin-bottom:18px}.grid{grid-template-columns:1fr}.actions{flex-direction:column}.button{width:100%}.log-row{align-items:flex-start;flex-wrap:wrap}.log-time{min-width:130px}}
 </style></head>
 <body><main class="wrap">
-<header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><span class="status">Система готова</span></header>
+<header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><button class="status" id="status-indicator" type="button">Система готова</button></header>
 <section class="hero" id="hero"><div class="eyebrow">Ассортимент · синхронизация</div><h1>Единый центр<br>управления интеграциями.</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
+<button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
 </nav>
 <section id="tab-catalog" class="tab-panel active">
 <section class="card accordion" id="section-catalog">
@@ -103,6 +128,9 @@ def application(environ, start_response):
 </section>
 <section id="tab-ym-log" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Тестовый режим: заказы читаются каждые 5 минут, документы в МойСклад пока не создаются.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div><div id="ym-sync-log" class="log"></div></section>
+</section>
+<section id="tab-errors" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
 </section>
 <div class="modal-overlay" id="log-detail-modal"><div class="modal"><h3 id="log-detail-title">Детали записи</h3><dl class="detail-grid" id="log-detail-body"></dl><button class="button secondary modal-close" id="log-detail-close" type="button">Закрыть</button></div></div>
 <div class="modal-overlay" id="catalog-help-modal"><div class="modal"><h3>Как работает синхронизация ассортимента</h3><ol>
@@ -172,6 +200,26 @@ document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.class
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.ymLogIndex)]));}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+let lastErrors=[];
+function renderErrors(){const target=document.getElementById('error-log');
+target.innerHTML=lastErrors.length?lastErrors.map((e,i)=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge error">'+escapeHtml(e.source)+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>';
+target.querySelectorAll('[data-error-index]').forEach(row=>row.onclick=()=>showErrorDetail(lastErrors[Number(row.dataset.errorIndex)]));}
+function showErrorDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
+title.textContent='Ошибка · '+entry.source;
+body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Источник</dt><dd>'+escapeHtml(entry.source)+'</dd><dt>Сообщение</dt><dd>'+escapeHtml(entry.message)+'</dd><dt>Подробности</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:320px;overflow:auto">'+escapeHtml(entry.details||'')+'</pre></dd>';
+modal.classList.add('open');}
+function updateErrorStatus(count){const indicator=document.getElementById('status-indicator'), badge=document.getElementById('errors-tab-badge');
+if(count>0){indicator.textContent='Есть ошибки ('+count+')';indicator.classList.add('has-errors');badge.textContent=String(count);badge.hidden=false;}
+else{indicator.textContent='Система готова';indicator.classList.remove('has-errors');badge.hidden=true;}}
+async function refreshErrorStatus(){try{const response=await fetch('/api/errors');const data=await response.json();updateErrorStatus(data.unread_count);}catch(error){}}
+async function openErrorsTab(){activateTab('errors');hero.classList.add('compact');
+try{const response=await fetch('/api/errors');const data=await response.json();lastErrors=data.errors||[];renderErrors();
+fetch('/api/errors/read',{method:'POST'}).then(()=>updateErrorStatus(0));}
+catch(error){document.getElementById('error-log').innerHTML='<p class="error">Журнал ошибок недоступен: '+escapeHtml(error.message)+'</p>';}}
+document.getElementById('refresh-errors').onclick=async()=>{const response=await fetch('/api/errors');const data=await response.json();lastErrors=data.errors||[];renderErrors();};
+document.getElementById('status-indicator').onclick=openErrorsTab;
+refreshErrorStatus();setInterval(refreshErrorStatus,60000);
 const hero=document.getElementById('hero');
 function activateTab(name){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='tab-'+name));}
 function closeAccordions(){document.querySelectorAll('.accordion').forEach(s=>{s.classList.remove('open');s.querySelector('.accordion-body').hidden=true;});}
@@ -181,7 +229,7 @@ document.querySelectorAll('.accordion-header').forEach(header=>{
 header.onclick=e=>{if(e.target.closest('button'))return;toggleAccordion(header.closest('.accordion'));};
 header.onkeydown=e=>{if(e.target.closest('button'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleAccordion(header.closest('.accordion'));}};
 });
-document.querySelectorAll('.tab-btn').forEach(btn=>btn.onclick=()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');});
+document.querySelectorAll('.tab-btn').forEach(btn=>{btn.onclick=btn.dataset.tab==='errors'?openErrorsTab:()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');};});
 document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');closeAccordions();};
 </script></body></html>""".encode("utf-8")
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
@@ -197,6 +245,18 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    if path == "/api/errors":
+        error_log = ErrorLog()
+        payload = dumps(
+            {"unread_count": error_log.unread_count(), "errors": error_log.recent()},
+            ensure_ascii=False, default=str,
+        ).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/errors/read" and environ.get("REQUEST_METHOD") == "POST":
+        ErrorLog().mark_all_read()
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [b'{"ok": true}']
     if path != "/generate":
         start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
         return [b"Not found"]

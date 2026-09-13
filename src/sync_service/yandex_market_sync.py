@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .error_log import ErrorLog
 from .yandex_market import YandexMarketClient
 
 
@@ -73,6 +74,10 @@ def run_once(settings: Settings, log: YandexMarketSyncLog) -> None:
 def worker() -> None:
     settings = Settings.from_env()
     log = YandexMarketSyncLog()
+    errors = ErrorLog()
     while True:
-        run_once(settings, log)
+        try:
+            run_once(settings, log)
+        except Exception as error:
+            errors.log_exception("yandex_market_sync_worker", error, context="Ошибка проверки заказов Яндекс.Маркета")
         time.sleep(300)
