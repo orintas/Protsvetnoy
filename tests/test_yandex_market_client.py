@@ -10,7 +10,6 @@ def _client_with_handler(handler):
         base_url="https://api.partner.market.yandex.ru",
         api_key="test-key",
         business_id="939642",
-        campaign_id="21924355",
     )
     client._client._client = httpx.Client(
         transport=httpx.MockTransport(handler),
@@ -48,7 +47,7 @@ def test_update_stocks_builds_sku_payload():
         return httpx.Response(200, json={"status": "OK"})
 
     client = _client_with_handler(handler)
-    client.update_stocks([{"sku": "ABC", "count": 5}])
+    client.update_stocks([{"sku": "ABC", "count": 5}], campaign_id="21924355")
     assert requests[0].url.path == "/v2/campaigns/21924355/offers/stocks"
     body = requests[0].content
     assert b'"sku":"ABC"' in body.replace(b" ", b"")
@@ -63,7 +62,7 @@ def test_update_order_status_sends_status_and_substatus():
         return httpx.Response(200, json={"status": "OK"})
 
     client = _client_with_handler(handler)
-    client.update_order_status(123, status="PROCESSING", substatus="READY_TO_SHIP")
+    client.update_order_status(123, campaign_id="21924355", status="PROCESSING", substatus="READY_TO_SHIP")
     assert requests[0].url.path == "/v2/campaigns/21924355/orders/123/status"
     body = requests[0].content.replace(b" ", b"")
     assert b'"status":"PROCESSING"' in body

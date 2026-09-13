@@ -27,13 +27,13 @@ jobs:
             git fetch --prune origin
             git checkout master
             git reset --hard origin/master
-            grep -q '^YANDEX_MARKET_API_KEY=' .env || cat >> .env << 'ENVEOF'
-
-            YANDEX_MARKET_API_KEY=${{ secrets.YANDEX_MARKET_API_KEY }}
-            YANDEX_MARKET_BUSINESS_ID=${{ secrets.YANDEX_MARKET_BUSINESS_ID }}
-            YANDEX_MARKET_CAMPAIGN_ID=${{ secrets.YANDEX_MARKET_CAMPAIGN_ID }}
-            YANDEX_MARKET_BASE_URL=https://api.partner.market.yandex.ru
-            ENVEOF
+            grep -q '^YANDEX_MARKET_BASE_URL=' .env || echo 'YANDEX_MARKET_BASE_URL=https://api.partner.market.yandex.ru' >> .env
+            grep -q '^YANDEX_MARKET_API_KEY=' .env || echo 'YANDEX_MARKET_API_KEY=' >> .env
+            grep -q '^YANDEX_MARKET_BUSINESS_ID=' .env || echo 'YANDEX_MARKET_BUSINESS_ID=' >> .env
+            grep -q '^YANDEX_MARKET_CAMPAIGN_ID=' .env || echo 'YANDEX_MARKET_CAMPAIGN_ID=' >> .env
+            sed -i "s#^YANDEX_MARKET_API_KEY=.*#YANDEX_MARKET_API_KEY=${{ secrets.YANDEX_MARKET_API_KEY }}#" .env
+            sed -i "s#^YANDEX_MARKET_BUSINESS_ID=.*#YANDEX_MARKET_BUSINESS_ID=${{ secrets.YANDEX_MARKET_BUSINESS_ID }}#" .env
+            sed -i "s#^YANDEX_MARKET_CAMPAIGN_ID=.*#YANDEX_MARKET_CAMPAIGN_ID=${{ secrets.YANDEX_MARKET_CAMPAIGN_ID }}#" .env
             grep -q '^MOYSKLAD_SHIFT_CLOSE_DRY_RUN=' .env || echo 'MOYSKLAD_SHIFT_CLOSE_DRY_RUN=false' >> .env
             sed -i "s#^MOYSKLAD_TOKEN=.*#MOYSKLAD_TOKEN=${{ secrets.MOYSKLAD_TOKEN }}#" .env
             grep -q '^SHOPIFY_SHOP_DOMAIN=' .env || cat >> .env << 'ENVEOF'

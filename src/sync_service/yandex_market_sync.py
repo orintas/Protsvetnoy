@@ -49,7 +49,6 @@ def run_once(settings: Settings, log: YandexMarketSyncLog) -> None:
         base_url=settings.yandex_market_base_url,
         api_key=settings.yandex_market_api_key,
         business_id=settings.yandex_market_business_id,
-        campaign_id=settings.yandex_market_campaign_id,
     )
     since = datetime.now() - timedelta(days=1)
     try:

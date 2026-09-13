@@ -92,8 +92,13 @@ Configuration (`.env`):
 - `YANDEX_MARKET_API_KEY` — Partner API key created in the seller cabinet
   (Настройки → API и модули);
 - `YANDEX_MARKET_BUSINESS_ID` — business/cabinet id (`GET /campaigns`);
-- `YANDEX_MARKET_CAMPAIGN_ID` — the storefront (campaign) to sync, e.g. one
-  FBS shop at a time during testing;
+- `YANDEX_MARKET_CAMPAIGN_ID` — comma-separated campaign (storefront) ids to
+  sync, e.g. `149179204,149179258,149179260,149179270`. Order fetching is
+  business-wide (`GET /campaigns` → `/v1/businesses/{id}/orders`) and already
+  covers every campaign in one call; this list is only consulted by the
+  per-campaign write endpoints (`update_order_status`, `update_stocks`,
+  `update_prices`, `returns`), which take `campaign_id` as an explicit
+  argument rather than being fixed per client instance;
 - `YANDEX_MARKET_BASE_URL` — defaults to `https://api.partner.market.yandex.ru`.
 
 `offerId` in Yandex Market orders matches the MoySklad product `article`/

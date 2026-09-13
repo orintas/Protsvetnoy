@@ -16,7 +16,7 @@ class Settings:
     moysklad_base_url: str
     yandex_market_api_key: str
     yandex_market_business_id: str
-    yandex_market_campaign_id: str
+    yandex_market_campaign_ids: tuple[str, ...]
     yandex_market_base_url: str
     shopify_shop_domain: str
     shopify_access_token: str
@@ -42,7 +42,9 @@ class Settings:
             ).rstrip("/"),
             yandex_market_api_key=os.getenv("YANDEX_MARKET_API_KEY", ""),
             yandex_market_business_id=os.getenv("YANDEX_MARKET_BUSINESS_ID", ""),
-            yandex_market_campaign_id=os.getenv("YANDEX_MARKET_CAMPAIGN_ID", ""),
+            yandex_market_campaign_ids=tuple(
+                value.strip() for value in os.getenv("YANDEX_MARKET_CAMPAIGN_ID", "").split(",") if value.strip()
+            ),
             yandex_market_base_url=os.getenv(
                 "YANDEX_MARKET_BASE_URL", "https://api.partner.market.yandex.ru"
             ).rstrip("/"),

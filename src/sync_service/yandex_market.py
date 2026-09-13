@@ -9,7 +9,7 @@ from .http import JsonClient
 class YandexMarketClient:
     """Client for the Yandex Market Partner API (FBS orders, stocks, prices, returns)."""
 
-    def __init__(self, *, base_url: str, api_key: str, business_id: str, campaign_id: str) -> None:
+    def __init__(self, *, base_url: str, api_key: str, business_id: str) -> None:
         self._client = JsonClient(
             base_url=base_url,
             headers={
@@ -18,7 +18,6 @@ class YandexMarketClient:
             },
         )
         self._business_id = business_id
-        self._campaign_id = campaign_id
 
     def close(self) -> None:
         self._client.close()
@@ -69,16 +68,16 @@ class YandexMarketClient:
             if not page_token:
                 return result
 
-    def update_order_status(self, order_id: int, *, status: str, substatus: str | None = None) -> dict[str, Any]:
+    def update_order_status(self, order_id: int, *, campaign_id: str, status: str, substatus: str | None = None) -> dict[str, Any]:
         order: dict[str, Any] = {"status": status}
         if substatus:
             order["substatus"] = substatus
         return self._client.post(
-            f"/v2/campaigns/{self._campaign_id}/orders/{order_id}/status",
+            f"/v2/campaigns/{campaign_id}/orders/{order_id}/status",
             {"order": order},
         )
 
-    def update_stocks(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+    def update_stocks(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
         """items: [{"sku": ..., "count": int, "updated_at": iso_str_optional}, ...] (max 2000)."""
         skus = []
         for item in items:
@@ -86,9 +85,9 @@ class YandexMarketClient:
             if item.get("updated_at"):
                 stock_item["updatedAt"] = item["updated_at"]
             skus.append({"sku": item["sku"], "items": [stock_item]})
-        return self._client.post(f"/v2/campaigns/{self._campaign_id}/offers/stocks", {"skus": skus})
+        return self._client.post(f"/v2/campaigns/{campaign_id}/offers/stocks", {"skus": skus})
 
-    def update_prices(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+    def update_prices(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
         """items: [{"offer_id": ..., "value": float, "currency_id": "RUR", "vat": int_optional}, ...] (max 2000)."""
         offers = []
         for item in items:
@@ -96,11 +95,12 @@ class YandexMarketClient:
             if item.get("vat") is not None:
                 price["vat"] = item["vat"]
             offers.append({"offerId": item["offer_id"], "price": price})
-        return self._client.post(f"/v2/campaigns/{self._campaign_id}/offer-prices/updates", {"offers": offers})
+        return self._client.post(f"/v2/campaigns/{campaign_id}/offer-prices/updates", {"offers": offers})
 
     def returns(
         self,
         *,
+        campaign_id: str,
         from_date: str | None = None,
         to_date: str | None = None,
         return_type: str | None = None,
@@ -116,4 +116,4 @@ class YandexMarketClient:
             params["type"] = return_type
         if page_token:
             params["page_token"] = page_token
-        return self._client.get(f"/v2/campaigns/{self._campaign_id}/returns", params=params)
+        return self._client.get(f"/v2/campaigns/{campaign_id}/returns", params=params)
