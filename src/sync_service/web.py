@@ -193,7 +193,7 @@ target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clicka
 target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.logIndex)]));}
 let allLogEntries=[];
 document.getElementById('log-search').oninput=renderLog;
-function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж'};}
+function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж',store:'Магазин'};}
 function formatValue(key,value){if(value===null||value===undefined)return '—';
 if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??'');if(key==='sklep')return 'магазин #'+(value.id??'');if(key==='kasa')return 'касса #'+(value.id??'');if(key==='kasjer')return 'кассир #'+(value.id??'');if(Array.isArray(value)){if(key==='items')return value.map(it=>(it.offerId||it.offer_id||'?')+' × '+(it.count??it.quantity??'?')).join(', ');if(key==='platnosci')return value.map(p=>(p.wplata_waluta??'?')+' '+(p.kod_waluty??'')).join(', ');return value.length+' элемент(ов)';}return JSON.stringify(value);}
 return String(value);}
@@ -224,7 +224,7 @@ target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>s
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 async function loadOpenShifts(){const target=document.getElementById('shift-open-list');
 try{const response=await fetch('/api/shift-open');const data=await response.json();const shifts=data.shifts||[];
-target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span>Смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
+target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
 catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
 document.getElementById('refresh-shifts').onclick=async()=>{const btn=document.getElementById('refresh-shifts');btn.disabled=true;
 await Promise.all([loadOpenShifts(),loadShiftCloseLog()]);

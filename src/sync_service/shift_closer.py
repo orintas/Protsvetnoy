@@ -66,6 +66,15 @@ class ShiftCloseLog:
             )
 
 
+def _store_name(shift: dict[str, Any]) -> str:
+    retail_store = shift.get("retailStore")
+    if isinstance(retail_store, dict):
+        name = retail_store.get("name")
+        if name:
+            return str(name)
+    return ""
+
+
 def list_open_shifts(client: MoySkladClient, *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Read-only view of currently open PL/LT/LV/EE shifts — never logs or closes anything."""
     now = now or datetime.now(CLOSE_TIMEZONE)
@@ -78,7 +87,7 @@ def list_open_shifts(client: MoySkladClient, *, now: datetime | None = None) -> 
                 "id": shift.get("id"),
                 "name": shift.get("name"),
                 "opened": shift.get("moment"),
-                "retailStore": (shift.get("retailStore") or {}).get("meta", {}).get("href"),
+                "store": _store_name(shift),
             })
     return result
 
@@ -96,16 +105,17 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
         open_shifts = client.open_retail_shifts(org_id, since)
         total_open += len(open_shifts)
         for shift in open_shifts:
+            store = _store_name(shift) or "неизвестный магазин"
             info = {
                 "id": shift.get("id"),
                 "name": shift.get("name"),
                 "opened": shift.get("moment"),
-                "retailStore": (shift.get("retailStore") or {}).get("meta", {}).get("href"),
+                "store": store,
             }
             if dry_run:
                 log.add(
                     "shift", "dry-run",
-                    f"[{country}] Незакрытая смена №{shift.get('name')} (открыта {shift.get('moment')}) — "
+                    f"[{country}] {store}: незакрытая смена №{shift.get('name')} (открыта {shift.get('moment')}) — "
                     "закрытие не выполнено, тестовый режим",
                     info,
                 )
@@ -114,12 +124,12 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                 client.close_retail_shift(str(shift.get("id")), close_date)
                 log.add(
                     "shift", "success",
-                    f"[{country}] Закрыта смена №{shift.get('name')} (была открыта {shift.get('moment')}), "
+                    f"[{country}] {store}: закрыта смена №{shift.get('name')} (была открыта {shift.get('moment')}), "
                     f"дата закрытия {close_date}",
                     info,
                 )
             except Exception as error:
-                log.add("shift", "error", f"[{country}] Не удалось закрыть смену №{shift.get('name')}: {error}", info)
+                log.add("shift", "error", f"[{country}] {store}: не удалось закрыть смену №{shift.get('name')}: {error}", info)
     suffix = " (тестовый режим — ничего не закрывалось)" if dry_run and total_open else ""
     log.add("run", "success", f"Проверка завершена: незакрытых смен найдено {total_open}{suffix}")
     return total_open

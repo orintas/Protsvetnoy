@@ -116,7 +116,7 @@ class MoySkladClient:
         since_str = since.strftime("%Y-%m-%d %H:%M:%S")
         payload = self._client.get(
             "/entity/retailshift",
-            params={"filter": f"organization={href};moment>={since_str}", "order": "moment,asc", "limit": 100},
+            params={"filter": f"organization={href};moment>={since_str}", "order": "moment,asc", "limit": 100, "expand": "retailStore"},
         )
         result: list[dict[str, Any]] = []
         while True:
