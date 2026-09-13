@@ -122,7 +122,7 @@ def _dispatch(path, environ, start_response):
 <section class="card accordion" id="section-catalog">
 <div class="accordion-header" data-section="catalog" role="button" tabindex="0">
 <div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><span class="accordion-chevron">▸</span></div>
+<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><button class="button secondary compact" id="download-csv" type="button">↓&nbsp; Скачать CSV</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-catalog" hidden>
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
@@ -171,7 +171,7 @@ def _dispatch(path, environ, start_response):
 <li><strong>Сравнение.</strong> Нажмите «Сравнить каталоги» — сервер загрузит текущий ассортимент из Novicloud и МойСклад и сопоставит товары по коду/артикулу.</li>
 <li><strong>Проверка отличий.</strong> В таблице увидите позиции, которых нет в Novicloud, товары для архивации и товары с расхождением цены. Товары без цены «Цена в Польше» в МойСклад помечаются отдельно и недоступны для выгрузки — сначала задайте цену в МойСклад. Совпадающие товары можно скрыть галочкой «Только отличия», отфильтровать по категории или найти по коду/названию.</li>
 <li><strong>Выбор позиций.</strong> Отметьте галочками нужные строки (по умолчанию отмечены все).</li>
-<li><strong>Выгрузка файла.</strong> Нажмите «Скачать XLSX» или «Скачать CSV» — сформируется файл только с отмеченными позициями в формате, готовом для импорта.</li>
+<li><strong>Выгрузка файла.</strong> Нажмите «Скачать CSV» — сформируется файл только с отмеченными позициями в формате, готовом для импорта.</li>
 <li><strong>Загрузка в Novicloud.</strong> Зайдите в панель управления Novicloud → раздел импорта товаров → загрузите скачанный файл, чтобы применить изменения ассортимента и цен.</li>
 </ol><button class="button secondary modal-close" id="catalog-help-close" type="button">Закрыть</button></div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
@@ -202,13 +202,13 @@ catch(error){result.innerHTML='<p class="error">Не удалось сравни
 progressWrap.hidden=true;compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
 function render(){const diff=rows.filter(r=>r.status!=='same');result.innerHTML=
 '<div class="toolbar"><input id="search" placeholder="Поиск по коду или названию"><select id="category"><option value="">Все категории</option>'+[...new Set(rows.map(r=>r.category))].sort().map(c=>'<option>'+c+'</option>').join('')+'</select><label><input id="onlyDiff" type="checkbox" checked> Только отличия</label><span id="count"></span></div>'+
-'<div class="table"><table><thead><tr><th>№</th><th><input id="all" type="checkbox" checked></th><th>Товар</th><th>Категория</th><th>Статус</th><th>Цена</th></tr></thead><tbody id="tbody"></tbody></table></div>'+
-'<div class="actions export"><button class="button" data-format="xlsx">↓  Скачать XLSX</button><button class="button secondary" data-format="csv">↓  Скачать CSV</button></div>';
+'<div class="table"><table><thead><tr><th>№</th><th><input id="all" type="checkbox" checked></th><th>Товар</th><th>Категория</th><th>Статус</th><th>Цена</th></tr></thead><tbody id="tbody"></tbody></table></div>';
 document.getElementById('search').oninput=draw;document.getElementById('category').onchange=draw;document.getElementById('onlyDiff').onchange=draw;document.getElementById('all').onchange=e=>document.querySelectorAll('.pick').forEach(x=>x.checked=e.target.checked);
-document.querySelectorAll('[data-format]').forEach(b=>b.onclick=()=>download(b.dataset.format));draw();}
+draw();}
 function visible(){const q=(document.getElementById('search')?.value||'').toLowerCase(), category=document.getElementById('category')?.value, only=document.getElementById('onlyDiff')?.checked;return rows.filter(r=>(!only||r.status!=='same')&&(!category||r.category===category)&&(!q||(r.code+' '+r.name).toLowerCase().includes(q)));}
 function draw(){const visibleRows=visible(), tbody=document.getElementById('tbody');tbody.innerHTML=visibleRows.map((r,index)=>{const blocked=r.status==='no_price';return '<tr'+(blocked?' class="blocked"':'')+'><td>'+String(index+1)+'</td><td>'+(blocked?'<input type="checkbox" disabled title="Сначала задайте цену в МойСклад">':'<input class="pick" type="checkbox" value="'+encodeURIComponent(r.code)+'" checked>')+'</td><td><strong>'+r.code+'</strong><br><span>'+r.name+'</span></td><td>'+r.category+'</td><td><span class="badge '+r.status+'">'+labels[r.status]+'</span></td><td>'+r.price.toFixed(2)+' PLN</td></tr>';}).join('');document.getElementById('count').textContent=visibleRows.length+' позиций';}
 function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;location.href='/generate?format='+format+'&codes='+codes;}
+document.getElementById('download-csv').onclick=()=>download('csv');
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog();}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
 function renderLog(){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim().toLowerCase();
