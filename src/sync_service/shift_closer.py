@@ -52,6 +52,10 @@ class ShiftCloseLog:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute("SELECT * FROM shift_close_log ORDER BY id DESC LIMIT ?", (limit,))]
 
+    def clear(self) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("DELETE FROM shift_close_log")
+
     def last_run_date(self) -> str | None:
         with sqlite3.connect(self.path) as db:
             row = db.execute("SELECT value FROM shift_close_state WHERE key='last_run_date'").fetchone()

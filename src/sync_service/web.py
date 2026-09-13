@@ -127,9 +127,8 @@ def _dispatch(path, environ, start_response):
 </div></section>
 </section>
 <section id="tab-moysklad" class="tab-panel">
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
-<div><h2 style="margin:0 0 6px">Закрытие смен — Польша, Литва, Латвия, Эстония</h2><p style="margin:0">Каждый день в 23:50 сервис проверяет, не остались ли незакрытые смены в этих магазинах, и закрывает их с датой закрытия 23:50 того же дня. Магазины России не затрагиваются. Закрытие запускает только сам сервис по расписанию — из интерфейса его инициировать нельзя, здесь только просмотр.</p></div>
-<div style="display:flex;align-items:center;gap:12px"><span class="badge dry-run" id="shift-mode-badge">…</span><button class="button secondary" id="refresh-shifts" type="button">Обновить</button></div>
+<section class="card"><div>
+<h2 style="margin:0 0 6px">Закрытие смен — Польша, Литва, Латвия, Эстония</h2><p style="margin:0">Каждый день в 23:50 сервис проверяет, не остались ли незакрытые смены в этих магазинах, и закрывает их с датой закрытия 23:50 того же дня. Магазины России не затрагиваются. Закрытие запускает только сам сервис по расписанию — из интерфейса его инициировать нельзя, здесь только просмотр.</p>
 </div>
 <h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Сейчас открыты</h3>
 <div id="shift-open-list" class="log"></div>
@@ -216,9 +215,8 @@ document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.class
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.ymLogIndex)]));}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
-async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log'), badge=document.getElementById('shift-mode-badge');
+async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
-badge.textContent=data.dry_run?'Тестовый режим':'Реальное закрытие';badge.className='badge '+(data.dry_run?'dry-run':'success');
 target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
 target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));}
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
@@ -226,9 +224,6 @@ async function loadOpenShifts(){const target=document.getElementById('shift-open
 try{const response=await fetch('/api/shift-open');const data=await response.json();const shifts=data.shifts||[];
 target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
 catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
-document.getElementById('refresh-shifts').onclick=async()=>{const btn=document.getElementById('refresh-shifts');btn.disabled=true;
-await Promise.all([loadOpenShifts(),loadShiftCloseLog()]);
-btn.disabled=false;};
 loadOpenShifts();loadShiftCloseLog();
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let lastErrors=[];

@@ -37,3 +37,7 @@ jobs:
             grep -q '^MOYSKLAD_SHIFT_CLOSE_DRY_RUN=' .env || echo 'MOYSKLAD_SHIFT_CLOSE_DRY_RUN=false' >> .env
             docker compose up -d --build --remove-orphans
             docker image prune -f
+            # One-time cleanup: clear the shift-close log accumulated while the
+            # UI still showed a manual "check now" trigger. Remove this step
+            # after it has run once.
+            docker compose exec -T web python3 -c "from sync_service.shift_closer import ShiftCloseLog; ShiftCloseLog().clear()"
