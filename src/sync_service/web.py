@@ -82,20 +82,19 @@ def application(environ, start_response):
 <section class="card accordion" id="section-catalog">
 <div class="accordion-header" data-section="catalog" role="button" tabindex="0">
 <div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
-<span class="accordion-chevron">▸</span>
+<div style="display:flex;align-items:center;gap:14px"><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-catalog" hidden>
-<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button></div>
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
 <div id="result"></div>
 </div></section>
 <section class="card accordion" id="section-sales">
 <div class="accordion-header" data-section="sales" role="button" tabindex="0">
 <div><h2>Синхронизация продаж</h2><p>Тестовый режим: документы в МойСклад пока не создаются. Проверка выполняется каждые 5 минут.</p></div>
-<span class="accordion-chevron">▸</span>
+<div style="display:flex;align-items:center;gap:14px"><button class="button secondary" id="refresh-log" type="button">Обновить</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-sales" hidden>
-<div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-bottom:14px"><input id="log-search" placeholder="Поиск по номеру документа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"><button class="button secondary" id="refresh-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><input id="log-search" placeholder="Поиск по номеру документа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"></div>
 <div id="sync-log" class="log"></div>
 </div></section>
 </section>
@@ -129,7 +128,7 @@ if(event.stage==='error')throw new Error(event.message);
 if(event.stage==='done')return event.rows;
 progressLabel.textContent=stageLabels[event.stage]||'';}}
 throw new Error('Соединение прервано до получения результата');}
-compare.onclick=async()=>{compare.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;document.getElementById('hero').classList.add('compact');
+compare.onclick=async()=>{openAccordion('section-catalog');compare.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;
 try{rows=await fetchCompareStream();render();}
 catch(error){result.innerHTML='<p class="error">Не удалось сравнить каталоги: '+error.message+'<br><span class="muted">Novicloud иногда отвечает с временной ошибкой — сервер уже делает несколько попыток автоматически. Нажмите «Сравнить каталоги» ещё раз через минуту.</span></p>';}
 progressWrap.hidden=true;compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
@@ -166,7 +165,7 @@ rowsHtml+=Object.keys(payload).filter(k=>k!=='platnosci'||true).map(k=>'<dt>'+(l
 body.innerHTML=rowsHtml;modal.classList.add('open');}
 document.getElementById('log-detail-close').onclick=()=>document.getElementById('log-detail-modal').classList.remove('open');
 document.getElementById('log-detail-modal').onclick=e=>{if(e.target.id==='log-detail-modal')e.currentTarget.classList.remove('open');};
-document.getElementById('refresh-log').onclick=loadLog;loadLog();
+document.getElementById('refresh-log').onclick=()=>{openAccordion('section-sales');loadLog();};loadLog();
 const catalogHelpBtn=document.getElementById('catalog-help'), catalogHelpModal=document.getElementById('catalog-help-modal');
 catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');
@@ -176,10 +175,11 @@ document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
 const hero=document.getElementById('hero');
 function activateTab(name){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='tab-'+name));}
 function closeAccordions(){document.querySelectorAll('.accordion').forEach(s=>{s.classList.remove('open');s.querySelector('.accordion-body').hidden=true;});}
-function toggleAccordion(section){const willOpen=!section.classList.contains('open');closeAccordions();if(willOpen){section.classList.add('open');section.querySelector('.accordion-body').hidden=false;hero.classList.add('compact');}}
+function openAccordion(id){closeAccordions();const section=document.getElementById(id);section.classList.add('open');section.querySelector('.accordion-body').hidden=false;hero.classList.add('compact');}
+function toggleAccordion(section){if(section.classList.contains('open')){closeAccordions();}else{openAccordion(section.id);}}
 document.querySelectorAll('.accordion-header').forEach(header=>{
-header.onclick=e=>{if(e.target.closest('.help-btn'))return;toggleAccordion(header.closest('.accordion'));};
-header.onkeydown=e=>{if(e.target.closest('.help-btn'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleAccordion(header.closest('.accordion'));}};
+header.onclick=e=>{if(e.target.closest('button'))return;toggleAccordion(header.closest('.accordion'));};
+header.onkeydown=e=>{if(e.target.closest('button'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleAccordion(header.closest('.accordion'));}};
 });
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.onclick=()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');});
 document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');closeAccordions();};
