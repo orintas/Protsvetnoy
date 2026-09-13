@@ -35,5 +35,6 @@ jobs:
             YANDEX_MARKET_BASE_URL=https://api.partner.market.yandex.ru
             ENVEOF
             grep -q '^MOYSKLAD_SHIFT_CLOSE_DRY_RUN=' .env || echo 'MOYSKLAD_SHIFT_CLOSE_DRY_RUN=false' >> .env
+            sed -i "s#^MOYSKLAD_TOKEN=.*#MOYSKLAD_TOKEN=${{ secrets.MOYSKLAD_TOKEN }}#" .env
             docker compose up -d --build --remove-orphans
             docker image prune -f

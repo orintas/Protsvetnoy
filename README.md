@@ -46,7 +46,10 @@ repository secrets before enabling it:
 - `DEPLOY_USER` — deployment user, not necessarily `root`;
 - `DEPLOY_SSH_KEY` — private key for a dedicated deploy key;
 - `DEPLOY_PATH` — checkout path on the VPS, for example `/opt/novicloud-sync`;
-- `DEPLOY_PORT` — optional SSH port (defaults to `22`).
+- `DEPLOY_PORT` — optional SSH port (defaults to `22`);
+- `MOYSKLAD_TOKEN` — kept in sync with the VPS `.env` on every deploy, so
+  rotating the MoySklad API token only needs `gh secret set MOYSKLAD_TOKEN`
+  followed by a deploy — no manual VPS access required.
 
 The matching public key must be installed in the deployment user's
 `~/.ssh/authorized_keys`. The VPS checkout must already exist and have its
