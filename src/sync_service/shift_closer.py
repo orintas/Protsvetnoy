@@ -21,9 +21,9 @@ TARGET_ORGANIZATIONS: dict[str, str] = {
     "0b3fbc43-e0dc-11ec-0a80-0076000f9c69": "Эстония",
 }
 
-# All four stores' shifts are closed on one shared clock rather than four
-# separate per-country timezones.
-CLOSE_TIMEZONE = ZoneInfo("Europe/Warsaw")
+# All four stores' shifts are closed on one shared clock (Moscow time) rather
+# than four separate per-country timezones.
+CLOSE_TIMEZONE = ZoneInfo("Europe/Moscow")
 CLOSE_HOUR, CLOSE_MINUTE = 23, 50
 LOOKBACK_DAYS = 3
 

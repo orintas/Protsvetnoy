@@ -131,10 +131,11 @@ an HTTPS reverse proxy before exposing it publicly.
 
 ## MoySklad retail shift closing (PL/LT/LV/EE)
 
-The `moysklad-shift-close-worker` service checks, once a day at 23:50
-Europe/Warsaw time, whether any retail shift (`retailshift`) is still open
-for the Poland/Lithuania/Latvia/Estonia stores and closes it by setting
-`closeDate` to `23:50:00` of that day. Russian stores (and every other
+The `moysklad-shift-close-worker` service checks, once a day at 23:50 Moscow
+time, whether any retail shift (`retailshift`) is still open for the
+Poland/Lithuania/Latvia/Estonia stores and closes it by setting `closeDate`
+to `23:50:00` of that day (that literal wall-clock value, taken from Moscow
+time regardless of the store's own timezone). Russian stores (and every other
 organization) are never touched — only shifts belonging to these four
 MoySklad organizations are considered:
 

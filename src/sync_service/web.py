@@ -340,7 +340,7 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return [payload]
     if path == "/api/shift-open":
         # Read-only: shows what's currently open. Closing only ever happens
-        # from the scheduled worker at 23:50 Europe/Warsaw — there is no way
+        # from the scheduled worker at 23:50 Moscow time — there is no way
         # for a user action to trigger a real close.
         settings = Settings.from_env()
         client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
