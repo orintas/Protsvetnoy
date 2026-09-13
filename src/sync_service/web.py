@@ -122,7 +122,7 @@ def _dispatch(path, environ, start_response):
 <section class="card accordion" id="section-catalog">
 <div class="accordion-header" data-section="catalog" role="button" tabindex="0">
 <div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><button class="button secondary compact" id="download-csv" type="button">↓&nbsp; Скачать CSV</button><span class="accordion-chevron">▸</span></div>
+<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn small open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><button class="button secondary compact" id="download-csv" type="button" disabled title="Сначала выполните сравнение каталогов">↓&nbsp; Скачать CSV</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-catalog" hidden>
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
@@ -196,8 +196,9 @@ if(event.stage==='error')throw new Error(event.message);
 if(event.stage==='done')return event.rows;
 progressLabel.textContent=stageLabels[event.stage]||'';}}
 throw new Error('Соединение прервано до получения результата');}
-compare.onclick=async()=>{openAccordion('section-catalog');compare.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;
-try{rows=await fetchCompareStream();render();}
+const downloadCsvBtn=document.getElementById('download-csv');
+compare.onclick=async()=>{openAccordion('section-catalog');compare.disabled=true;downloadCsvBtn.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;
+try{rows=await fetchCompareStream();render();downloadCsvBtn.disabled=false;}
 catch(error){result.innerHTML='<p class="error">Не удалось сравнить каталоги: '+error.message+'<br><span class="muted">Novicloud иногда отвечает с временной ошибкой — сервер уже делает несколько попыток автоматически. Нажмите «Сравнить каталоги» ещё раз через минуту.</span></p>';}
 progressWrap.hidden=true;compare.disabled=false;compare.textContent='↻  Обновить сравнение';};
 function render(){const diff=rows.filter(r=>r.status!=='same');result.innerHTML=
@@ -208,7 +209,7 @@ draw();}
 function visible(){const q=(document.getElementById('search')?.value||'').toLowerCase(), category=document.getElementById('category')?.value, only=document.getElementById('onlyDiff')?.checked;return rows.filter(r=>(!only||r.status!=='same')&&(!category||r.category===category)&&(!q||(r.code+' '+r.name).toLowerCase().includes(q)));}
 function draw(){const visibleRows=visible(), tbody=document.getElementById('tbody');tbody.innerHTML=visibleRows.map((r,index)=>{const blocked=r.status==='no_price';return '<tr'+(blocked?' class="blocked"':'')+'><td>'+String(index+1)+'</td><td>'+(blocked?'<input type="checkbox" disabled title="Сначала задайте цену в МойСклад">':'<input class="pick" type="checkbox" value="'+encodeURIComponent(r.code)+'" checked>')+'</td><td><strong>'+r.code+'</strong><br><span>'+r.name+'</span></td><td>'+r.category+'</td><td><span class="badge '+r.status+'">'+labels[r.status]+'</span></td><td>'+r.price.toFixed(2)+' PLN</td></tr>';}).join('');document.getElementById('count').textContent=visibleRows.length+' позиций';}
 function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;location.href='/generate?format='+format+'&codes='+codes;}
-document.getElementById('download-csv').onclick=()=>download('csv');
+downloadCsvBtn.onclick=()=>download('csv');
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog();}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
 function renderLog(){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim().toLowerCase();
