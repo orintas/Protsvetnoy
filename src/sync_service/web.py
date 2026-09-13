@@ -32,6 +32,20 @@ def _yandex_market_notification_response() -> bytes:
     return dumps({"version": "1.0.0", "name": "Varvikas sync service", "time": now}, ensure_ascii=False).encode("utf-8")
 
 
+def _client_ip(environ) -> str:
+    """The real client IP, accounting for the Caddy reverse proxy in front.
+
+    Caddy appends the peer IP it saw to X-Forwarded-For rather than trusting
+    whatever a client sent, so the *last* entry is the one Caddy itself
+    observed — safe to trust. A client-supplied first entry is not (that's
+    exactly what an attacker would spoof), so it's never used.
+    """
+    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return environ.get("REMOTE_ADDR", "")
+
+
 def _yandex_market_webhook(environ, start_response):
     """Receives Yandex Market push notifications (orders, returns, chats, ...).
 
@@ -40,7 +54,7 @@ def _yandex_market_webhook(environ, start_response):
     notification is just logged (no document creation), matching the
     read-only stance of the rest of this service so far.
     """
-    if not is_allowed_ip(environ.get("REMOTE_ADDR", "")):
+    if not is_allowed_ip(_client_ip(environ)):
         start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
         return [b"IP not allowed"]
     try:

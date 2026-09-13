@@ -1,11 +1,20 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
   web:
     build: .
     env_file:
       - .env
     command: ["web-server"]
-    ports:
-      - "8080:8080"
     volumes:
       - sync-data:/app/data
   worker:
@@ -31,3 +40,5 @@ services:
       - sync-data:/app/data
 volumes:
   sync-data:
+  caddy-data:
+  caddy-config:

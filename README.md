@@ -114,19 +114,20 @@ yet, matching the read-only stance of the rest of this service.
 There is no request signature in Market's push API — the only verification
 it documents is filtering by source IP, so this endpoint rejects anything
 outside Market's published ranges (`5.45.207.0/25`, `141.8.142.0/25`,
-`5.255.253.0/25`). That only holds as long as nothing sits in front of this
-app and hides the real client IP — there's no reverse proxy today, but if
-one is added later it must forward/trust the real IP (e.g. via
-`X-Forwarded-For`) or this check needs updating.
+`5.255.253.0/25`). Caddy (see below) terminates TLS and proxies to `web`
+inside the Docker network, so the app can't see the real client IP on
+`REMOTE_ADDR` directly — it reads the last entry of `X-Forwarded-For`
+instead (the one Caddy itself appended for the peer that connected to it,
+not whatever a client claims), so this only stays correct as long as Caddy
+remains the sole, directly-connected proxy in front of `web`.
 
 Registration is manual, in the seller cabinet UI — there's no API for it:
 **Аккаунт → Настройки → API и модули → API-уведомления → Подключить
-уведомления**, pointing it at `https://SERVER_IP:8080/api/yandex-market/webhook`
-(behind HTTPS in production) and picking which event types to send. Market
-sends a `PING` once you save, expecting a `200` within 1 second to confirm
-the endpoint is live; repeated failures on real notifications back off from
-retrying every minute up to hourly, and disable the integration after 14
-days of being unreachable.
+уведомления**, pointing it at `https://protsvetnoy.us/api/yandex-market/webhook`
+and picking which event types to send. Market sends a `PING` once you save,
+expecting a `200` within 1 second to confirm the endpoint is live; repeated
+failures on real notifications back off from retrying every minute up to
+hourly, and disable the integration after 14 days of being unreachable.
 
 `offerId` in Yandex Market orders matches the MoySklad product `article`/
 `code` directly, so no extra SKU mapping table is required.
@@ -134,7 +135,7 @@ days of being unreachable.
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open
-`http://SERVER_IP:8080/` and switch between the tabs, each covering a
+`https://protsvetnoy.us/` and switch between the tabs, each covering a
 distinct task:
 
 - **Novicloud** — compares the Novicloud and MoySklad catalogs, generates the
@@ -158,8 +159,18 @@ distinct task:
   entries.
 
 The page keeps API credentials on the server and only returns generated files
-or JSON summaries. Restrict port 8080 with the VPS firewall or put it behind
-an HTTPS reverse proxy before exposing it publicly.
+or JSON summaries.
+
+### HTTPS (Caddy reverse proxy)
+
+The `caddy` service (see `Caddyfile`) is the only container with published
+ports (80/443); `web` has none — it's reachable solely through Caddy inside
+the Docker network. Caddy automatically obtains and renews a Let's Encrypt
+certificate for `protsvetnoy.us` (HTTP-01 challenge on port 80), redirects
+plain HTTP to HTTPS, and forwards to `web:8080`. This requires a DNS `A`
+record for `protsvetnoy.us` pointing at the VPS's public IP — without it,
+the ACME challenge fails and Caddy falls back to serving over plain HTTP on
+that certificate attempt until DNS resolves.
 
 ## MoySklad retail shift closing (PL/LT/LV/EE)
 
