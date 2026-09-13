@@ -19,6 +19,7 @@ class Settings:
     yandex_market_campaign_id: str
     yandex_market_base_url: str
     dry_run: bool
+    moysklad_shift_close_dry_run: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,6 +42,7 @@ class Settings:
                 "YANDEX_MARKET_BASE_URL", "https://api.partner.market.yandex.ru"
             ).rstrip("/"),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
+            moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )
 
 

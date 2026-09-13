@@ -66,6 +66,23 @@ class ShiftCloseLog:
             )
 
 
+def list_open_shifts(client: MoySkladClient, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """Read-only view of currently open PL/LT/LV/EE shifts — never logs or closes anything."""
+    now = now or datetime.now(CLOSE_TIMEZONE)
+    since = now - timedelta(days=LOOKBACK_DAYS)
+    result: list[dict[str, Any]] = []
+    for org_id, country in TARGET_ORGANIZATIONS.items():
+        for shift in client.open_retail_shifts(org_id, since):
+            result.append({
+                "country": country,
+                "id": shift.get("id"),
+                "name": shift.get("name"),
+                "opened": shift.get("moment"),
+                "retailStore": (shift.get("retailStore") or {}).get("meta", {}).get("href"),
+            })
+    return result
+
+
 def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close_moment: datetime) -> int:
     """Check PL/LT/LV/EE stores for unclosed shifts and close them (unless dry_run).
 
@@ -119,7 +136,7 @@ def worker() -> None:
         if now >= target and log.last_run_date() != today:
             client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
             try:
-                run_once(client, log, dry_run=settings.dry_run, close_moment=target)
+                run_once(client, log, dry_run=settings.moysklad_shift_close_dry_run, close_moment=target)
                 log.set_last_run_date(today)
             except Exception as error:
                 errors.log_exception("moysklad_shift_close_worker", error, context="Ошибка проверки незакрытых смен МойСклад (PL/LT/LV/EE)")

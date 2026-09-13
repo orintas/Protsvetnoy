@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from html import escape
 from json import dumps
 from urllib.parse import parse_qs
@@ -11,7 +10,7 @@ from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
-from .shift_closer import CLOSE_HOUR, CLOSE_MINUTE, CLOSE_TIMEZONE, ShiftCloseLog, run_once as run_shift_close_once
+from .shift_closer import ShiftCloseLog, list_open_shifts
 from .sync_log import SyncLog
 from .yandex_market_sync import YandexMarketSyncLog
 
@@ -129,9 +128,12 @@ def _dispatch(path, environ, start_response):
 </section>
 <section id="tab-moysklad" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap">
-<div><h2 style="margin:0 0 6px">Закрытие смен — Польша, Литва, Латвия, Эстония</h2><p style="margin:0">Каждый день в 23:50 сервис проверяет, не остались ли незакрытые смены в этих магазинах, и закрывает их с датой закрытия 23:50 того же дня. Магазины России не затрагиваются.</p></div>
-<div style="display:flex;align-items:center;gap:12px"><span class="badge dry-run" id="shift-mode-badge">…</span><button class="button secondary" id="check-shifts" type="button">Проверить сейчас</button></div>
+<div><h2 style="margin:0 0 6px">Закрытие смен — Польша, Литва, Латвия, Эстония</h2><p style="margin:0">Каждый день в 23:50 сервис проверяет, не остались ли незакрытые смены в этих магазинах, и закрывает их с датой закрытия 23:50 того же дня. Магазины России не затрагиваются. Закрытие запускает только сам сервис по расписанию — из интерфейса его инициировать нельзя, здесь только просмотр.</p></div>
+<div style="display:flex;align-items:center;gap:12px"><span class="badge dry-run" id="shift-mode-badge">…</span><button class="button secondary" id="refresh-shifts" type="button">Обновить</button></div>
 </div>
+<h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Сейчас открыты</h3>
+<div id="shift-open-list" class="log"></div>
+<h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Журнал закрытий</h3>
 <div id="shift-close-log" class="log"></div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
@@ -220,11 +222,14 @@ badge.textContent=data.dry_run?'Тестовый режим':'Реальное �
 target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
 target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));}
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-document.getElementById('check-shifts').onclick=async()=>{const btn=document.getElementById('check-shifts');btn.disabled=true;btn.textContent='Проверяем…';
-try{await fetch('/api/shift-close-check',{method:'POST'});await loadShiftCloseLog();}
-catch(error){}
-btn.disabled=false;btn.textContent='Проверить сейчас';};
-loadShiftCloseLog();
+async function loadOpenShifts(){const target=document.getElementById('shift-open-list');
+try{const response=await fetch('/api/shift-open');const data=await response.json();const shifts=data.shifts||[];
+target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span>Смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
+catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
+document.getElementById('refresh-shifts').onclick=async()=>{const btn=document.getElementById('refresh-shifts');btn.disabled=true;
+await Promise.all([loadOpenShifts(),loadShiftCloseLog()]);
+btn.disabled=false;};
+loadOpenShifts();loadShiftCloseLog();
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
@@ -273,21 +278,22 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(
-            {"dry_run": settings.dry_run, "entries": ShiftCloseLog().recent()},
+            {"dry_run": settings.moysklad_shift_close_dry_run, "entries": ShiftCloseLog().recent()},
             ensure_ascii=False, default=str,
         ).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
-    if path == "/api/shift-close-check" and environ.get("REQUEST_METHOD") == "POST":
+    if path == "/api/shift-open":
+        # Read-only: shows what's currently open. Closing only ever happens
+        # from the scheduled worker at 23:50 Europe/Warsaw — there is no way
+        # for a user action to trigger a real close.
         settings = Settings.from_env()
-        log = ShiftCloseLog()
-        close_moment = datetime.now(CLOSE_TIMEZONE).replace(hour=CLOSE_HOUR, minute=CLOSE_MINUTE, second=0, microsecond=0)
         client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
         try:
-            open_count = run_shift_close_once(client, log, dry_run=settings.dry_run, close_moment=close_moment)
+            shifts = list_open_shifts(client)
         finally:
             client.close()
-        payload = dumps({"open_count": open_count, "dry_run": settings.dry_run}, ensure_ascii=False).encode("utf-8")
+        payload = dumps({"shifts": shifts}, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/errors":

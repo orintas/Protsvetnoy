@@ -139,12 +139,14 @@ separate fiscal POS API) — these stores have no physical cash register
 attached, so their shifts are closed the same way a human operator would in
 the MoySklad web UI.
 
-Like every other write-capable feature in this project, it respects
-`DRY_RUN`: while `DRY_RUN=true` (the default) it only detects and logs open
-shifts without closing them. Set `DRY_RUN=false` once you've verified the
-detection log looks right, to let it actually close shifts. The web
-interface's "МойСклад" tab shows which mode is active and lets you trigger
-an on-demand check.
+Real closing only ever happens once a day, from the scheduled worker — there
+is no way to trigger it from the web interface or an API call. It is gated by
+its own `MOYSKLAD_SHIFT_CLOSE_DRY_RUN` variable (default `true`), separate
+from the shared `DRY_RUN` used by sales/order sync so enabling one doesn't
+enable the other. While `MOYSKLAD_SHIFT_CLOSE_DRY_RUN=true` it only detects
+and logs open shifts without closing them. The web interface's "МойСклад" tab
+is read-only: it shows which mode is active, the shifts that are currently
+open, and the closing log.
 
 ## Store mapping
 
