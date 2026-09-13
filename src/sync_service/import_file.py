@@ -27,16 +27,26 @@ def _novicloud_index(novicloud: list[dict[str, Any]]) -> dict[str, dict[str, Any
     store it in ``kod`` for older ones (``kod`` now mostly holds barcodes).
     Index by both so lookups work regardless of which field is populated,
     preferring ``pkwiu`` when both are present.
+
+    When the same ``pkwiu`` is reused by more than one item (a stale
+    deactivated duplicate left behind in Novicloud), prefer the active one so
+    it doesn't shadow the real product and force a false "archive"/off-sale
+    status.
     """
     index: dict[str, dict[str, Any]] = {}
     for item in novicloud:
         kod = str(item.get("kod") or "")
         if kod:
             index.setdefault(kod, item)
+    pkwiu_index: dict[str, dict[str, Any]] = {}
     for item in novicloud:
         pkwiu = str(item.get("pkwiu") or "")
-        if pkwiu:
-            index[pkwiu] = item
+        if not pkwiu:
+            continue
+        existing = pkwiu_index.get(pkwiu)
+        if existing is None or (existing.get("aktywny") is False and item.get("aktywny") is not False):
+            pkwiu_index[pkwiu] = item
+    index.update(pkwiu_index)
     return index
 
 
@@ -124,6 +134,8 @@ def build_rows(
         if category not in categories:
             continue
         code = str(product.get("code") or "")
+        if not code:
+            continue
         novicloud_item = active_by_code.get(code)
         if novicloud_item is None and not include_missing:
             continue
