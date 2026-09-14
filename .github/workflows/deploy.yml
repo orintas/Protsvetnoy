@@ -44,8 +44,9 @@ jobs:
             grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env
             grep -q '^VLESS_HOST=' .env || echo 'VLESS_HOST=' >> .env
             grep -q '^VLESS_PORT=' .env || echo 'VLESS_PORT=' >> .env
-            grep -q '^VLESS_PATH=' .env || echo 'VLESS_PATH=' >> .env
             grep -q '^VLESS_SNI=' .env || echo 'VLESS_SNI=' >> .env
+            grep -q '^VLESS_PBK=' .env || echo 'VLESS_PBK=' >> .env
+            grep -q '^VLESS_SID=' .env || echo 'VLESS_SID=' >> .env
             grep -q '^TELEGRAM_PROXY_URL=' .env || echo 'TELEGRAM_PROXY_URL=' >> .env
             docker compose up -d --build --remove-orphans
             docker image prune -f

@@ -150,17 +150,25 @@ dry-run:
 The VPS cannot reach `api.telegram.org` at all (`Network is unreachable`,
 confirmed live, while MoySklad/Yandex Market/general internet all work fine
 from the same host) — Telegram is blocked at the network level for
-Russian-hosted servers. `telegram-proxy` (`Dockerfile.xray`) works around
-this: a VLESS client ([Xray-core](https://github.com/XTLS/Xray-core))
-connecting out to a third-party VLESS server, exposing a local SOCKS5 proxy
+Russian-hosted servers. `telegram-proxy` (`Dockerfile.xray`, built on
+`teddysun/xray` — the official `ghcr.io/xtls/xray-core` image has no shell,
+which a custom entrypoint needs) works around this: a VLESS client
+([Xray-core](https://github.com/XTLS/Xray-core)) connecting out to a
+third-party VLESS server over gRPC+Reality, exposing a local SOCKS5 proxy
 (port 1080, reachable only inside the compose network — never published to
 the host) that `TelegramClient` routes through
 (`TELEGRAM_PROXY_URL=socks5://telegram-proxy:1080`).
 
+gRPC+Reality specifically — the same provider's WS+TLS config (also in its
+subscription link) returns `403 Forbidden` on the WebSocket handshake
+regardless of header syntax; confirmed live that gRPC+Reality works and
+WS+TLS doesn't, against the exact same server.
+
 `xray/config.template.json` has no real values in it — the VLESS server's
-connection details (`VLESS_UUID`/`VLESS_HOST`/`VLESS_PORT`/`VLESS_PATH`/
-`VLESS_SNI`, from that provider's config link) live only in the VPS `.env`
-and get substituted in at container start by `xray/entrypoint.sh`.
+connection details (`VLESS_UUID`/`VLESS_HOST`/`VLESS_PORT`/`VLESS_SNI`/
+`VLESS_PBK`/`VLESS_SID`, from that provider's gRPC+Reality config link) live
+only in the VPS `.env` and get substituted in at container start by
+`xray/entrypoint.sh`.
 `TelegramClient(proxy=...)` accepts `None`/empty to connect directly — that
 still works for local development where Telegram isn't blocked.
 

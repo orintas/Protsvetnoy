@@ -1,5 +1,5 @@
 {
-  "log": {"loglevel": "info", "access": "", "error": ""},
+  "log": {"loglevel": "warning", "access": "", "error": ""},
   "inbounds": [
     {
       "listen": "0.0.0.0",
@@ -16,15 +16,20 @@
           {
             "address": "__VLESS_HOST__",
             "port": __VLESS_PORT__,
-            "users": [{"id": "__VLESS_UUID__", "encryption": "none"}]
+            "users": [{"id": "__VLESS_UUID__", "encryption": "none", "flow": ""}]
           }
         ]
       },
       "streamSettings": {
-        "network": "ws",
-        "security": "tls",
-        "wsSettings": {"path": "__VLESS_PATH__", "headers": {"Host": "__VLESS_SNI__"}},
-        "tlsSettings": {"serverName": "__VLESS_SNI__"}
+        "network": "grpc",
+        "security": "reality",
+        "grpcSettings": {"serviceName": "", "multiMode": true},
+        "realitySettings": {
+          "serverName": "__VLESS_SNI__",
+          "fingerprint": "chrome",
+          "publicKey": "__VLESS_PBK__",
+          "shortId": "__VLESS_SID__"
+        }
       }
     }
   ]
