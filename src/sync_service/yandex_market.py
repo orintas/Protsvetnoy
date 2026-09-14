@@ -85,6 +85,26 @@ class YandexMarketClient:
             {"order": order},
         )
 
+    def campaign_offers(self, campaign_id: str) -> list[str]:
+        """Every offerId listed in this campaign, regardless of status (including NO_STOCKS).
+
+        Paginated via query-string `limit`/`page_token` (not the JSON body,
+        unlike most other endpoints in this client) — confirmed against the
+        live API, since the docs don't make this explicit.
+        """
+        offer_ids: list[str] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"limit": 200}
+            if page_token:
+                params["page_token"] = page_token
+            payload = self._client.post_with_query(f"/v2/campaigns/{campaign_id}/offers", params=params, body={})
+            result = payload.get("result", {})
+            offer_ids.extend(str(o["offerId"]) for o in result.get("offers", []) if isinstance(o, dict) and o.get("offerId"))
+            page_token = result.get("paging", {}).get("nextPageToken")
+            if not page_token:
+                return offer_ids
+
     def update_stocks(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
         """items: [{"sku": ..., "count": int, "updated_at": iso_str_optional}, ...] (max 2000)."""
         skus = []

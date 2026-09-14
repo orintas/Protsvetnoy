@@ -185,6 +185,21 @@ Quantities are rounded to the nearest integer and clamped at 0 (Yandex Market
 stock counts can't be fractional or negative, though MoySklad's report can
 return either for weight-based goods or overselling).
 
+The set of `offerId`s pushed per campaign comes from a local cache
+(`data/yandex_market_assortment.sqlite3`, `AssortmentCache`), refreshed once
+a day from `POST /v2/campaigns/{id}/offers` (paginated via `limit`/
+`page_token` as query-string parameters — confirmed against the live API,
+since this endpoint takes them there rather than in the JSON body like most
+others in this client). This exists for two reasons: fetching a campaign's
+full offer list (hundreds of offers, several paginated requests) is too slow
+to redo on every 10-minute tick, and — more importantly — MoySklad's
+per-store stock report only lists products with some stock; a product that
+sells down to zero at a store drops out of that report entirely rather than
+showing `0`, so building the sync list from MoySklad alone would silently
+stop zeroing out sold-out offers on Yandex Market. Driving the sync from
+Yandex's own offer list instead means every offer it knows about — including
+ones with no current MoySklad stock — gets an explicit count every cycle.
+
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open

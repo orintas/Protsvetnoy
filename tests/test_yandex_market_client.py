@@ -39,6 +39,25 @@ def test_orders_posts_date_range_and_paginates():
     assert requests[1].read() and b"next-1" in requests[1].content
 
 
+def test_campaign_offers_paginates_via_query_string():
+    requests: list[httpx.Request] = []
+    pages = [
+        {"status": "OK", "result": {"offers": [{"offerId": "A"}, {"offerId": "B"}], "paging": {"nextPageToken": "next-1"}}},
+        {"status": "OK", "result": {"offers": [{"offerId": "C"}], "paging": {}}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=pages[len(requests) - 1])
+
+    client = _client_with_handler(handler)
+    offer_ids = client.campaign_offers("21924355")
+    assert offer_ids == ["A", "B", "C"]
+    assert requests[0].url.path == "/v2/campaigns/21924355/offers"
+    assert "page_token" not in requests[0].url.params
+    assert requests[1].url.params["page_token"] == "next-1"
+
+
 def test_update_stocks_builds_sku_payload():
     requests: list[httpx.Request] = []
 
