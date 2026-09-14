@@ -18,7 +18,6 @@ def main() -> None:
     subparsers.add_parser("moysklad-stocks")
     subparsers.add_parser("web-server")
     subparsers.add_parser("sync-worker")
-    subparsers.add_parser("yandex-market-sync-worker")
     subparsers.add_parser("yandex-market-stock-sync-worker")
     subparsers.add_parser("moysklad-shift-close-worker")
     args = parser.parse_args()
@@ -30,10 +29,6 @@ def main() -> None:
     if args.command == "sync-worker":
         from .sync_log import worker
         worker()
-        return
-    if args.command == "yandex-market-sync-worker":
-        from .yandex_market_sync import worker as ym_worker
-        ym_worker()
         return
     if args.command == "yandex-market-stock-sync-worker":
         from .yandex_market_stock_sync import worker as ym_stock_worker

@@ -79,13 +79,18 @@ verified.
 ## Yandex Market synchronization (replacing TopSeller's connector)
 
 `src/sync_service/yandex_market.py` is a Partner API client (`Api-Key` auth,
-orders/status/stocks/prices/returns endpoints). `src/sync_service/
-yandex_market_sync.py` runs a separate `yandex-market-sync-worker` service that
-polls orders updated in the last 24 hours every five minutes and writes an
-idempotent SQLite log (`data/yandex_market_sync.sqlite3`), shown in the web
-interface under the “Яндекс.Маркет” tab. It is currently read-only (test
-mode): orders and returns/cancellations are logged but no `customerorder`
-documents are created in MoySklad yet.
+orders/status/stocks/prices/returns endpoints). New orders are handled live
+by the push-notification webhook (below), which creates the `customerorder`
+in MoySklad, confirms assembly, and sends the label — this is the only path
+for orders now. There used to also be a `yandex-market-sync-worker` service
+that polled orders every five minutes in a read-only test mode; it's been
+removed now that the webhook pipeline is the real, production path and the
+poller's dry-run log entries were just noise duplicating it. `src/
+sync_service/yandex_market_sync.py` now only holds `YandexMarketSyncLog`,
+the shared SQLite log (`data/yandex_market_sync.sqlite3`) every Yandex
+Market component (webhook, order pipeline, stock sync) writes to, shown in
+the web interface under the “Яндекс.Маркет” tab with a filter by entry type
+and a search box for order number.
 
 Configuration (`.env`):
 
@@ -220,8 +225,9 @@ distinct task:
   only stored for when that integration exists;
 - **OZON** — reserved placeholder tab for a future OZON integration;
 - **Shopify** — reserved placeholder tab for a future Shopify integration;
-- **Яндекс.Маркет** — shows the read-only Yandex Market orders check log from
-  the `yandex-market-sync-worker` service (test mode);
+- **Яндекс.Маркет** — the shared log for order fulfillment (webhook →
+  MoySklad → assembly confirmation → Telegram label) and the 10-minute stock
+  sync, filterable by entry type with a search box for order number;
 - **Ошибки** — unified log of every error across the service (API failures,
   worker exceptions, web request errors), with a header indicator for unread
   entries.

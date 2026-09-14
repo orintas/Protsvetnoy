@@ -18,8 +18,20 @@ def test_is_allowed_ip_rejects_other_addresses():
 
 def test_summarize_known_and_unknown_types():
     assert "PING" in summarize({"notificationType": "PING"})
-    assert "42" in summarize({"notificationType": "ORDER_CREATED", "orderId": 42, "campaignId": 1, "items": [{}]})
     assert "неизвестный" in summarize({"notificationType": "SOMETHING_NEW"}).lower()
+
+
+def test_summarize_order_created_shows_store_name_for_a_known_campaign():
+    summary = summarize({"notificationType": "ORDER_CREATED", "orderId": 42, "campaignId": 149179260, "items": [{}]})
+    assert "42" in summary
+    assert "ТЦ Ривьера" in summary
+    assert "149179260" not in summary
+
+
+def test_summarize_order_created_falls_back_to_raw_campaign_id_when_unknown():
+    summary = summarize({"notificationType": "ORDER_CREATED", "orderId": 42, "campaignId": 1, "items": [{}]})
+    assert "42" in summary
+    assert "кампания 1" in summary
 
 
 def test_handle_notification_logs_every_delivery_without_dedup(tmp_path):

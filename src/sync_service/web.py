@@ -247,7 +247,9 @@ def _dispatch(path, environ, start_response):
 </div></section>
 </section>
 <section id="tab-ym-log" class="tab-panel">
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Тестовый режим: заказы читаются каждые 5 минут, документы в МойСклад пока не создаются.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div><div id="ym-sync-log" class="log"></div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Заказы обрабатываются по вебхуку в боевом режиме: заказ создаётся в МойСклад, сборка подтверждается на Яндекс.Маркете, этикетка отправляется в Telegram. Остатки синхронизируются каждые 10 минут.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="ym-log-kind"><option value="">Все типы</option></select><input id="ym-log-search" placeholder="Поиск по номеру заказа" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"></div>
+<div id="ym-sync-log" class="log"></div></section>
 </section>
 <section id="tab-errors" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
@@ -325,7 +327,18 @@ const catalogHelpBtn=document.getElementById('catalog-help'), catalogHelpModal=d
 catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
-async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');const entries=await response.json();target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.ymLogIndex)]));}catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+let allYmLogEntries=[];
+const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
+async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');allYmLogEntries=await response.json();
+const select=document.getElementById('ym-log-kind'), current=select.value, kinds=[...new Set(allYmLogEntries.map(e=>e.kind))].sort();
+select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ymKindLabels[k]||k)+'</option>').join('');
+renderYmLog();}catch(error){allYmLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim().toLowerCase();
+const filtered=allYmLogEntries.filter(e=>(!kind||e.kind===kind)&&(!query||String(e.external_id||'').toLowerCase().includes(query)||e.message.toLowerCase().includes(query)));
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено.':'Проверок пока не было.')+'</p>';
+target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));}
+document.getElementById('ym-log-kind').onchange=renderYmLog;
+document.getElementById('ym-log-search').oninput=renderYmLog;
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];

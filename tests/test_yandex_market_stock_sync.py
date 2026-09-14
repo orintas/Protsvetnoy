@@ -119,7 +119,7 @@ def test_run_once_logs_error_for_one_campaign_but_continues_others(tmp_path, mon
     entries = log.recent()
     error_entries = [e for e in entries if e["status"] == "error"]
     assert len(error_entries) == 1
-    assert "149179260" in error_entries[0]["message"]
+    assert "ТЦ Ривьера" in error_entries[0]["message"]
 
 
 def test_run_once_logs_a_fresh_entry_every_call_without_being_deduplicated(tmp_path, monkeypatch):

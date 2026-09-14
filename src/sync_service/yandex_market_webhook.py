@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 from typing import Any
 
+from .yandex_market_order_sync import CAMPAIGN_NAMES
 from .yandex_market_sync import YandexMarketSyncLog
 
 # Yandex Market's published push-notification source ranges
@@ -30,9 +31,15 @@ def _items_count(notification: dict[str, Any]) -> int:
     return len(items) if isinstance(items, list) else 0
 
 
+def _order_created_summary(n: dict[str, Any]) -> str:
+    campaign_id = str(n.get("campaignId"))
+    store_name = CAMPAIGN_NAMES.get(campaign_id, f"кампания {campaign_id}")
+    return f"Новый заказ {n.get('orderId')} ({store_name}), позиций {_items_count(n)}"
+
+
 _SUMMARIES: dict[str, Any] = {
     "PING": lambda n: "Проверочное уведомление (PING)",
-    "ORDER_CREATED": lambda n: f"Новый заказ {n.get('orderId')} (кампания {n.get('campaignId')}), позиций {_items_count(n)}",
+    "ORDER_CREATED": _order_created_summary,
     "ORDER_STATUS_UPDATED": lambda n: f"Заказ {n.get('orderId')}: статус {n.get('status')}/{n.get('substatus')}",
     "ORDER_CANCELLED": lambda n: f"Заказ {n.get('orderId')} отменён",
     "ORDER_UPDATED": lambda n: f"Заказ {n.get('orderId')} изменён",

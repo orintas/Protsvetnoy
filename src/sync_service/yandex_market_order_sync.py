@@ -24,6 +24,16 @@ CAMPAIGN_STORES: dict[str, str] = {
     "149179270": "dc9b7c0e-a66d-11eb-0a80-09b9002a05ad",  # ТЦ Мега Химки
 }
 
+# campaignId -> the campaign's own display name in the Yandex Market seller
+# cabinet (GET /campaigns) — used everywhere in logs/UI instead of the raw
+# numeric id, which means nothing to a human at a glance.
+CAMPAIGN_NAMES: dict[str, str] = {
+    "149179204": "ТМ Авиапарк",
+    "149179258": "ТЦ Саларис",
+    "149179260": "ТЦ Ривьера",
+    "149179270": "ТЦ МЕГА Химки",
+}
+
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 

@@ -10,7 +10,7 @@ from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import CAMPAIGN_STORES
+from .yandex_market_order_sync import CAMPAIGN_NAMES, CAMPAIGN_STORES
 from .yandex_market_sync import YandexMarketSyncLog
 
 MAX_SKUS_PER_REQUEST = 2000
@@ -102,11 +102,12 @@ def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCach
     )
     try:
         for campaign_id, store_id in CAMPAIGN_STORES.items():
+            store_name = CAMPAIGN_NAMES.get(campaign_id, campaign_id)
             try:
                 count = sync_campaign_stock(moysklad, yandex, cache, campaign_id=campaign_id, store_id=store_id)
-                log.add("stock_sync", "success", f"Кампания {campaign_id}: остатки обновлены, офферов {count}", None, {"campaign_id": campaign_id, "count": count})
+                log.add("stock_sync", "success", f"{store_name}: остатки обновлены, офферов {count}", None, {"campaign_id": campaign_id, "count": count})
             except Exception as error:
-                log.add("stock_sync", "error", f"Кампания {campaign_id}: ошибка синхронизации остатков: {error}", None, {"campaign_id": campaign_id})
+                log.add("stock_sync", "error", f"{store_name}: ошибка синхронизации остатков: {error}", None, {"campaign_id": campaign_id})
     finally:
         moysklad.close()
         yandex.close()
