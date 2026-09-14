@@ -3,7 +3,7 @@
 # through a VLESS server. Exists solely because the VPS itself cannot reach
 # api.telegram.org (Telegram is blocked at the network level for
 # Russian-hosted servers) — see README "Stock sync" / order pipeline notes.
-FROM ghcr.io/xtls/xray-core:latest
+FROM teddysun/xray:latest
 COPY xray/config.template.json /etc/xray/config.template.json
 COPY xray/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
