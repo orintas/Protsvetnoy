@@ -58,7 +58,7 @@ def test_campaign_offers_paginates_via_query_string():
     assert requests[1].url.params["page_token"] == "next-1"
 
 
-def test_update_stocks_builds_sku_payload():
+def test_update_stocks_builds_sku_payload_and_uses_put():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -66,11 +66,14 @@ def test_update_stocks_builds_sku_payload():
         return httpx.Response(200, json={"status": "OK"})
 
     client = _client_with_handler(handler)
-    client.update_stocks([{"sku": "ABC", "count": 5}], campaign_id="21924355")
+    client.update_stocks([{"sku": "ABC", "count": 5}], campaign_id="21924355", warehouse_id=2346789)
+    assert requests[0].method == "PUT"
     assert requests[0].url.path == "/v2/campaigns/21924355/offers/stocks"
-    body = requests[0].content
-    assert b'"sku":"ABC"' in body.replace(b" ", b"")
-    assert b'"count":5' in body.replace(b" ", b"")
+    body = requests[0].content.replace(b" ", b"")
+    assert b'"sku":"ABC"' in body
+    assert b'"warehouseId":2346789' in body
+    assert b'"type":"FIT"' in body
+    assert b'"count":5' in body
 
 
 def test_update_order_status_sends_status_and_substatus():

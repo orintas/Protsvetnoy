@@ -1,4 +1,4 @@
-from sync_service.yandex_market_order_sync import CAMPAIGN_STORES
+from sync_service.yandex_market_order_sync import CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
 from sync_service.yandex_market_stock_sync import AssortmentCache, run_once, sync_campaign_stock
 from sync_service.yandex_market_sync import YandexMarketSyncLog
 
@@ -31,6 +31,7 @@ class FakeYandex:
         self.offers_by_campaign = offers_by_campaign or {}
         self.fail_campaigns = fail_campaigns or set()
         self.calls = []
+        self.warehouse_ids_used = []
         self.campaign_offers_calls = []
         self.closed = False
 
@@ -38,10 +39,11 @@ class FakeYandex:
         self.campaign_offers_calls.append(campaign_id)
         return self.offers_by_campaign.get(campaign_id, [])
 
-    def update_stocks(self, items, *, campaign_id):
+    def update_stocks(self, items, *, campaign_id, warehouse_id):
         if campaign_id in self.fail_campaigns:
             raise RuntimeError("boom yandex")
         self.calls.append((campaign_id, items))
+        self.warehouse_ids_used.append(warehouse_id)
 
     def close(self):
         self.closed = True
@@ -64,6 +66,11 @@ def test_sync_campaign_stock_refreshes_stale_cache_and_pushes_zero_for_missing_o
     assert changes is None  # first sync for this campaign: no prior state to diff against
     assert yandex.campaign_offers_calls == ["149179260"]
     assert yandex.calls == [("149179260", [{"sku": "RGL02", "count": 3}, {"sku": "SOLD_OUT_SKU", "count": 0}])]
+    assert yandex.warehouse_ids_used == [CAMPAIGN_WAREHOUSES["149179260"]]
+
+
+def test_known_campaigns_have_a_warehouse_mapping():
+    assert set(CAMPAIGN_WAREHOUSES) == set(CAMPAIGN_STORES)
 
 
 def test_sync_campaign_stock_reports_changes_against_previous_run(tmp_path):

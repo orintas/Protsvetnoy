@@ -105,15 +105,21 @@ class YandexMarketClient:
             if not page_token:
                 return offer_ids
 
-    def update_stocks(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
-        """items: [{"sku": ..., "count": int, "updated_at": iso_str_optional}, ...] (max 2000)."""
-        skus = []
-        for item in items:
-            stock_item: dict[str, Any] = {"count": item["count"]}
-            if item.get("updated_at"):
-                stock_item["updatedAt"] = item["updated_at"]
-            skus.append({"sku": item["sku"], "items": [stock_item]})
-        return self._client.post(f"/v2/campaigns/{campaign_id}/offers/stocks", {"skus": skus})
+    def update_stocks(self, items: list[dict[str, Any]], *, campaign_id: str, warehouse_id: int) -> dict[str, Any]:
+        """items: [{"sku": ..., "count": int}, ...] (max 2000).
+
+        Must be PUT, not POST: POST on this exact path silently no-ops and
+        returns an unrelated paginated stock listing instead of applying
+        anything — confirmed against the live API (identical response body
+        for any POST payload, including an obviously-wrong sentinel count).
+        `type: "FIT"` is the physical/settable count; Yandex derives
+        `AVAILABLE` itself from it minus its own pending reservations.
+        """
+        skus = [
+            {"sku": item["sku"], "warehouseId": warehouse_id, "items": [{"type": "FIT", "count": item["count"]}]}
+            for item in items
+        ]
+        return self._client.put(f"/v2/campaigns/{campaign_id}/offers/stocks", {"skus": skus})
 
     def update_prices(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
         """items: [{"offer_id": ..., "value": float, "currency_id": "RUR", "vat": int_optional}, ...] (max 2000)."""

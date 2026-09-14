@@ -34,6 +34,18 @@ CAMPAIGN_NAMES: dict[str, str] = {
     "149179270": "ТЦ МЕГА Химки",
 }
 
+# campaignId -> the FBS warehouse id Yandex Market assigned this shop
+# (Настройки → Остатки → Склады) — confirmed both from the live API
+# (POST /v2/campaigns/{id}/offers/stocks response's warehouses[].warehouseId)
+# and from a screenshot of that page. Required by the stock-update PUT call;
+# distinct from campaignId and not derivable from it.
+CAMPAIGN_WAREHOUSES: dict[str, int] = {
+    "149179204": 2346691,  # ТМ Авиапарк
+    "149179258": 2346756,  # ТЦ Саларис
+    "149179260": 2346759,  # ТЦ Ривьера
+    "149179270": 2346789,  # ТЦ МЕГА Химки
+}
+
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 

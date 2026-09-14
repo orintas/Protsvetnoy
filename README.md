@@ -179,12 +179,23 @@ The `yandex-market-stock-sync-worker` service pushes sellable stock (MoySklad
 `quantity` — `stock` minus `reserve`, so already-sold-but-unshipped units
 aren't offered again) to Yandex Market every 10 minutes, one store per
 campaign using the same `CAMPAIGN_STORES` mapping as order fulfillment
-(`src/sync_service/yandex_market_stock_sync.py`, `POST
+(`src/sync_service/yandex_market_stock_sync.py`, `PUT
 /v2/campaigns/{id}/offers/stocks`). This is a real production write, not
 dry-run. Each campaign is synced independently — a failure on one (MoySklad
 or Yandex Market error) is logged and doesn't block the others. Results
 appear in the same `data/yandex_market_sync.sqlite3` log shown in the
 "Яндекс.Маркет" tab (`kind: stock_sync`).
+
+Must be `PUT`, not `POST` — `POST` on this exact path silently no-ops and
+returns an unrelated paginated stock listing instead of applying anything
+(confirmed live: identical response body for any `POST` payload, including
+an obviously-wrong sentinel count). Each item also needs `warehouseId`
+(`CAMPAIGN_WAREHOUSES` in `yandex_market_order_sync.py` — confirmed both via
+the API and a screenshot of Остатки → Склады; distinct from `campaignId` and
+not derivable from it) and `type: "FIT"` (the physical/settable count;
+Yandex derives `AVAILABLE` itself by subtracting its own pending
+reservations). This whole feature silently pushed nothing for as long as it
+used `POST` — worth knowing if a stock-related bug ever looks similar again.
 
 Quantities are rounded to the nearest integer and clamped at 0 (Yandex Market
 stock counts can't be fractional or negative, though MoySklad's report can

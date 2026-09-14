@@ -10,7 +10,7 @@ from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import CAMPAIGN_NAMES, CAMPAIGN_STORES
+from .yandex_market_order_sync import CAMPAIGN_NAMES, CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
 from .yandex_market_sync import YandexMarketSyncLog
 
 MAX_SKUS_PER_REQUEST = 2000
@@ -122,8 +122,9 @@ def sync_campaign_stock(
         changes = [{"sku": offer_id, "before": old_counts.get(offer_id), "after": new_counts[offer_id]} for offer_id in changed_offer_ids]
 
     items = [{"sku": offer_id, "count": count} for offer_id, count in to_push.items()]
+    warehouse_id = CAMPAIGN_WAREHOUSES[campaign_id]
     for chunk in _chunks(items, MAX_SKUS_PER_REQUEST):
-        yandex.update_stocks(chunk, campaign_id=campaign_id)
+        yandex.update_stocks(chunk, campaign_id=campaign_id, warehouse_id=warehouse_id)
 
     cache.save_counts(campaign_id, new_counts)
     return len(offer_ids), changes
