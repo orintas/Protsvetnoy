@@ -168,6 +168,23 @@ after 14 days of being unreachable.
 `offerId` in Yandex Market orders matches the MoySklad product `article`/
 `code` directly, so no extra SKU mapping table is required.
 
+### Stock sync
+
+The `yandex-market-stock-sync-worker` service pushes sellable stock (MoySklad
+`quantity` — `stock` minus `reserve`, so already-sold-but-unshipped units
+aren't offered again) to Yandex Market every 10 minutes, one store per
+campaign using the same `CAMPAIGN_STORES` mapping as order fulfillment
+(`src/sync_service/yandex_market_stock_sync.py`, `POST
+/v2/campaigns/{id}/offers/stocks`). This is a real production write, not
+dry-run. Each campaign is synced independently — a failure on one (MoySklad
+or Yandex Market error) is logged and doesn't block the others. Results
+appear in the same `data/yandex_market_sync.sqlite3` log shown in the
+"Яндекс.Маркет" tab (`kind: stock_sync`).
+
+Quantities are rounded to the nearest integer and clamped at 0 (Yandex Market
+stock counts can't be fractional or negative, though MoySklad's report can
+return either for weight-based goods or overselling).
+
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open

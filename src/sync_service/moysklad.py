@@ -77,6 +77,21 @@ class MoySkladClient:
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
+    def stock_by_store(self, store_id: str) -> list[dict[str, Any]]:
+        """Sellable stock (quantity = stock - reserve) per product for one store."""
+        href = f"{self._client.base_url}/entity/store/{store_id}"
+        payload = self._client.get("/report/stock/all", params={"filter": f"store={href}", "limit": 1000})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad stock report response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
     def customer_order_by_external_code(self, external_code: str) -> dict[str, Any] | None:
         payload = self._client.get("/entity/customerorder", params={"filter": f"externalCode={external_code}", "limit": 1})
         rows = payload.get("rows", [])
