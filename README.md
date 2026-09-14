@@ -136,10 +136,18 @@ dry-run:
    campaign — ТЦ Авиапарк/Саларис/Ривьера/Мега Химки).
 4. Confirm assembly: `update_order_status(status=PROCESSING,
    substatus=READY_TO_SHIP)` — per Market's own docs, this substatus means
-   "assembled and ready to ship".
+   "assembled and ready to ship". Must be `PUT`, not `POST` — `POST` on this
+   path returns HTTP 405 (confirmed live, on a real order that got stuck
+   here until fixed).
 5. Fetch the shipping label PDF (`GET .../delivery/labels`) and send it to
    `TELEGRAM_LABEL_CHAT_ID` via a Telegram bot (`TELEGRAM_BOT_TOKEN`), with a
    caption listing the order id and each ordered `offerId` with its quantity.
+   **The VPS itself cannot reach `api.telegram.org` at all** (`Network is
+   unreachable`, confirmed live, while MoySklad/Yandex Market/general
+   internet all work fine from the same host) — almost certainly Telegram
+   being blocked at the network level for Russian-hosted servers. Every real
+   order's label send will fail and log an error until this has a proxy or
+   another way out; not yet fixed as of 2026-09-14.
 
 These MoySklad entities (organization/agent/store mapping) were confirmed
 against a real order from 2026-09-13 and explicit choices made when this was

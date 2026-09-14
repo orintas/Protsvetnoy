@@ -85,6 +85,7 @@ def test_update_order_status_sends_status_and_substatus():
 
     client = _client_with_handler(handler)
     client.update_order_status(123, campaign_id="21924355", status="PROCESSING", substatus="READY_TO_SHIP")
+    assert requests[0].method == "PUT"
     assert requests[0].url.path == "/v2/campaigns/21924355/orders/123/status"
     body = requests[0].content.replace(b" ", b"")
     assert b'"status":"PROCESSING"' in body

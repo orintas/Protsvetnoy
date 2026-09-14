@@ -77,10 +77,11 @@ class YandexMarketClient:
                 return result
 
     def update_order_status(self, order_id: int, *, campaign_id: str, status: str, substatus: str | None = None) -> dict[str, Any]:
+        """PUT, not POST — POST on this path returns HTTP 405 (confirmed live)."""
         order: dict[str, Any] = {"status": status}
         if substatus:
             order["substatus"] = substatus
-        return self._client.post(
+        return self._client.put(
             f"/v2/campaigns/{campaign_id}/orders/{order_id}/status",
             {"order": order},
         )
