@@ -91,15 +91,17 @@ def sync_campaign_stock(
     campaign_id: str,
     store_id: str,
 ) -> tuple[int, list[dict[str, Any]] | None]:
-    """Push sellable stock for every offer Yandex Market lists in this campaign.
+    """Push sellable stock to Yandex Market for every offer whose count changed.
 
     Offers missing from MoySklad's store stock report (typically because
     they've sold down to zero, which drops them from that report entirely)
-    are explicitly pushed as 0 rather than skipped.
+    count as 0 rather than being skipped, so a sell-out still registers as a
+    change and gets pushed. On a campaign's very first sync there's no prior
+    state to diff against, so every offer is pushed as a baseline.
 
-    Returns the sku count pushed and the list of changes (sku/before/after)
-    versus the last run's counts — or None on a campaign's very first sync,
-    when there's no prior state to diff against yet.
+    Returns the total offer count in the campaign's assortment and the list
+    of changes actually pushed (sku/before/after) — or None on that first
+    sync, when nothing has been compared yet.
     """
     if cache.is_stale(campaign_id):
         cache.replace(campaign_id, yandex.campaign_offers(campaign_id))
@@ -107,22 +109,24 @@ def sync_campaign_stock(
 
     rows = moysklad.stock_by_store(store_id)
     by_code = {row["code"]: row.get("quantity", 0) for row in rows if row.get("code")}
-
     new_counts = {offer_id: max(0, round(by_code.get(offer_id, 0))) for offer_id in offer_ids}
-    items = [{"sku": offer_id, "count": count} for offer_id, count in new_counts.items()]
+
+    old_counts = cache.last_counts(campaign_id)
+    is_first_sync = not old_counts
+    changes: list[dict[str, Any]] | None = None
+    if is_first_sync:
+        to_push = new_counts
+    else:
+        changed_offer_ids = [offer_id for offer_id, count in new_counts.items() if old_counts.get(offer_id) != count]
+        to_push = {offer_id: new_counts[offer_id] for offer_id in changed_offer_ids}
+        changes = [{"sku": offer_id, "before": old_counts.get(offer_id), "after": new_counts[offer_id]} for offer_id in changed_offer_ids]
+
+    items = [{"sku": offer_id, "count": count} for offer_id, count in to_push.items()]
     for chunk in _chunks(items, MAX_SKUS_PER_REQUEST):
         yandex.update_stocks(chunk, campaign_id=campaign_id)
 
-    old_counts = cache.last_counts(campaign_id)
-    changes: list[dict[str, Any]] | None = None
-    if old_counts:
-        changes = [
-            {"sku": offer_id, "before": old_counts.get(offer_id), "after": count}
-            for offer_id, count in new_counts.items()
-            if old_counts.get(offer_id) != count
-        ]
     cache.save_counts(campaign_id, new_counts)
-    return len(items), changes
+    return len(offer_ids), changes
 
 
 CHANGES_PREVIEW_LIMIT = 8

@@ -78,6 +78,22 @@ def test_sync_campaign_stock_reports_changes_against_previous_run(tmp_path):
 
     assert count == 2
     assert changes == [{"sku": "RGL02", "before": 3, "after": 1}]
+    # only the changed sku was actually sent to Yandex, not the unchanged STABLE
+    assert yandex.calls[-1] == ("149179260", [{"sku": "RGL02", "count": 1}])
+
+
+def test_sync_campaign_stock_sends_nothing_when_nothing_changed(tmp_path):
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+    yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02"]})
+    moysklad = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}]})
+
+    sync_campaign_stock(moysklad, yandex, cache, campaign_id="149179260", store_id="store-1")
+    count, changes = sync_campaign_stock(moysklad, yandex, cache, campaign_id="149179260", store_id="store-1")
+
+    assert count == 1
+    assert changes == []
+    # nothing to push means update_stocks isn't even called a second time
+    assert len(yandex.calls) == 1
 
 
 def test_sync_campaign_stock_reports_zero_as_before_for_a_newly_added_offer(tmp_path):

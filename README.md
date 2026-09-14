@@ -206,11 +206,17 @@ Yandex's own offer list instead means every offer it knows about — including
 ones with no current MoySklad stock — gets an explicit count every cycle.
 
 `AssortmentCache` also keeps each campaign's last-pushed count per `offerId`
-(`stock_state` table), so every run's log entry lists only what actually
-changed since the previous run, as `sku: before→after` (payload key
-`changes`; the log row itself shows the first few with a count of the rest).
-A campaign's very first sync has nothing to diff against — its entry says so
-explicitly rather than listing every offer as "changed".
+(`stock_state` table). Every run diffs the freshly computed counts against
+it and only calls `update_stocks` for the offers whose count actually
+changed — sending all ~490 offers every 10 minutes regardless of whether
+anything moved was wasted API calls; in steady state it's usually a
+handful, and a cycle with zero changes skips the Yandex request entirely.
+The log entry lists what was pushed as `sku: before→after` (payload key
+`changes`; the row itself shows the first few with a count of the rest). A
+campaign's very first sync (and any newly-listed offer picked up by the
+daily assortment refresh) has nothing to diff against, so those are pushed
+as a full baseline and the entry says so explicitly rather than listing
+every offer as "changed".
 
 ## Web interface
 
