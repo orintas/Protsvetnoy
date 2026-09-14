@@ -36,6 +36,10 @@ def _moysklad_moment(iso_moment: str | None) -> str:
     return datetime.now(MOSCOW).strftime("%Y-%m-%d %H:%M:%S.000")
 
 
+def _format_items(items: list[dict[str, Any]]) -> str:
+    return "\n".join(f"{item.get('offerId') or '(пусто)'} × {item.get('count', 1)}" for item in items)
+
+
 def _build_positions(moysklad: MoySkladClient, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     missing_codes: list[str] = []
@@ -119,7 +123,7 @@ def process_new_order(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{order_id}.pdf",
-            caption=f"Яндекс.Маркет · заказ {order_id}\nПозиций: {len(positions)}",
+            caption=f"Яндекс.Маркет · заказ {order_id}\n{_format_items(items)}",
         )
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
     else:

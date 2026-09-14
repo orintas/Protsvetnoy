@@ -133,7 +133,8 @@ dry-run:
    substatus=READY_TO_SHIP)` — per Market's own docs, this substatus means
    "assembled and ready to ship".
 5. Fetch the shipping label PDF (`GET .../delivery/labels`) and send it to
-   `TELEGRAM_LABEL_CHAT_ID` via a Telegram bot (`TELEGRAM_BOT_TOKEN`).
+   `TELEGRAM_LABEL_CHAT_ID` via a Telegram bot (`TELEGRAM_BOT_TOKEN`), with a
+   caption listing the order id and each ordered `offerId` with its quantity.
 
 These MoySklad entities (organization/agent/store mapping) were confirmed
 against a real order from 2026-09-13 and explicit choices made when this was
