@@ -41,5 +41,11 @@ jobs:
             grep -q '^SHOPIFY_API_VERSION=' .env || echo 'SHOPIFY_API_VERSION=2024-07' >> .env
             grep -q '^TELEGRAM_BOT_TOKEN=' .env || echo 'TELEGRAM_BOT_TOKEN=' >> .env
             grep -q '^TELEGRAM_LABEL_CHAT_ID=' .env || echo 'TELEGRAM_LABEL_CHAT_ID=' >> .env
+            grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env
+            grep -q '^VLESS_HOST=' .env || echo 'VLESS_HOST=' >> .env
+            grep -q '^VLESS_PORT=' .env || echo 'VLESS_PORT=' >> .env
+            grep -q '^VLESS_PATH=' .env || echo 'VLESS_PATH=' >> .env
+            grep -q '^VLESS_SNI=' .env || echo 'VLESS_SNI=' >> .env
+            grep -q '^TELEGRAM_PROXY_URL=' .env || echo 'TELEGRAM_PROXY_URL=' >> .env
             docker compose up -d --build --remove-orphans
             docker image prune -f

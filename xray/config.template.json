@@ -1,0 +1,30 @@
+{
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {"auth": "noauth", "udp": false}
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "__VLESS_HOST__",
+            "port": __VLESS_PORT__,
+            "users": [{"id": "__VLESS_UUID__", "encryption": "none"}]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {"path": "__VLESS_PATH__", "headers": {"Host": "__VLESS_SNI__"}},
+        "tlsSettings": {"serverName": "__VLESS_SNI__"}
+      }
+    }
+  ]
+}

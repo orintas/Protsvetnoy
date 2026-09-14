@@ -141,13 +141,28 @@ dry-run:
    here until fixed).
 5. Fetch the shipping label PDF (`GET .../delivery/labels`) and send it to
    `TELEGRAM_LABEL_CHAT_ID` via a Telegram bot (`TELEGRAM_BOT_TOKEN`), with a
-   caption listing the order id and each ordered `offerId` with its quantity.
-   **The VPS itself cannot reach `api.telegram.org` at all** (`Network is
-   unreachable`, confirmed live, while MoySklad/Yandex Market/general
-   internet all work fine from the same host) — almost certainly Telegram
-   being blocked at the network level for Russian-hosted servers. Every real
-   order's label send will fail and log an error until this has a proxy or
-   another way out; not yet fixed as of 2026-09-14.
+   caption listing the order id and each ordered `offerId` with its quantity,
+   routed through `telegram-proxy` (see below — the VPS itself cannot reach
+   `api.telegram.org` directly).
+
+### Telegram proxy
+
+The VPS cannot reach `api.telegram.org` at all (`Network is unreachable`,
+confirmed live, while MoySklad/Yandex Market/general internet all work fine
+from the same host) — Telegram is blocked at the network level for
+Russian-hosted servers. `telegram-proxy` (`Dockerfile.xray`) works around
+this: a VLESS client ([Xray-core](https://github.com/XTLS/Xray-core))
+connecting out to a third-party VLESS server, exposing a local SOCKS5 proxy
+(port 1080, reachable only inside the compose network — never published to
+the host) that `TelegramClient` routes through
+(`TELEGRAM_PROXY_URL=socks5://telegram-proxy:1080`).
+
+`xray/config.template.json` has no real values in it — the VLESS server's
+connection details (`VLESS_UUID`/`VLESS_HOST`/`VLESS_PORT`/`VLESS_PATH`/
+`VLESS_SNI`, from that provider's config link) live only in the VPS `.env`
+and get substituted in at container start by `xray/entrypoint.sh`.
+`TelegramClient(proxy=...)` accepts `None`/empty to connect directly — that
+still works for local development where Telegram isn't blocked.
 
 These MoySklad entities (organization/agent/store mapping) were confirmed
 against a real order from 2026-09-13 and explicit choices made when this was

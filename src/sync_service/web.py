@@ -93,7 +93,7 @@ def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
     settings = Settings.from_env()
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id)
-    telegram = TelegramClient(bot_token=settings.telegram_bot_token) if settings.telegram_bot_token else None
+    telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url) if settings.telegram_bot_token else None
     try:
         process_new_order(
             order_id=int(notification["orderId"]),

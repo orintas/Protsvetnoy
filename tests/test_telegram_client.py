@@ -10,6 +10,18 @@ def _client_with_handler(handler):
     return client
 
 
+def test_proxy_is_passed_through_to_the_http_client():
+    client = TelegramClient(bot_token="test-token", proxy="socks5://telegram-proxy:1080")
+    assert len(client._client._mounts) == 1
+
+
+def test_no_proxy_means_direct_connection():
+    client = TelegramClient(bot_token="test-token")
+    assert client._client._mounts == {}
+    client = TelegramClient(bot_token="test-token", proxy="")
+    assert client._client._mounts == {}
+
+
 def test_send_document_posts_multipart_with_caption():
     requests: list[httpx.Request] = []
 

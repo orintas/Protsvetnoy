@@ -25,6 +25,7 @@ class Settings:
     make_base_url: str
     telegram_bot_token: str
     telegram_label_chat_id: str
+    telegram_proxy_url: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -57,6 +58,7 @@ class Settings:
             make_base_url=os.getenv("MAKE_BASE_URL", "https://eu1.make.com/api/v2").rstrip("/"),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_label_chat_id=os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
+            telegram_proxy_url=os.getenv("TELEGRAM_PROXY_URL", ""),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )
