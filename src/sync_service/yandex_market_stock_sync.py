@@ -38,6 +38,11 @@ class AssortmentCache:
                 campaign_id TEXT NOT NULL, offer_id TEXT NOT NULL, refreshed_at TEXT NOT NULL,
                 PRIMARY KEY (campaign_id, offer_id))"""
             )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS stock_state (
+                campaign_id TEXT NOT NULL, offer_id TEXT NOT NULL, count INTEGER NOT NULL,
+                PRIMARY KEY (campaign_id, offer_id))"""
+            )
 
     def offer_ids(self, campaign_id: str) -> list[str]:
         with sqlite3.connect(self.path) as db:
@@ -60,6 +65,19 @@ class AssortmentCache:
                 [(campaign_id, offer_id, now) for offer_id in offer_ids],
             )
 
+    def last_counts(self, campaign_id: str) -> dict[str, int]:
+        with sqlite3.connect(self.path) as db:
+            rows = db.execute("SELECT offer_id, count FROM stock_state WHERE campaign_id=?", (campaign_id,)).fetchall()
+            return {offer_id: count for offer_id, count in rows}
+
+    def save_counts(self, campaign_id: str, counts: dict[str, int]) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.executemany(
+                """INSERT INTO stock_state(campaign_id, offer_id, count) VALUES (?,?,?)
+                ON CONFLICT(campaign_id, offer_id) DO UPDATE SET count=excluded.count""",
+                [(campaign_id, offer_id, count) for offer_id, count in counts.items()],
+            )
+
 
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
@@ -72,13 +90,16 @@ def sync_campaign_stock(
     *,
     campaign_id: str,
     store_id: str,
-) -> int:
+) -> tuple[int, list[dict[str, Any]] | None]:
     """Push sellable stock for every offer Yandex Market lists in this campaign.
 
     Offers missing from MoySklad's store stock report (typically because
     they've sold down to zero, which drops them from that report entirely)
-    are explicitly pushed as 0 rather than skipped. Returns the sku count
-    pushed.
+    are explicitly pushed as 0 rather than skipped.
+
+    Returns the sku count pushed and the list of changes (sku/before/after)
+    versus the last run's counts — or None on a campaign's very first sync,
+    when there's no prior state to diff against yet.
     """
     if cache.is_stale(campaign_id):
         cache.replace(campaign_id, yandex.campaign_offers(campaign_id))
@@ -87,10 +108,34 @@ def sync_campaign_stock(
     rows = moysklad.stock_by_store(store_id)
     by_code = {row["code"]: row.get("quantity", 0) for row in rows if row.get("code")}
 
-    items = [{"sku": offer_id, "count": max(0, round(by_code.get(offer_id, 0)))} for offer_id in offer_ids]
+    new_counts = {offer_id: max(0, round(by_code.get(offer_id, 0))) for offer_id in offer_ids}
+    items = [{"sku": offer_id, "count": count} for offer_id, count in new_counts.items()]
     for chunk in _chunks(items, MAX_SKUS_PER_REQUEST):
         yandex.update_stocks(chunk, campaign_id=campaign_id)
-    return len(items)
+
+    old_counts = cache.last_counts(campaign_id)
+    changes: list[dict[str, Any]] | None = None
+    if old_counts:
+        changes = [
+            {"sku": offer_id, "before": old_counts.get(offer_id), "after": count}
+            for offer_id, count in new_counts.items()
+            if old_counts.get(offer_id) != count
+        ]
+    cache.save_counts(campaign_id, new_counts)
+    return len(items), changes
+
+
+CHANGES_PREVIEW_LIMIT = 8
+
+
+def _changes_summary(changes: list[dict[str, Any]] | None) -> str:
+    if changes is None:
+        return "первая синхронизация"
+    if not changes:
+        return "изменений нет"
+    preview = ", ".join(f"{c['sku']}: {c['before'] if c['before'] is not None else '—'}→{c['after']}" for c in changes[:CHANGES_PREVIEW_LIMIT])
+    extra = len(changes) - CHANGES_PREVIEW_LIMIT
+    return f"изменилось {len(changes)}: {preview}" + (f" и ещё {extra}" if extra > 0 else "")
 
 
 def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCache) -> None:
@@ -104,8 +149,9 @@ def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCach
         for campaign_id, store_id in CAMPAIGN_STORES.items():
             store_name = CAMPAIGN_NAMES.get(campaign_id, campaign_id)
             try:
-                count = sync_campaign_stock(moysklad, yandex, cache, campaign_id=campaign_id, store_id=store_id)
-                log.add("stock_sync", "success", f"{store_name}: остатки обновлены, офферов {count}", None, {"campaign_id": campaign_id, "count": count})
+                count, changes = sync_campaign_stock(moysklad, yandex, cache, campaign_id=campaign_id, store_id=store_id)
+                message = f"{store_name}: остатки обновлены, офферов {count}, {_changes_summary(changes)}"
+                log.add("stock_sync", "success", message, None, {"campaign_id": campaign_id, "count": count, "changes": changes})
             except Exception as error:
                 log.add("stock_sync", "error", f"{store_name}: ошибка синхронизации остатков: {error}", None, {"campaign_id": campaign_id})
     finally:

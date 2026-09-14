@@ -205,6 +205,13 @@ stop zeroing out sold-out offers on Yandex Market. Driving the sync from
 Yandex's own offer list instead means every offer it knows about — including
 ones with no current MoySklad stock — gets an explicit count every cycle.
 
+`AssortmentCache` also keeps each campaign's last-pushed count per `offerId`
+(`stock_state` table), so every run's log entry lists only what actually
+changed since the previous run, as `sku: before→after` (payload key
+`changes`; the log row itself shows the first few with a count of the rest).
+A campaign's very first sync has nothing to diff against — its entry says so
+explicitly rather than listing every offer as "changed".
+
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open

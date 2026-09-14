@@ -58,11 +58,42 @@ def test_sync_campaign_stock_refreshes_stale_cache_and_pushes_zero_for_missing_o
     moysklad = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}]})
     yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02", "SOLD_OUT_SKU"]})
 
-    count = sync_campaign_stock(moysklad, yandex, cache, campaign_id="149179260", store_id="store-1")
+    count, changes = sync_campaign_stock(moysklad, yandex, cache, campaign_id="149179260", store_id="store-1")
 
     assert count == 2
+    assert changes is None  # first sync for this campaign: no prior state to diff against
     assert yandex.campaign_offers_calls == ["149179260"]
     assert yandex.calls == [("149179260", [{"sku": "RGL02", "count": 3}, {"sku": "SOLD_OUT_SKU", "count": 0}])]
+
+
+def test_sync_campaign_stock_reports_changes_against_previous_run(tmp_path):
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+    yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02", "STABLE"]})
+
+    moysklad_first = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}, {"code": "STABLE", "quantity": 7.0}]})
+    sync_campaign_stock(moysklad_first, yandex, cache, campaign_id="149179260", store_id="store-1")
+
+    moysklad_second = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 1.0}, {"code": "STABLE", "quantity": 7.0}]})
+    count, changes = sync_campaign_stock(moysklad_second, yandex, cache, campaign_id="149179260", store_id="store-1")
+
+    assert count == 2
+    assert changes == [{"sku": "RGL02", "before": 3, "after": 1}]
+
+
+def test_sync_campaign_stock_reports_zero_as_before_for_a_newly_added_offer(tmp_path):
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+
+    yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02"]})
+    moysklad_first = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}]})
+    sync_campaign_stock(moysklad_first, yandex, cache, campaign_id="149179260", store_id="store-1")
+
+    # simulate the daily assortment refresh picking up a newly listed offer
+    cache.replace("149179260", ["RGL02", "NEW_SKU"])
+    moysklad_second = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}, {"code": "NEW_SKU", "quantity": 5.0}]})
+    count, changes = sync_campaign_stock(moysklad_second, yandex, cache, campaign_id="149179260", store_id="store-1")
+
+    assert count == 2
+    assert changes == [{"sku": "NEW_SKU", "before": None, "after": 5}]
 
 
 def test_sync_campaign_stock_reuses_fresh_cache_without_refetching_assortment(tmp_path):
@@ -120,6 +151,25 @@ def test_run_once_logs_error_for_one_campaign_but_continues_others(tmp_path, mon
     error_entries = [e for e in entries if e["status"] == "error"]
     assert len(error_entries) == 1
     assert "ТЦ Ривьера" in error_entries[0]["message"]
+
+
+def test_run_once_message_lists_changed_skus_before_and_after(tmp_path, monkeypatch):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+    store_id = CAMPAIGN_STORES["149179260"]
+    yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02"]})
+    moysklad_first = FakeMoySklad(rows_by_store={store_id: [{"code": "RGL02", "quantity": 3.0}]})
+    _patched(monkeypatch, moysklad_first, yandex)
+    run_once(FakeSettings(), log, cache)
+
+    moysklad_second = FakeMoySklad(rows_by_store={store_id: [{"code": "RGL02", "quantity": 0.0}]})
+    _patched(monkeypatch, moysklad_second, yandex)
+    run_once(FakeSettings(), log, cache)
+
+    riviera_entries = [e for e in log.recent() if e["message"].startswith("ТЦ Ривьера")]
+    assert "RGL02: 3→0" in riviera_entries[0]["message"]
+    import json
+    assert json.loads(riviera_entries[0]["payload"])["changes"] == [{"sku": "RGL02", "before": 3, "after": 0}]
 
 
 def test_run_once_logs_a_fresh_entry_every_call_without_being_deduplicated(tmp_path, monkeypatch):
