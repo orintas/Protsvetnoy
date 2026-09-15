@@ -17,11 +17,10 @@ COUNTRY_ORGANIZATIONS: dict[str, str] = {
 # General (non-shop) warehouses that don't belong to any single mall retail
 # store, so they don't show up via COUNTRY_ORGANIZATIONS — confirmed live as
 # active, non-archived, with real stock. The user specifically named
-# "Protsvetnoy" as Estonia's main warehouse; "Основной склад" is included
-# alongside it as the other plausible candidate rather than guessed away.
+# "Protsvetnoy" as Estonia's main warehouse. "Основной склад" is excluded on
+# purpose — the user asked for it to never be part of the Shopify stock sync.
 GENERAL_WAREHOUSES: list[dict[str, str]] = [
     {"id": "d9a80084-1bf4-11ea-0a80-057b000493d9", "name": "ProTsvetnoy OU"},
-    {"id": "689a000c-a14e-11e2-9030-001b21d91495", "name": "Основной склад"},
 ]
 
 
