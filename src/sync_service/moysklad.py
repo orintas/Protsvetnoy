@@ -217,7 +217,7 @@ class MoySkladClient:
         name: str,
         moment: str,
         document_number: int | None,
-        check_number: str,
+        check_number: int | None,
         organization_id: str,
         store_id: str,
         retail_store_id: str,
@@ -233,7 +233,6 @@ class MoySkladClient:
             "name": name,
             "moment": moment,
             "applicable": True,
-            "checkNumber": check_number,
             "description": "",
             "cashSum": cash_sum,
             "noCashSum": non_cash_sum,
@@ -248,6 +247,8 @@ class MoySkladClient:
         }
         if document_number is not None:
             body["documentNumber"] = document_number
+        if check_number is not None:
+            body["checkNumber"] = check_number
         return self._client.post("/entity/retaildemand", body)
 
     def create_retail_return(

@@ -118,6 +118,7 @@ def test_sync_store_sales_creates_document_with_positions_and_cash_split(tmp_pat
     assert demand["cash_sum"] == 0
     assert demand["non_cash_sum"] == 5900
     assert demand["document_number"] == 123  # int, not "123" — MoySklad rejects the field as a string (HTTP 400)
+    assert demand["check_number"] == 1  # same for checkNumber
     assert demand["positions"] == [{
         "quantity": 1.0,
         "price": 5900,
@@ -143,6 +144,22 @@ def test_sync_store_sales_omits_document_number_when_not_numeric(tmp_path):
     sync_store_sales(moysklad, novicloud, STORE, log)
 
     assert moysklad.created_demands[0]["document_number"] is None
+
+
+def test_sync_store_sales_omits_check_number_when_not_numeric(tmp_path):
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    doc = _sale_doc()
+    doc["nr_fiskalny"] = "FV/2026/09"
+    novicloud = FakeNovicloud(
+        docs=[doc],
+        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
+        products_by_link={"https://novicloud/towary/1": _product_payload()},
+    )
+    moysklad = FakeMoySklad(open_shift={"id": "existing-shift"})
+
+    sync_store_sales(moysklad, novicloud, STORE, log)
+
+    assert moysklad.created_demands[0]["check_number"] is None
 
 
 def test_sync_store_sales_creates_shift_when_none_open(tmp_path):
