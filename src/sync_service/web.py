@@ -18,7 +18,7 @@ from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import process_new_order
+from .yandex_market_order_sync import process_new_order, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -58,8 +58,9 @@ def _yandex_market_webhook(environ, start_response):
     filtering as the only verification, so that's enforced here. Every
     notification is logged; ORDER_CREATED additionally creates the MoySklad
     order, confirms assembly, and sends the shipping label to Telegram
-    (see _handle_new_order / process_new_order) — the one write path this
-    service has for Yandex Market so far.
+    (see _handle_new_order / process_new_order); ORDER_STATUS_UPDATED mirrors
+    the delivery status onto the MoySklad order's state (see
+    _handle_order_status_update / sync_order_delivery_state).
     """
     if not is_allowed_ip(_client_ip(environ)):
         start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
@@ -78,6 +79,8 @@ def _yandex_market_webhook(environ, start_response):
         handle_notification(log, notification)
         if notification.get("notificationType") == "ORDER_CREATED":
             _handle_new_order(notification, log)
+        elif notification.get("notificationType") == "ORDER_STATUS_UPDATED":
+            _handle_order_status_update(notification, log)
     except Exception as error:
         ErrorLog().log_exception("yandex_market_webhook", error, context=f"Ошибка обработки уведомления {notification.get('notificationType')}")
         payload = dumps({"error": {"type": "UNKNOWN", "message": "internal error"}}, ensure_ascii=False).encode("utf-8")
@@ -111,6 +114,22 @@ def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
         yandex.close()
         if telegram is not None:
             telegram.close()
+
+
+def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) -> None:
+    """Mirror DELIVERY/DELIVERED status pushes onto the MoySklad order's state."""
+    settings = Settings.from_env()
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    try:
+        sync_order_delivery_state(
+            order_id=int(notification["orderId"]),
+            status=notification.get("status"),
+            substatus=notification.get("substatus"),
+            moysklad=moysklad,
+            log=log,
+        )
+    finally:
+        moysklad.close()
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -372,7 +391,7 @@ shopifyHelpModal.onclick=e=>{if(e.target===shopifyHelpModal)shopifyHelpModal.cla
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
-const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
+const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',order_state_updated:'Статус заказа обновлён',order_state_error:'Ошибка статуса заказа',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');allYmLogEntries=await response.json();
 const select=document.getElementById('ym-log-kind'), current=select.value, kinds=[...new Set(allYmLogEntries.map(e=>e.kind))].sort();
 select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ymKindLabels[k]||k)+'</option>').join('');

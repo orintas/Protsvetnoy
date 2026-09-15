@@ -1,4 +1,10 @@
-from sync_service.yandex_market_order_sync import CAMPAIGN_STORES, process_new_order
+from sync_service.yandex_market_order_sync import (
+    CAMPAIGN_STORES,
+    COMPLETED_STATE_ID,
+    DELIVERING_STATE_ID,
+    process_new_order,
+    sync_order_delivery_state,
+)
 from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 
@@ -7,6 +13,7 @@ class FakeMoySklad:
         self.products = products or {}
         self.existing_order = existing_order
         self.created = None
+        self.state_updates = []
 
     def customer_order_by_external_code(self, external_code):
         return self.existing_order
@@ -17,6 +24,9 @@ class FakeMoySklad:
     def create_customer_order(self, **kwargs):
         self.created = kwargs
         return {"id": "new-order"}
+
+    def update_customer_order_state(self, order_id, state_id):
+        self.state_updates.append((order_id, state_id))
 
 
 class FakeYandex:
@@ -136,3 +146,41 @@ def test_telegram_not_configured_logs_error_but_does_not_raise(tmp_path):
     process_new_order(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=None, telegram_chat_id="", log=log)
     label_entries = [e for e in log.recent() if e["kind"] == "label_sent"]
     assert label_entries[0]["status"] == "error"
+
+
+def test_delivery_status_sets_delivering_state(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    sync_order_delivery_state(order_id=999, status="DELIVERY", substatus=None, moysklad=moysklad, log=log)
+    assert moysklad.state_updates == [("order-1", DELIVERING_STATE_ID)]
+    assert log.recent()[0]["kind"] == "order_state_updated"
+
+
+def test_delivery_service_received_substatus_also_sets_delivering_state(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    sync_order_delivery_state(order_id=999, status="PROCESSING", substatus="DELIVERY_SERVICE_RECEIVED", moysklad=moysklad, log=log)
+    assert moysklad.state_updates == [("order-1", DELIVERING_STATE_ID)]
+
+
+def test_delivered_status_sets_completed_state(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    sync_order_delivery_state(order_id=999, status="DELIVERED", substatus=None, moysklad=moysklad, log=log)
+    assert moysklad.state_updates == [("order-1", COMPLETED_STATE_ID)]
+
+
+def test_unrelated_status_is_ignored(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    sync_order_delivery_state(order_id=999, status="PROCESSING", substatus="READY_TO_SHIP", moysklad=moysklad, log=log)
+    assert moysklad.state_updates == []
+    assert log.recent() == []
+
+
+def test_delivery_status_for_unknown_order_logs_error_without_crashing(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order=None)
+    sync_order_delivery_state(order_id=999, status="DELIVERED", substatus=None, moysklad=moysklad, log=log)
+    assert moysklad.state_updates == []
+    assert log.recent()[0]["kind"] == "order_state_error"

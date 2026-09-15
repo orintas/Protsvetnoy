@@ -16,6 +16,11 @@ ORGANIZATION_ID = "40b2d5fc-22a4-11ec-0a80-02b1002197e3"  # ООО "ЦВЕТНО
 AGENT_ID = "fa685205-1cbb-11e8-9107-5048000779ee"  # ООО "ЯНДЕКС.МАРКЕТ", ИНН 7704357909
 SALES_CHANNEL_ID = "5a2f722a-549c-11ef-0a80-0493000bcbe7"  # "Яндекс Маркет FBS"
 
+# MoySklad customerorder workflow states (GET /entity/customerorder/metadata), matched
+# to Yandex Market's own order status/substatus pushed via ORDER_STATUS_UPDATED.
+DELIVERING_STATE_ID = "ea763d96-9bb8-11ed-0a80-0076000cbaed"  # "Доставляется"
+COMPLETED_STATE_ID = "8e499530-ac67-11e4-7a40-e89700075e01"  # "Выполнен"
+
 # campaignId -> MoySklad store id, one per physical shop.
 CAMPAIGN_STORES: dict[str, str] = {
     "149179204": "497d98c2-7e21-11ee-0a80-0e2a000dc91f",  # ТЦ Авиапарк
@@ -151,3 +156,35 @@ def process_new_order(
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
     else:
         log.add("label_sent", "error", f"Заказ {order_id}: Telegram не настроен, этикетка не отправлена", external_code)
+
+
+def sync_order_delivery_state(
+    *,
+    order_id: int,
+    status: str | None,
+    substatus: str | None,
+    moysklad: MoySkladClient,
+    log: YandexMarketSyncLog,
+) -> None:
+    """Mirror a Market delivery status push onto the MoySklad customerorder's state.
+
+    DELIVERY (handed to the delivery service, substatus DELIVERY_SERVICE_RECEIVED
+    included) -> "Доставляется"; DELIVERED -> "Выполнен". Every other
+    status/substatus is ignored — this only tracks the delivery tail, not the
+    whole order lifecycle.
+    """
+    if status == "DELIVERED":
+        state_id, label = COMPLETED_STATE_ID, "Выполнен"
+    elif status == "DELIVERY" or substatus == "DELIVERY_SERVICE_RECEIVED":
+        state_id, label = DELIVERING_STATE_ID, "Доставляется"
+    else:
+        return
+
+    external_code = str(order_id)
+    order = moysklad.customer_order_by_external_code(external_code)
+    if order is None:
+        log.add("order_state_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «{label}» не проставлен", external_code)
+        return
+
+    moysklad.update_customer_order_state(str(order["id"]), state_id)
+    log.add("order_state_updated", "success", f"Заказ {order_id}: статус в МойСклад изменён на «{label}»", external_code)

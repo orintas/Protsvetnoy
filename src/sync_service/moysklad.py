@@ -164,6 +164,25 @@ class MoySkladClient:
             body["salesChannel"] = self._meta("saleschannel", sales_channel_id)
         return self._client.post("/entity/customerorder", body)
 
+    def update_customer_order_state(self, order_id: str, state_id: str) -> dict[str, Any]:
+        """Move a customerorder to a workflow state (e.g. "Доставляется", "Выполнен").
+
+        State ids are per-account custom workflow states, not a fixed enum —
+        the meta href shape (.../customerorder/metadata/states/{id}) is fixed,
+        but the id itself has to be looked up per account via GET
+        /entity/customerorder/metadata; not reusable across MoySklad accounts.
+        """
+        body = {
+            "state": {
+                "meta": {
+                    "href": f"{self._client.base_url}/entity/customerorder/metadata/states/{state_id}",
+                    "type": "state",
+                    "mediaType": "application/json",
+                }
+            }
+        }
+        return self._client.put(f"/entity/customerorder/{order_id}", body)
+
     def last_document_moment(self, entity: str, retail_store_id: str) -> str | None:
         """Most recent `moment` of a document (e.g. retaildemand) for one retail store, or None if there's none yet."""
         href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
