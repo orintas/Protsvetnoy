@@ -118,6 +118,13 @@ the same `data/sync.sqlite3` log shown in the web interface's "Синхрони�
 for a human to fix (usually: set `opis_3` on the Novicloud product) and keep
 being retried every cycle until then.
 
+The log itself is never trimmed — every row stays forever. The web UI only
+loads the most recent 100 by default, but the search box (`SyncLog.search`,
+`GET /api/sync-log?q=...`) queries the full table, not just what's loaded, so
+any document ever created is findable by its receipt number regardless of
+age. The Yandex Market log (`YandexMarketSyncLog.search`,
+`GET /api/yandex-market-sync-log?q=...`) works the same way.
+
 ## Yandex Market synchronization (replacing TopSeller's connector)
 
 `src/sync_service/yandex_market.py` is a Partner API client (`Api-Key` auth,

@@ -35,3 +35,17 @@ class SyncLog:
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Match against the full history, not just the most recent rows — a
+        document number (external_id) or anything in the message text."""
+        like = f"%{query}%"
+        with sqlite3.connect(self.path) as db:
+            db.row_factory = sqlite3.Row
+            return [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM sync_log WHERE external_id LIKE ? OR message LIKE ? ORDER BY id DESC LIMIT ?",
+                    (like, like, limit),
+                )
+            ]

@@ -298,14 +298,18 @@ function visible(){const q=(document.getElementById('search')?.value||'').toLowe
 function draw(){const visibleRows=visible(), tbody=document.getElementById('tbody');tbody.innerHTML=visibleRows.map((r,index)=>{const blocked=r.status==='no_price';return '<tr'+(blocked?' class="blocked"':'')+'><td>'+String(index+1)+'</td><td>'+(blocked?'<input type="checkbox" disabled title="Сначала задайте цену в МойСклад">':'<input class="pick" type="checkbox" value="'+encodeURIComponent(r.code)+'" checked>')+'</td><td><strong>'+r.code+'</strong><br><span>'+r.name+'</span></td><td>'+r.category+'</td><td><span class="badge '+r.status+'">'+labels[r.status]+'</span></td><td>'+r.price.toFixed(2)+' PLN</td></tr>';}).join('');document.getElementById('count').textContent=visibleRows.length+' позиций';}
 function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;location.href='/generate?format='+format+'&codes='+codes;}
 downloadCsvBtn.onclick=()=>download('csv');
-async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog();}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog(allLogEntries);}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
-function renderLog(){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim().toLowerCase();
-const filtered=allLogEntries.filter(e=>!query||docNumber(e).toLowerCase().includes(query));
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(docNumber(e)?' · '+docNumber(e):'')+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено.':'Проверок пока не было.')+'</p>';
-target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.logIndex)]));}
+function renderLog(entries){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim();
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(docNumber(e)?' · '+docNumber(e):'')+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
+target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.logIndex)]));}
 let allLogEntries=[];
-document.getElementById('log-search').oninput=renderLog;
+let logSearchTimer=null;
+async function searchLog(){const query=(document.getElementById('log-search')?.value||'').trim();
+if(!query){renderLog(allLogEntries);return;}
+try{const response=await fetch('/api/sync-log?q='+encodeURIComponent(query));renderLog(await response.json());}
+catch(error){document.getElementById('sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+document.getElementById('log-search').oninput=()=>{clearTimeout(logSearchTimer);logSearchTimer=setTimeout(searchLog,300);};
 function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж',store:'Магазин',campaign_id:'Кампания',count:'Офферов',changes:'Изменения остатков (было → стало)'};}
 function formatValue(key,value){if(value===null||value===undefined)return '—';
 if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??'');if(key==='sklep')return 'магазин #'+(value.id??'');if(key==='kasa')return 'касса #'+(value.id??'');if(key==='kasjer')return 'кассир #'+(value.id??'');if(Array.isArray(value)){if(key==='items')return value.map(it=>(it.offerId||it.offer_id||'?')+' × '+(it.count??it.quantity??'?')).join(', ');if(key==='platnosci')return value.map(p=>(p.wplata_waluta??'?')+' '+(p.kod_waluty??'')).join(', ');if(key==='changes')return value.length?('<div class="log">'+value.map(c=>'<div class="log-row"><span><b>'+c.sku+'</b></span><span>'+(c.before??'—')+' → '+c.after+'</span></div>').join('')+'</div>'):'нет изменений';return value.length+' элемент(ов)';}return JSON.stringify(value);}
@@ -328,17 +332,24 @@ catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
 let allYmLogEntries=[];
+let ymSearchResults=null;
+let ymSearchTimer=null;
 const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');allYmLogEntries=await response.json();
 const select=document.getElementById('ym-log-kind'), current=select.value, kinds=[...new Set(allYmLogEntries.map(e=>e.kind))].sort();
 select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ymKindLabels[k]||k)+'</option>').join('');
-renderYmLog();}catch(error){allYmLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim().toLowerCase();
-const filtered=allYmLogEntries.filter(e=>(!kind||e.kind===kind)&&(!query||String(e.external_id||'').toLowerCase().includes(query)||e.message.toLowerCase().includes(query)));
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено.':'Проверок пока не было.')+'</p>';
+ymSearchResults=null;renderYmLog();}catch(error){allYmLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim();
+const source=ymSearchResults!==null?ymSearchResults:allYmLogEntries;
+const filtered=source.filter(e=>!kind||e.kind===kind);
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
 target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));}
+async function searchYmLog(){const query=(document.getElementById('ym-log-search')?.value||'').trim();
+if(!query){ymSearchResults=null;renderYmLog();return;}
+try{const response=await fetch('/api/yandex-market-sync-log?q='+encodeURIComponent(query));ymSearchResults=await response.json();renderYmLog();}
+catch(error){document.getElementById('ym-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
 document.getElementById('ym-log-kind').onchange=renderYmLog;
-document.getElementById('ym-log-search').oninput=renderYmLog;
+document.getElementById('ym-log-search').oninput=()=>{clearTimeout(ymSearchTimer);ymSearchTimer=setTimeout(searchYmLog,300);};
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
@@ -403,11 +414,15 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         start_response("200 OK", [("Content-Type", "application/x-ndjson; charset=utf-8")])
         return _compare_stream()
     if path == "/api/sync-log":
-        payload = dumps(SyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        entries = SyncLog().search(query) if query else SyncLog().recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/yandex-market-sync-log":
-        payload = dumps(YandexMarketSyncLog().recent(), ensure_ascii=False, default=str).encode("utf-8")
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        entries = YandexMarketSyncLog().search(query) if query else YandexMarketSyncLog().recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/yandex-market/webhook/notification" and environ.get("REQUEST_METHOD") == "POST":
