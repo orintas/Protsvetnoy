@@ -91,11 +91,12 @@ def _ensure_open_shift(moysklad: MoySkladClient, store: StoreMapping) -> str:
     return str(created["id"])
 
 
-def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store: StoreMapping, log: SyncLog) -> None:
+def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store: StoreMapping, log: SyncLog) -> int:
     last_moment = moysklad.last_document_moment("retaildemand", store.retail_store_id)
     date_from = _to_novicloud_date(last_moment) if last_moment else None
     docs = novicloud.documents(typ_dok=SALE_DOC_TYPES, sklep_id=store.novicloud_store_id, date_from=date_from).get("dane", []) or []
 
+    created = 0
     shift_id: str | None = None
     for doc in docs:
         nr_dok = doc.get("nr_dok")
@@ -130,14 +131,17 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
             non_cash_sum=non_cash_sum,
         )
         log.add("sale", "success", f"{store.name}: чек {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, doc)
+        created += 1
         time.sleep(RATE_LIMIT_SLEEP_SECONDS)
+    return created
 
 
-def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, store: StoreMapping, log: SyncLog) -> None:
+def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, store: StoreMapping, log: SyncLog) -> int:
     last_moment = moysklad.last_document_moment("retailsalesreturn", store.retail_store_id)
     date_from = _to_novicloud_date(last_moment) if last_moment else None
     docs = novicloud.documents(typ_dok=RETURN_DOC_TYPE, sklep_id=store.novicloud_store_id, date_from=date_from).get("dane", []) or []
 
+    created = 0
     shift_id: str | None = None
     for doc in docs:
         nr_dok = doc.get("nr_dok")
@@ -170,7 +174,9 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
             non_cash_sum=non_cash_sum,
         )
         log.add("return", "success", f"{store.name}: возврат {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, doc)
+        created += 1
         time.sleep(RATE_LIMIT_SLEEP_SECONDS)
+    return created
 
 
 def run_once(settings: Settings, log: SyncLog) -> None:
@@ -181,16 +187,19 @@ def run_once(settings: Settings, log: SyncLog) -> None:
         account=settings.novicloud_account,
         password=settings.novicloud_password,
     )
+    total_sales = 0
+    total_returns = 0
     try:
         for store in load_store_mappings():
             try:
-                sync_store_sales(moysklad, novicloud, store, log)
+                total_sales += sync_store_sales(moysklad, novicloud, store, log)
             except Exception as error:
                 log.add("sale_error", "error", f"{store.name}: ошибка синхронизации продаж: {error}", None)
             try:
-                sync_store_returns(moysklad, novicloud, store, log)
+                total_returns += sync_store_returns(moysklad, novicloud, store, log)
             except Exception as error:
                 log.add("return_error", "error", f"{store.name}: ошибка синхронизации возвратов: {error}", None)
+        log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}")
     finally:
         moysklad.close()
         novicloud.close()

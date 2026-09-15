@@ -224,6 +224,31 @@ def test_sync_store_returns_negates_payment_split(tmp_path):
     assert kinds == ["return"]
 
 
+def test_run_once_logs_a_heartbeat_summary_even_when_nothing_new(tmp_path, monkeypatch):
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    moysklad = FakeMoySklad()
+    novicloud = FakeNovicloud()
+
+    import sync_service.novicloud_retail_sync as mod
+    monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad)
+    monkeypatch.setattr(mod, "NovicloudClient", lambda **kwargs: novicloud)
+
+    class FakeSettings:
+        moysklad_base_url = "x"
+        moysklad_token = "x"
+        novicloud_base_url = "x"
+        novicloud_api_version = "v2"
+        novicloud_account = "x"
+        novicloud_password = "x"
+
+    run_once(FakeSettings(), log)
+
+    entries = log.recent()
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "run"
+    assert entries[0]["message"] == "Проверка завершена: новых чеков 0, возвратов 0"
+
+
 def test_run_once_continues_other_stores_after_one_fails(tmp_path, monkeypatch):
     log = SyncLog(str(tmp_path / "sync.sqlite3"))
 
