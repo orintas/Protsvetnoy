@@ -241,28 +241,14 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
 </section>
 <section id="tab-shopify" class="tab-panel">
-<section class="card accordion" id="section-shopify-catalog">
-<div class="accordion-header" data-section="shopify-catalog" role="button" tabindex="0">
-<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><p style="margin:4px 0 0" class="muted">Раз в сутки ночью. Категории — те же галочки «Shopify», что и для Novicloud (шестерёнка справа).</p></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
+<section class="card accordion" id="section-shopify-sync">
+<div class="accordion-header" data-section="shopify-sync" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента и остатков</h2><button class="help-btn" id="shopify-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
+<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории и склады синхронизации" title="Категории и склады синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" hidden>
-<p class="muted" style="margin:0 0 10px">Раз в сутки, в 03:00 по Москве, сервис проходит по всем выбранным категориям МойСклад и для каждого товара:</p>
-<ol class="muted" style="margin:0 0 10px;padding-left:20px;line-height:1.7">
-<li>Ищет товар в Shopify по артикулу (SKU) — сначала в собственной базе соответствий, если не находит — через поиск по SKU в Shopify.</li>
-<li>Если товар уже есть — обновляет его: название («Артикул - Название»), бренд «TM Varvikas», тип товара (категория из МойСклад), цену (тип цены «Цена ритэйл»), вес, штрихкод (EAN13) и первую картинку.</li>
-<li>Если товара нет — создаёт новый (черновик, сразу опубликован) с теми же полями плюс описанием из МойСклад.</li>
-<li>Товары без цены «Цена ритэйл» в МойСклад пропускаются и попадают в журнал как ошибка — сначала задайте цену.</li>
-</ol>
-<p class="muted" style="margin:0">Остатки эта синхронизация не трогает — это отдельный процесс (см. «Синхронизация остатков» ниже). Товары, которые убрали из выбранных категорий в МойСклад, из Shopify не удаляются и не архивируются автоматически. Если галочек ни для одной категории не стоит — синхронизировать нечего.</p>
-</div></section>
-<section class="card accordion" id="section-shopify-stock">
-<div class="accordion-header" data-section="shopify-stock" role="button" tabindex="0">
-<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><p style="margin:4px 0 0" class="muted">Каждые 30 минут, 09:00–22:00 по Москве. Склады — шестерёнка справа, вкладка «Склады». Остатки по выбранным складам суммируются в одно число на товар.</p></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" data-modal-tab="warehouses" type="button" aria-label="Склады синхронизации" title="Склады синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
-</div>
-<div class="accordion-body" id="body-shopify-stock" hidden>
-<p class="muted" style="margin:0">Если ни один склад не отмечен — синхронизировать нечего.</p>
+<p class="muted" style="margin:0 0 6px"><strong>Ассортимент</strong> — раз в сутки, в 03:00 по Москве, по выбранным категориям МойСклад (шестерёнка → «Категории»).</p>
+<p class="muted" style="margin:0"><strong>Остатки</strong> — каждые 30 минут, 09:00–22:00 по Москве, по выбранным складам (шестерёнка → «Склады»), суммируются в одно число на товар. Подробности — кнопка «?».</p>
 </div></section>
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Shopify — журнал синхронизации</h2><p style="margin:0">Товары и остатки, отправленные в Shopify.</p></div><button class="button secondary" id="refresh-shopify-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="shopify-log-kind" class="field"><option value="">Все типы</option></select><input id="shopify-log-search" class="field" placeholder="Поиск по артикулу" style="min-width:220px"></div>
@@ -284,6 +270,20 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <li><strong>Выгрузка файла.</strong> Нажмите «Скачать CSV» — сформируется файл только с отмеченными позициями в формате, готовом для импорта.</li>
 <li><strong>Загрузка в Novicloud.</strong> Зайдите в панель управления Novicloud → раздел импорта товаров → загрузите скачанный файл, чтобы применить изменения ассортимента и цен.</li>
 </ol><button class="button secondary modal-close" id="catalog-help-close" type="button">Закрыть</button></div></div>
+<div class="modal-overlay" id="shopify-help-modal"><div class="modal">
+<h3>Как работает синхронизация с Shopify</h3>
+<p class="muted" style="margin:0 0 10px"><strong>Ассортимент.</strong> Раз в сутки, в 03:00 по Москве, сервис проходит по всем выбранным категориям МойСклад и для каждого товара:</p>
+<ol class="muted" style="margin:0 0 14px;padding-left:20px;line-height:1.7">
+<li>Ищет товар в Shopify по артикулу (SKU) — сначала в собственной базе соответствий, если не находит — через поиск по SKU в Shopify.</li>
+<li>Если товар уже есть — обновляет его: название («Артикул - Название»), бренд «TM Varvikas», тип товара (категория из МойСклад), цену (тип цены «Цена ритэйл»), вес, штрихкод (EAN13) и первую картинку.</li>
+<li>Если товара нет — создаёт новый (черновик, сразу опубликован) с теми же полями плюс описанием из МойСклад.</li>
+<li>Товары без цены «Цена ритэйл» в МойСклад пропускаются и попадают в журнал как ошибка — сначала задайте цену.</li>
+</ol>
+<p class="muted" style="margin:0 0 14px">Остатки эта часть не трогает. Товары, которые убрали из выбранных категорий в МойСклад, из Shopify не удаляются и не архивируются автоматически. Если ни одна категория не отмечена — синхронизировать нечего.</p>
+<p class="muted" style="margin:0 0 10px"><strong>Остатки.</strong> Каждые 30 минут, с 09:00 до 22:00 по Москве, сервис суммирует остатки по всем выбранным складам для каждого уже синхронизированного товара и обновляет его доступное количество в Shopify. Отправляются только значения, которые реально изменились.</p>
+<p class="muted" style="margin:0">Если ни один склад не отмечен — синхронизировать нечего.</p>
+<button class="button secondary modal-close" id="shopify-help-close" type="button">Закрыть</button>
+</div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
 <h3>Категории и склады синхронизации</h3>
 <nav class="tabs" id="modal-tabs" style="margin:0 0 14px">
@@ -363,6 +363,10 @@ const catalogHelpBtn=document.getElementById('catalog-help'), catalogHelpModal=d
 catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');
 catalogHelpModal.onclick=e=>{if(e.target===catalogHelpModal)catalogHelpModal.classList.remove('open');};
+const shopifyHelpBtn=document.getElementById('shopify-help'), shopifyHelpModal=document.getElementById('shopify-help-modal');
+shopifyHelpBtn.onclick=()=>shopifyHelpModal.classList.add('open');
+document.getElementById('shopify-help-close').onclick=()=>shopifyHelpModal.classList.remove('open');
+shopifyHelpModal.onclick=e=>{if(e.target===shopifyHelpModal)shopifyHelpModal.classList.remove('open');};
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
