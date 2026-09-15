@@ -386,9 +386,11 @@ try{const response=await fetch('/api/shopify-warehouses');const data=await respo
 const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
 target.innerHTML=Object.keys(groups).length?Object.entries(groups).map(([country,items])=>'<div style="margin-bottom:14px"><div class="muted" style="margin-bottom:6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em">'+escapeHtml(country)+'</div>'+items.map(w=>'<label style="display:flex;align-items:center;gap:8px;padding:6px 0"><input type="checkbox" class="shopify-wh" value="'+encodeURIComponent(w.id)+'" '+(selected.has(w.id)?'checked':'')+'> '+escapeHtml(w.name)+'</label>').join('')+'</div>').join(''):'<p class="muted">Склады не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Не удалось загрузить склады: '+error.message+'</p>';}}
-document.getElementById('save-shopify-warehouses').onclick=async()=>{const ids=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
-await fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids)});
-loadShopifyWarehouses();};
+document.getElementById('save-shopify-warehouses').onclick=async()=>{const btn=document.getElementById('save-shopify-warehouses');btn.disabled=true;btn.textContent='Сохраняем…';
+const ids=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
+try{await fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids)});await loadShopifyWarehouses();}
+catch(error){}
+btn.disabled=false;btn.textContent='Сохранить склады';};
 let allShopifyLogEntries=[];
 let shopifySearchResults=null;
 let shopifySearchTimer=null;
@@ -429,14 +431,17 @@ const novicloud=[...document.querySelectorAll('.cat-novicloud:checked')].map(x=>
 const shopify=[...document.querySelectorAll('.cat-shopify:checked')].map(x=>decodeURIComponent(x.value));
 try{await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})});}
 catch(error){}
-btn.disabled=false;btn.textContent='Сохранить';};
+btn.disabled=false;btn.textContent='Сохранить категории';};
 const categoriesModal=document.getElementById('categories-modal');
 function switchModalTab(tab){tab=tab||'categories';
 document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.modalTab===tab));
 document.getElementById('modal-tab-categories').hidden=tab!=='categories';
 document.getElementById('modal-tab-warehouses').hidden=tab!=='warehouses';}
 document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(btn=>btn.onclick=()=>switchModalTab(btn.dataset.modalTab));
-function openCategoriesModal(tab){categoriesModal.classList.add('open');loadCategories();loadShopifyWarehouses();switchModalTab(tab);}
+function openCategoriesModal(tab){categoriesModal.classList.add('open');
+document.getElementById('categories-list').innerHTML='<p class="muted">Загрузка…</p>';
+document.getElementById('shopify-warehouses').innerHTML='<p class="muted">Загрузка…</p>';
+loadCategories();loadShopifyWarehouses();switchModalTab(tab);}
 document.querySelectorAll('.open-categories').forEach(btn=>btn.onclick=()=>openCategoriesModal(btn.dataset.modalTab));
 document.getElementById('categories-close').onclick=()=>categoriesModal.classList.remove('open');
 categoriesModal.onclick=e=>{if(e.target===categoriesModal)categoriesModal.classList.remove('open');};
