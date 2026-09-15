@@ -216,7 +216,7 @@ class MoySkladClient:
         *,
         name: str,
         moment: str,
-        document_number: str,
+        document_number: int | None,
         check_number: str,
         organization_id: str,
         store_id: str,
@@ -229,11 +229,10 @@ class MoySkladClient:
         cash_sum: int,
         non_cash_sum: int,
     ) -> dict[str, Any]:
-        body = {
+        body: dict[str, Any] = {
             "name": name,
             "moment": moment,
             "applicable": True,
-            "documentNumber": document_number,
             "checkNumber": check_number,
             "description": "",
             "cashSum": cash_sum,
@@ -247,6 +246,8 @@ class MoySkladClient:
             "rate": {"currency": self._meta("currency", currency_id)},
             "positions": positions,
         }
+        if document_number is not None:
+            body["documentNumber"] = document_number
         return self._client.post("/entity/retaildemand", body)
 
     def create_retail_return(

@@ -31,6 +31,17 @@ def _to_novicloud_date(moysklad_moment: str) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _document_number(doc: dict[str, Any]) -> int | None:
+    """MoySklad's documentNumber field is a strict integer — Novicloud's
+    nr_systemowy is not guaranteed numeric, so fall back to omitting it
+    rather than sending a value the API will reject with HTTP 400."""
+    raw = doc.get("nr_systemowy")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_moysklad_moment(novicloud_date: str | None) -> str:
     if not novicloud_date:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S.000")
@@ -117,7 +128,7 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
         moysklad.create_retail_demand(
             name=nr_dok,
             moment=_to_moysklad_moment(doc.get("data_wystawienia")),
-            document_number=str(doc.get("nr_systemowy") or ""),
+            document_number=_document_number(doc),
             check_number=str(doc.get("nr_fiskalny") or ""),
             organization_id=store.organization_id,
             store_id=store.moysklad_store_id,
