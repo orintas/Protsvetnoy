@@ -192,7 +192,7 @@ def _dispatch(path, environ, start_response):
 .actions{display:flex;gap:12px;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:174px;padding:13px 18px;border:0;border-radius:11px;color:#fff;background:linear-gradient(135deg,var(--accent),#6d5dfc);font:600 14px inherit;text-decoration:none;cursor:pointer;box-shadow:0 10px 26px #6d5dfc33;transition:.2s transform,.2s filter}.button.secondary{background:#1b2130;box-shadow:none;border:1px solid #30384d}.button:hover{filter:brightness(1.12);transform:translateY(-2px)}.button:disabled{opacity:.65;cursor:wait;transform:none}.button.compact{min-width:auto;padding:10px 16px;font-size:13px}
 .note{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px}.note strong{color:var(--text)}.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:24px 0 14px;color:var(--muted);font-size:13px}.toolbar input[placeholder],.toolbar select{min-width:190px;background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text)}.toolbar input[placeholder]{flex:1}.table{overflow:auto;border:1px solid var(--line);border-radius:12px}.table table{border-collapse:collapse;width:100%;min-width:720px}.table th,.table td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}.table th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.table td:first-child,.table th:first-child{width:55px;color:var(--muted);text-align:right}.table td span{color:var(--muted);font-size:13px}.badge{display:inline-block!important;padding:4px 8px;border-radius:7px;font-size:12px!important;color:#fff!important;background:#334155}.badge.missing{background:#2563eb}.badge.archive{background:#b45309}.badge.price{background:#7c3aed}.badge.no_price{background:#dc2626}.badge.success,.badge.sale{background:#16a34a}.badge.error{background:#dc2626}.badge.return{background:#d97706}.badge.dry-run{background:#475569}.table tr.blocked{opacity:.55}
 .progress-wrap{display:flex;align-items:center;gap:10px;font-size:13px;margin-top:14px}.progress-wrap[hidden]{display:none}.progress-bar{width:170px;height:8px;border-radius:6px;background:#1b2130;overflow:hidden;position:relative;flex-shrink:0}.progress-fill{position:absolute;top:0;left:-40%;width:40%;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--accent),var(--accent2));animation:progress-slide 1.1s ease-in-out infinite}@keyframes progress-slide{0%{left:-40%}50%{left:60%}100%{left:100%}}.export{margin-top:18px}.log{margin-top:20px;max-height:360px;overflow:auto;border-top:1px solid var(--line)}.log-row{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13px}.log-time{color:var(--muted);min-width:150px}.muted{color:var(--muted)}.error{color:#fca5a5;margin-top:20px}
-.tabs{display:flex;gap:8px;margin:18px 0 26px;border-bottom:1px solid var(--line);flex-wrap:wrap}.tab-btn{background:none;border:0;color:var(--muted);font:600 14px inherit;padding:12px 6px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s color,.15s border-color}.tab-btn.active{color:var(--text);border-bottom-color:var(--accent)}.tab-btn:hover{color:var(--text)}.tab-panel{display:none}.tab-panel.active{display:block}
+.tabs{display:flex;gap:8px;margin:18px 0 26px;border-bottom:1px solid var(--line);flex-wrap:wrap}.tab-btn,.modal-tab-btn{background:none;border:0;color:var(--muted);font:600 14px inherit;padding:12px 6px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s color,.15s border-color}.tab-btn.active,.modal-tab-btn.active{color:var(--text);border-bottom-color:var(--accent)}.tab-btn:hover,.modal-tab-btn:hover{color:var(--text)}.tab-panel{display:none}.tab-panel.active{display:block}
 @media(max-width:650px){.wrap{padding-top:24px}.top{margin-bottom:18px}.grid{grid-template-columns:1fr}.actions{flex-direction:column}.button{width:100%}.log-row{align-items:flex-start;flex-wrap:wrap}.log-time{min-width:130px}}
 </style></head>
 <body><main class="wrap">
@@ -245,16 +245,22 @@ def _dispatch(path, environ, start_response):
 <div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" hidden>
-<p class="muted" style="margin:0">Товары из выбранных категорий МойСклад создаются/обновляются в Shopify: название, цена («Цена ритэйл»), вес, штрихкод, картинка. Если галочек ни для одной категории не стоит — синхронизировать нечего.</p>
+<p class="muted" style="margin:0 0 10px">Раз в сутки, в 03:00 по Москве, сервис проходит по всем выбранным категориям МойСклад и для каждого товара:</p>
+<ol class="muted" style="margin:0 0 10px;padding-left:20px;line-height:1.7">
+<li>Ищет товар в Shopify по артикулу (SKU) — сначала в собственной базе соответствий, если не находит — через поиск по SKU в Shopify.</li>
+<li>Если товар уже есть — обновляет его: название («Артикул - Название»), бренд «TM Varvikas», тип товара (категория из МойСклад), цену (тип цены «Цена ритэйл»), вес, штрихкод (EAN13) и первую картинку.</li>
+<li>Если товара нет — создаёт новый (черновик, сразу опубликован) с теми же полями плюс описанием из МойСклад.</li>
+<li>Товары без цены «Цена ритэйл» в МойСклад пропускаются и попадают в журнал как ошибка — сначала задайте цену.</li>
+</ol>
+<p class="muted" style="margin:0">Остатки эта синхронизация не трогает — это отдельный процесс (см. «Синхронизация остатков» ниже). Товары, которые убрали из выбранных категорий в МойСклад, из Shopify не удаляются и не архивируются автоматически. Если галочек ни для одной категории не стоит — синхронизировать нечего.</p>
 </div></section>
 <section class="card accordion" id="section-shopify-stock">
 <div class="accordion-header" data-section="shopify-stock" role="button" tabindex="0">
-<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><p style="margin:4px 0 0" class="muted">Каждые 30 минут, 09:00–22:00 по Москве. Остатки по выбранным складам суммируются в одно число на товар.</p></div>
-<span class="accordion-chevron">▸</span>
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><p style="margin:4px 0 0" class="muted">Каждые 30 минут, 09:00–22:00 по Москве. Склады — шестерёнка справа, вкладка «Склады». Остатки по выбранным складам суммируются в одно число на товар.</p></div>
+<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" data-modal-tab="warehouses" type="button" aria-label="Склады синхронизации" title="Склады синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-shopify-stock" hidden>
-<div id="shopify-warehouses" class="log"></div>
-<div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="button" id="save-shopify-warehouses" type="button">Сохранить выбор складов</button></div>
+<p class="muted" style="margin:0">Если ни один склад не отмечен — синхронизировать нечего.</p>
 </div></section>
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Shopify — журнал синхронизации</h2><p style="margin:0">Товары и остатки, отправленные в Shopify.</p></div><button class="button secondary" id="refresh-shopify-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="shopify-log-kind"><option value="">Все типы</option></select><input id="shopify-log-search" placeholder="Поиск по артикулу" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"></div>
@@ -277,10 +283,20 @@ def _dispatch(path, environ, start_response):
 <li><strong>Загрузка в Novicloud.</strong> Зайдите в панель управления Novicloud → раздел импорта товаров → загрузите скачанный файл, чтобы применить изменения ассортимента и цен.</li>
 </ol><button class="button secondary modal-close" id="catalog-help-close" type="button">Закрыть</button></div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
-<h3>Категории для синхронизации</h3>
-<p class="muted" style="margin:0 0 14px">Категории из МойСклад (группа «ProTsvetnoy OU»). Отметьте, какие синхронизировать с Novicloud, какие — с Shopify. Выбор для Shopify пока просто сохраняется — сама интеграция ещё не подключена.</p>
+<h3>Категории и склады синхронизации</h3>
+<nav class="tabs" id="modal-tabs" style="margin:0 0 14px">
+<button class="modal-tab-btn active" data-modal-tab="categories" type="button">Категории</button>
+<button class="modal-tab-btn" data-modal-tab="warehouses" type="button">Склады</button>
+</nav>
+<div class="modal-tab-panel" id="modal-tab-categories">
+<p class="muted" style="margin:0 0 14px">Категории из МойСклад (группа «ProTsvetnoy OU»). Отметьте, какие синхронизировать с Novicloud, какие — с Shopify (раз в сутки ночью).</p>
 <div id="categories-list" class="log"></div>
-<div class="actions" style="margin-top:18px"><button class="button compact" id="save-categories" type="button">Сохранить</button><button class="button secondary compact modal-close" id="categories-close" type="button">Закрыть</button></div>
+</div>
+<div class="modal-tab-panel" id="modal-tab-warehouses" hidden>
+<p class="muted" style="margin:0 0 14px">Склады МойСклад для остатков Shopify: Эстония, Латвия, Литва, Польша + общие склады. Проверка каждые 30 минут, 09:00–22:00 по Москве; остатки по выбранным складам суммируются в одно число на товар.</p>
+<div id="shopify-warehouses" class="log"></div>
+</div>
+<div class="actions" style="margin-top:18px"><button class="button compact" id="save-categories" type="button">Сохранить категории</button><button class="button compact" id="save-shopify-warehouses" type="button">Сохранить склады</button><button class="button secondary compact modal-close" id="categories-close" type="button">Закрыть</button></div>
 </div></div>
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
@@ -415,8 +431,13 @@ try{await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'applic
 catch(error){}
 btn.disabled=false;btn.textContent='Сохранить';};
 const categoriesModal=document.getElementById('categories-modal');
-function openCategoriesModal(){categoriesModal.classList.add('open');loadCategories();}
-document.querySelectorAll('.open-categories').forEach(btn=>btn.onclick=openCategoriesModal);
+function switchModalTab(tab){tab=tab||'categories';
+document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.modalTab===tab));
+document.getElementById('modal-tab-categories').hidden=tab!=='categories';
+document.getElementById('modal-tab-warehouses').hidden=tab!=='warehouses';}
+document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(btn=>btn.onclick=()=>switchModalTab(btn.dataset.modalTab));
+function openCategoriesModal(tab){categoriesModal.classList.add('open');loadCategories();loadShopifyWarehouses();switchModalTab(tab);}
+document.querySelectorAll('.open-categories').forEach(btn=>btn.onclick=()=>openCategoriesModal(btn.dataset.modalTab));
 document.getElementById('categories-close').onclick=()=>categoriesModal.classList.remove('open');
 categoriesModal.onclick=e=>{if(e.target===categoriesModal)categoriesModal.classList.remove('open');};
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
