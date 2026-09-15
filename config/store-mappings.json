@@ -10,16 +10,6 @@
     "currency_id": "cae74fea-26ec-11ee-0a80-02b4000b49e4"
   },
   {
-    "novicloud_store_id": 58,
-    "name": "Manufaktura",
-    "moysklad_store_id": "13f41b67-015e-11ef-0a80-1713000fa8d3",
-    "retail_store_id": "a3ccfa2c-015e-11ef-0a80-0d68000f3fa9",
-    "organization_id": "a623f6a9-dde8-11ed-0a80-01540011a4a0",
-    "owner_id": "e71564f1-174a-11ef-0a80-1775000af1e8",
-    "department_id": "62a11082-1b25-11ea-0a80-030300038a2c",
-    "currency_id": "cae74fea-26ec-11ee-0a80-02b4000b49e4"
-  },
-  {
     "novicloud_store_id": 88,
     "name": "Wola Park",
     "moysklad_store_id": "78c6a61b-5e17-11ef-0a80-0605003cce71",

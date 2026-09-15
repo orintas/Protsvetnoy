@@ -14,7 +14,7 @@ def test_wroclavia_mapping():
 
 def test_all_poland_stores_share_org_department_and_currency():
     mappings = load_store_mappings("config/store-mappings.json")
-    assert len(mappings) == 4
+    assert len(mappings) == 3
     assert {m.organization_id for m in mappings} == {"a623f6a9-dde8-11ed-0a80-01540011a4a0"}
     assert {m.department_id for m in mappings} == {"62a11082-1b25-11ea-0a80-030300038a2c"}
     assert {m.currency_id for m in mappings} == {"cae74fea-26ec-11ee-0a80-02b4000b49e4"}
