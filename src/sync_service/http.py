@@ -39,7 +39,15 @@ class JsonClient:
         attempt = 0
         while True:
             attempt += 1
-            response = self._client.request(method, url_or_path, **kwargs)
+            try:
+                response = self._client.request(method, url_or_path, **kwargs)
+            except httpx.TransportError:
+                # Network-level failure (read/connect timeout, connection reset) rather than
+                # an HTTP response — retry the same way as a 5xx, since it's just as transient.
+                if attempt <= self._max_retries:
+                    time.sleep(self._retry_backoff * attempt)
+                    continue
+                raise
             # Retry only on transient server-side errors (5xx); client errors (4xx) are final.
             if response.status_code >= 500 and attempt <= self._max_retries:
                 time.sleep(self._retry_backoff * attempt)
