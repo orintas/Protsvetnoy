@@ -125,6 +125,78 @@ any document ever created is findable by its receipt number regardless of
 age. The Yandex Market log (`YandexMarketSyncLog.search`,
 `GET /api/yandex-market-sync-log?q=...`) works the same way.
 
+## Shopify synchronization (catalog + stock; orders/refunds not yet ported)
+
+Ported from a family of Make.com scenarios (all inactive, none deleted) for
+the single real shop, `varvikas.myshopify.com` — its storefront domain is
+`varvikas.shop` and it's Estonia-based (EUR), but the `.myshopify.com`
+backend handle is `varvikas`, not `protsvetnoy` (the connection labeled
+"protsvetnoy" in Make actually pointed at this domain; the one labeled
+"Varvikas" pointed at `protsvetnoy.myshopify.com` — the names were swapped,
+confirmed by the user). `SHOPIFY_ACCESS_TOKEN` is a static Admin API token
+from a legacy custom app ("MoySklad") created directly in the store's own
+admin — simpler than the OAuth flow a Partner-Dashboard/CLI app would need,
+and this is a plain backend service with no embedded UI to justify OAuth.
+The shop has exactly one Shopify Location ("Varvikas Main Warehouse"), so
+stock from every selected MoySklad warehouse is summed into one number per
+SKU rather than mapped to separate locations.
+
+**Catalog** (`src/sync_service/shopify_sync.py`, `catalog_worker`,
+`sync-cli shopify-catalog-sync-worker`) — once a night (03:00 Moscow time).
+For every MoySklad category checked for "Shopify" on the existing
+Категории tab (shared with Novicloud's selection, `CategorySyncConfig`,
+`data/category-sync.json`; empty by default — nothing syncs until someone
+checks a box), each product is created or updated in Shopify: title
+`"{code} - {name}"`, price from the **"Цена ритэйл"** MoySklad price type
+specifically (confirmed from the Make blueprint's own filter condition, not
+guessed — a plausible-looking alternative, "Цена интернет", exists but
+isn't what Make actually used), weight, EAN13 barcode, description, and the
+product's first MoySklad image (fetched and re-uploaded as base64 — no
+image hosting needed). Vendor is hardcoded `"TM Varvikas"`, matching Make.
+An existing Shopify listing is matched by SKU via a GraphQL search (REST has
+no product-by-SKU lookup) the first time a SKU is seen; after that,
+`ShopifyProductMap` (`data/shopify_products.sqlite3`) remembers the
+product/variant/inventory-item ids so neither the catalog nor the stock sync
+ever needs to search again.
+
+Each variant is created with `inventory_management: "shopify"` explicitly —
+without it, Shopify silently leaves inventory tracking off and
+`inventory_levels/set` fails with `422 Inventory item does not have
+inventory tracking enabled` (hit this live before adding the field; Make's
+own Shopify app module apparently sets this internally, since it isn't in
+the blueprint's own mapper).
+
+**Stock** (`stock_worker`, `sync-cli shopify-stock-sync-worker`) — every 30
+minutes, but only 09:00–22:00 Moscow time (checked live each tick, not a
+fixed schedule window). Warehouses feeding it are picked by hand on the
+Shopify tab's "Синхронизация остатков" section — MoySklad has no
+organization-level link from `entity/store` straight to a country, so the
+picker goes through `entity/retailstore` (which does have one) and follows
+its `store` link (`shopify_warehouses.py`, `COUNTRY_ORGANIZATIONS` — same
+four org ids the shift-closer already uses for PL/LT/LV/EE), plus a fixed
+"Общие склады" group for warehouses that aren't tied to any single mall
+shop (Estonia's main "ProTsvetnoy OU" warehouse, named by the user, plus
+"Основной склад" alongside it as the other plausible candidate rather than
+guessed away). Selection is empty by default
+(`data/shopify-warehouses.json`) — stock sync no-ops until warehouses are
+picked, same as the catalog sync waiting on category checkboxes. For every
+SKU the catalog sync already knows about, stock across every selected
+warehouse is summed and pushed only if it changed since the last push (the
+`last_available` column on `ShopifyProductMap` — mirrors the diff-only push
+already used for Yandex Market stock sync); a SKU missing from a warehouse's
+report (sold out there) counts as 0 rather than being skipped, so it still
+registers as a real change.
+
+Both workers log to `data/shopify_sync.sqlite3`
+(`ShopifySyncLog`, same shape and full-history `search()` as the other
+integration logs), shown on the Shopify tab with the same type-filter and
+search-box pattern as the Yandex Market log.
+
+Orders and refunds from Shopify aren't ported yet. Of the two source
+scenarios, refunds has a complete working flow to copy from later; orders
+does not — its real logic is disconnected ("orphaned") from the trigger in
+Make, only a webhook trigger and two constants are still wired up.
+
 ## Yandex Market synchronization (replacing TopSeller's connector)
 
 `src/sync_service/yandex_market.py` is a Partner API client (`Api-Key` auth,
@@ -325,10 +397,12 @@ distinct task:
   "ProTsvetnoy OU") sync to Novicloud and which to Shopify; replaces the
   categories that used to be hardcoded in `import_file.py`. The Novicloud
   compare/export endpoints read the saved selection
-  (`data/category-sync.json`) instead of a fixed list. Shopify's selection is
-  only stored for when that integration exists;
+  (`data/category-sync.json`) instead of a fixed list. Shopify's selection
+  now actually drives its catalog sync too, not just stored;
 - **OZON** — reserved placeholder tab for a future OZON integration;
-- **Shopify** — reserved placeholder tab for a future Shopify integration;
+- **Shopify** — MoySklad warehouse picker for the stock sync (grouped by
+  country) and the shared catalog/stock sync log, filterable by type with a
+  search box;
 - **Яндекс.Маркет** — the shared log for order fulfillment (webhook →
   MoySklad → assembly confirmation → Telegram label) and the 10-minute stock
   sync, filterable by entry type with a search box for order number;

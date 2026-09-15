@@ -72,6 +72,12 @@ class JsonClient:
             raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
         return response.content
 
+    def get_bytes_url(self, url: str) -> bytes:
+        response = self._request_with_retry("GET", url)
+        if response.is_error:
+            raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        return response.content
+
     def get_url(self, url: str) -> dict[str, Any]:
         response = self._request_with_retry("GET", url)
         if response.is_error:

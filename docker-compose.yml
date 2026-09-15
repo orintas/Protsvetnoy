@@ -40,6 +40,20 @@ services:
     command: ["yandex-market-stock-sync-worker"]
     volumes:
       - sync-data:/app/data
+  shopify-catalog-sync-worker:
+    build: .
+    env_file:
+      - .env
+    command: ["shopify-catalog-sync-worker"]
+    volumes:
+      - sync-data:/app/data
+  shopify-stock-sync-worker:
+    build: .
+    env_file:
+      - .env
+    command: ["shopify-stock-sync-worker"]
+    volumes:
+      - sync-data:/app/data
   moysklad-shift-close-worker:
     build: .
     env_file:

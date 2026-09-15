@@ -36,9 +36,9 @@ jobs:
             sed -i "s#^YANDEX_MARKET_CAMPAIGN_ID=.*#YANDEX_MARKET_CAMPAIGN_ID=${{ secrets.YANDEX_MARKET_CAMPAIGN_ID }}#" .env
             grep -q '^MOYSKLAD_SHIFT_CLOSE_DRY_RUN=' .env || echo 'MOYSKLAD_SHIFT_CLOSE_DRY_RUN=false' >> .env
             sed -i "s#^MOYSKLAD_TOKEN=.*#MOYSKLAD_TOKEN=${{ secrets.MOYSKLAD_TOKEN }}#" .env
-            grep -q '^SHOPIFY_SHOP_DOMAIN=' .env || echo 'SHOPIFY_SHOP_DOMAIN=protsvetnoy.myshopify.com' >> .env
+            grep -q '^SHOPIFY_SHOP_DOMAIN=' .env || echo 'SHOPIFY_SHOP_DOMAIN=varvikas.myshopify.com' >> .env
             grep -q '^SHOPIFY_ACCESS_TOKEN=' .env || echo 'SHOPIFY_ACCESS_TOKEN=' >> .env
-            grep -q '^SHOPIFY_API_VERSION=' .env || echo 'SHOPIFY_API_VERSION=2024-07' >> .env
+            grep -q '^SHOPIFY_API_VERSION=' .env || echo 'SHOPIFY_API_VERSION=2026-07' >> .env
             grep -q '^TELEGRAM_BOT_TOKEN=' .env || echo 'TELEGRAM_BOT_TOKEN=' >> .env
             grep -q '^TELEGRAM_LABEL_CHAT_ID=' .env || echo 'TELEGRAM_LABEL_CHAT_ID=' >> .env
             grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env

@@ -13,6 +13,8 @@ from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .shift_closer import ShiftCloseLog, list_open_shifts
+from .shopify_sync import ShopifySyncLog
+from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
@@ -239,12 +241,24 @@ def _dispatch(path, environ, start_response):
 <section id="tab-shopify" class="tab-panel">
 <section class="card accordion" id="section-shopify-catalog">
 <div class="accordion-header" data-section="shopify-catalog" role="button" tabindex="0">
-<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2></div>
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><p style="margin:4px 0 0" class="muted">Раз в сутки ночью. Категории — те же галочки «Shopify», что и для Novicloud (шестерёнка справа).</p></div>
 <div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" hidden>
-<p class="muted" style="margin:0">Интеграция с Shopify пока не настроена. Раздел зарезервирован для будущей синхронизации ассортимента.</p>
+<p class="muted" style="margin:0">Товары из выбранных категорий МойСклад создаются/обновляются в Shopify: название, цена («Цена ритэйл»), вес, штрихкод, картинка. Если галочек ни для одной категории не стоит — синхронизировать нечего.</p>
 </div></section>
+<section class="card accordion" id="section-shopify-stock">
+<div class="accordion-header" data-section="shopify-stock" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><p style="margin:4px 0 0" class="muted">Каждые 30 минут, 09:00–22:00 по Москве. Остатки по выбранным складам суммируются в одно число на товар.</p></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" id="body-shopify-stock" hidden>
+<div id="shopify-warehouses" class="log"></div>
+<div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="button" id="save-shopify-warehouses" type="button">Сохранить выбор складов</button></div>
+</div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Shopify — журнал синхронизации</h2><p style="margin:0">Товары и остатки, отправленные в Shopify.</p></div><button class="button secondary" id="refresh-shopify-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="shopify-log-kind"><option value="">Все типы</option></select><input id="shopify-log-search" placeholder="Поиск по артикулу" style="background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;color:var(--text);min-width:220px"></div>
+<div id="shopify-sync-log" class="log"></div></section>
 </section>
 <section id="tab-ym-log" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Заказы обрабатываются по вебхуку в боевом режиме: заказ создаётся в МойСклад, сборка подтверждается на Яндекс.Маркете, этикетка отправляется в Telegram. Остатки синхронизируются каждые 10 минут.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div>
@@ -351,6 +365,35 @@ catch(error){document.getElementById('ym-sync-log').innerHTML='<p class="error">
 document.getElementById('ym-log-kind').onchange=renderYmLog;
 document.getElementById('ym-log-search').oninput=()=>{clearTimeout(ymSearchTimer);ymSearchTimer=setTimeout(searchYmLog,300);};
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
+async function loadShopifyWarehouses(){const target=document.getElementById('shopify-warehouses');
+try{const response=await fetch('/api/shopify-warehouses');const data=await response.json();const available=data.available||[], selected=new Set(data.selection||[]);
+const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
+target.innerHTML=Object.keys(groups).length?Object.entries(groups).map(([country,items])=>'<div style="margin-bottom:14px"><div class="muted" style="margin-bottom:6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em">'+escapeHtml(country)+'</div>'+items.map(w=>'<label style="display:flex;align-items:center;gap:8px;padding:6px 0"><input type="checkbox" class="shopify-wh" value="'+encodeURIComponent(w.id)+'" '+(selected.has(w.id)?'checked':'')+'> '+escapeHtml(w.name)+'</label>').join('')+'</div>').join(''):'<p class="muted">Склады не найдены.</p>';}
+catch(error){target.innerHTML='<p class="error">Не удалось загрузить склады: '+error.message+'</p>';}}
+document.getElementById('save-shopify-warehouses').onclick=async()=>{const ids=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
+await fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids)});
+loadShopifyWarehouses();};
+let allShopifyLogEntries=[];
+let shopifySearchResults=null;
+let shopifySearchTimer=null;
+const shopifyKindLabels={catalog_created:'Товар создан',catalog_update:'Товар обновлён',catalog_error:'Ошибка ассортимента',stock_sync:'Остаток изменён',stock_run:'Синхронизация остатков',stock_error:'Ошибка остатков'};
+async function loadShopifyLog(){const target=document.getElementById('shopify-sync-log');try{const response=await fetch('/api/shopify-sync-log');allShopifyLogEntries=await response.json();
+const select=document.getElementById('shopify-log-kind'), current=select.value, kinds=[...new Set(allShopifyLogEntries.map(e=>e.kind))].sort();
+select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(shopifyKindLabels[k]||k)+'</option>').join('');
+shopifySearchResults=null;renderShopifyLog();}catch(error){allShopifyLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderShopifyLog(){const target=document.getElementById('shopify-sync-log'), kind=document.getElementById('shopify-log-kind')?.value||'', query=(document.getElementById('shopify-log-search')?.value||'').trim();
+const source=shopifySearchResults!==null?shopifySearchResults:allShopifyLogEntries;
+const filtered=source.filter(e=>!kind||e.kind===kind);
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+target.querySelectorAll('[data-shopify-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.shopifyLogIndex)]));}
+async function searchShopifyLog(){const query=(document.getElementById('shopify-log-search')?.value||'').trim();
+if(!query){shopifySearchResults=null;renderShopifyLog();return;}
+try{const response=await fetch('/api/shopify-sync-log?q='+encodeURIComponent(query));shopifySearchResults=await response.json();renderShopifyLog();}
+catch(error){document.getElementById('shopify-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+document.getElementById('shopify-log-kind').onchange=renderShopifyLog;
+document.getElementById('shopify-log-search').oninput=()=>{clearTimeout(shopifySearchTimer);shopifySearchTimer=setTimeout(searchShopifyLog,300);};
+document.getElementById('refresh-shopify-log').onclick=loadShopifyLog;loadShopifyLog();
+loadShopifyWarehouses();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
 target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
@@ -452,6 +495,30 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
             {"categories": categories, "selection": CategorySyncConfig().load()},
             ensure_ascii=False,
         ).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/shopify-warehouses" and environ.get("REQUEST_METHOD") == "POST":
+        selection = ShopifyWarehouseConfig().save(_read_json_body(environ))
+        payload = dumps(selection, ensure_ascii=False).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/shopify-warehouses":
+        settings = Settings.from_env()
+        client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+        try:
+            available = available_warehouses(client)
+        finally:
+            client.close()
+        payload = dumps(
+            {"available": available, "selection": ShopifyWarehouseConfig().load()},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/shopify-sync-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        entries = ShopifySyncLog().search(query) if query else ShopifySyncLog().recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/shift-open":

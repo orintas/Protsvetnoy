@@ -54,6 +54,27 @@ class MoySkladClient:
                 return result
             payload = self._client.get_url(str(next_link))
 
+    def products_by_category(self, path_name: str) -> list[dict[str, Any]]:
+        """Non-archived products in one category (pathName), with images expanded."""
+        payload = self._client.get("/entity/product", params={"filter": f"pathName={path_name}", "limit": 1000, "expand": "images"})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad products response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict) and not row.get("archived"))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
+    def product_image_bytes(self, product: dict[str, Any]) -> bytes | None:
+        rows = (product.get("images") or {}).get("rows") or []
+        if not rows:
+            return None
+        download_href = rows[0].get("meta", {}).get("downloadHref")
+        return self._client.get_bytes_url(download_href) if download_href else None
+
     def product_categories(self, group_id: str = PROTSVETNOY_GROUP_ID) -> list[dict[str, Any]]:
         """Non-archived top-level product folders belonging to a MoySklad group."""
         href = f"{self._client.base_url}/entity/group/{group_id}"
@@ -76,6 +97,25 @@ class MoySkladClient:
         payload = self._client.get("/entity/product", params={"filter": f"code={code}", "limit": 1})
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def warehouses_by_organization(self, org_id: str) -> list[dict[str, Any]]:
+        """Physical warehouses (entity/store) backing each active retail store for one organization.
+
+        There's no direct organization filter on entity/store itself, so this
+        goes through retailstore (which does have one) and follows its
+        store link — confirmed live: every retail store here maps 1:1 to its
+        own warehouse.
+        """
+        href = f"{self._client.base_url}/entity/organization/{org_id}"
+        payload = self._client.get("/entity/retailstore", params={"filter": f"organization={href}", "limit": 100, "expand": "store"})
+        result: list[dict[str, Any]] = []
+        for row in payload.get("rows", []):
+            if row.get("archived"):
+                continue
+            store = row.get("store") or {}
+            if store.get("id"):
+                result.append({"id": store["id"], "name": store.get("name") or row.get("name")})
+        return result
 
     def stock_by_store(self, store_id: str) -> list[dict[str, Any]]:
         """Sellable stock (quantity = stock - reserve) per product for one store."""
