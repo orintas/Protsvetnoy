@@ -188,6 +188,7 @@ def _dispatch(path, environ, start_response):
 .accordion+.accordion{margin-top:16px}.accordion-header{display:flex;align-items:center;justify-content:space-between;gap:15px;cursor:pointer}.accordion-chevron{color:var(--muted);font-size:14px;flex-shrink:0;transition:.2s transform}.accordion.open .accordion-chevron{transform:rotate(90deg)}.accordion-body{margin-top:18px}.accordion-body[hidden]{display:none}
 .help-btn{width:22px;height:22px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font:700 12px inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1}.help-btn:hover{color:var(--text);border-color:var(--accent)}
 .gear-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font-size:15px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1;transition:.2s color,.2s border-color,.2s transform}.gear-btn:hover{color:var(--text);border-color:var(--accent);transform:rotate(35deg)}
+.modal{position:relative}.modal-close-x{position:absolute;top:16px;right:16px;width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:#1b2130;color:var(--muted);font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;line-height:1;transition:.2s color,.2s border-color}.modal-close-x:hover{color:var(--text);border-color:var(--accent)}
 .modal-overlay{position:fixed;inset:0;background:#05060bcc;display:none;align-items:center;justify-content:center;padding:20px;z-index:50}.modal-overlay.open{display:flex}.modal{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px;max-width:520px;width:100%;max-height:80vh;overflow:auto}.modal h3{margin:0 0 14px;font-size:18px}.modal ol{margin:0;padding-left:20px;color:var(--muted);font-size:14px;line-height:1.7}.modal ol li strong{color:var(--text)}.modal-close{margin-top:20px}.actions .modal-close{margin-top:0}.log-row.clickable{cursor:pointer}.log-row.clickable:hover{background:#ffffff08}.detail-grid{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px}.detail-grid dt{color:var(--muted)}.detail-grid dd{margin:0;color:var(--text)}
 .actions{display:flex;gap:12px;flex-wrap:wrap}.button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:9px;min-width:174px;height:var(--ctrl-h);padding:0 18px;border:0;border-radius:11px;color:#fff;background:linear-gradient(135deg,var(--accent),#6d5dfc);font:600 14px inherit;text-decoration:none;cursor:pointer;box-shadow:0 10px 26px #6d5dfc33;transition:.2s transform,.2s filter}.button.secondary{background:#1b2130;box-shadow:none;border:1px solid #30384d}.button:hover{filter:brightness(1.12);transform:translateY(-2px)}.button:disabled{opacity:.65;cursor:wait;transform:none}.button.compact{min-width:auto;padding:0 16px;font-size:13px}
 .field{box-sizing:border-box;height:var(--ctrl-h);background:#0d111b;border:1px solid var(--line);border-radius:9px;padding:0 12px;color:var(--text);font:14px inherit}
@@ -285,6 +286,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="button secondary modal-close" id="shopify-help-close" type="button">Закрыть</button>
 </div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
+<button class="modal-close-x modal-close" id="categories-close" type="button" aria-label="Закрыть" title="Закрыть">×</button>
 <h3>Категории и склады синхронизации</h3>
 <nav class="tabs" id="modal-tabs" style="margin:0 0 14px">
 <button class="modal-tab-btn active" data-modal-tab="categories" type="button">Категории</button>
@@ -298,7 +300,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <p class="muted" style="margin:0 0 14px">Склады МойСклад для остатков Shopify: Эстония, Латвия, Литва, Польша + общие склады. Проверка каждые 30 минут, 09:00–22:00 по Москве; остатки по выбранным складам суммируются в одно число на товар.</p>
 <div id="shopify-warehouses" class="log"></div>
 </div>
-<div class="actions" style="margin-top:18px"><button class="button compact" id="save-categories" type="button">Сохранить категории</button><button class="button compact" id="save-shopify-warehouses" type="button">Сохранить склады</button><button class="button secondary compact modal-close" id="categories-close" type="button">Закрыть</button></div>
+<div class="actions" style="margin-top:18px"><button class="button compact" id="save-settings" type="button">Сохранить</button></div>
 </div></div>
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
@@ -392,11 +394,6 @@ try{const response=await fetch('/api/shopify-warehouses');const data=await respo
 const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
 target.innerHTML=Object.keys(groups).length?Object.entries(groups).map(([country,items])=>'<div style="margin-bottom:14px"><div class="muted" style="margin-bottom:6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em">'+escapeHtml(country)+'</div>'+items.map(w=>'<label style="display:flex;align-items:center;gap:8px;padding:6px 0"><input type="checkbox" class="shopify-wh" value="'+encodeURIComponent(w.id)+'" '+(selected.has(w.id)?'checked':'')+'> '+escapeHtml(w.name)+'</label>').join('')+'</div>').join(''):'<p class="muted">Склады не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Не удалось загрузить склады: '+error.message+'</p>';}}
-document.getElementById('save-shopify-warehouses').onclick=async()=>{const btn=document.getElementById('save-shopify-warehouses');btn.disabled=true;btn.textContent='Сохраняем…';
-const ids=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
-try{await fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ids)});await loadShopifyWarehouses();}
-catch(error){}
-btn.disabled=false;btn.textContent='Сохранить склады';};
 let allShopifyLogEntries=[];
 let shopifySearchResults=null;
 let shopifySearchTimer=null;
@@ -432,12 +429,17 @@ async function loadCategories(){const target=document.getElementById('categories
 try{const response=await fetch('/api/categories');const data=await response.json();const cats=data.categories||[], sel=data.selection||{novicloud:[],shopify:[]};
 target.innerHTML=cats.length?cats.map(c=>'<div class="log-row"><span style="flex:1"><strong>'+escapeHtml(c)+'</strong></span><label style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" class="cat-novicloud" value="'+encodeURIComponent(c)+'" '+(sel.novicloud.includes(c)?'checked':'')+'> Novicloud</label><label style="display:flex;align-items:center;gap:6px;white-space:nowrap;margin-left:18px"><input type="checkbox" class="cat-shopify" value="'+encodeURIComponent(c)+'" '+(sel.shopify.includes(c)?'checked':'')+'> Shopify</label></div>').join(''):'<p class="muted">Категории не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Список категорий недоступен: '+escapeHtml(error.message)+'</p>';}}
-document.getElementById('save-categories').onclick=async()=>{const btn=document.getElementById('save-categories');btn.disabled=true;btn.textContent='Сохраняем…';
+document.getElementById('save-settings').onclick=async()=>{const btn=document.getElementById('save-settings');btn.disabled=true;btn.textContent='Сохраняем…';
 const novicloud=[...document.querySelectorAll('.cat-novicloud:checked')].map(x=>decodeURIComponent(x.value));
 const shopify=[...document.querySelectorAll('.cat-shopify:checked')].map(x=>decodeURIComponent(x.value));
-try{await fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})});}
-catch(error){}
-btn.disabled=false;btn.textContent='Сохранить категории';};
+const warehouseIds=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
+try{
+await Promise.all([
+fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})}),
+fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(warehouseIds)}),
+]);
+}catch(error){}
+btn.disabled=false;btn.textContent='Сохранить';};
 const categoriesModal=document.getElementById('categories-modal');
 function switchModalTab(tab){tab=tab||'categories';
 document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.modalTab===tab));
