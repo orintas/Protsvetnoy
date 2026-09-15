@@ -99,7 +99,7 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
     assert yandex.label_calls == [(999, "149179260")]
     assert telegram.sent[0][0] == "-100123"
     assert telegram.sent[0][1] == b"%PDF-fake"
-    assert telegram.sent[0][3] == "Яндекс.Маркет · заказ 999\nRGL02 × 1"
+    assert telegram.sent[0][3] == "Яндекс.Маркет · ТЦ Ривьера · заказ 999\nRGL02 × 1"
 
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["label_sent", "assembly_confirmed", "order_created"]

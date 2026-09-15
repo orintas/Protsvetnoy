@@ -141,11 +141,12 @@ def process_new_order(
 
     label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
     if telegram is not None and telegram_chat_id:
+        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
         telegram.send_document(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{order_id}.pdf",
-            caption=f"Яндекс.Маркет · заказ {order_id}\n{_format_items(items)}",
+            caption=f"Яндекс.Маркет · {store_name} · заказ {order_id}\n{_format_items(items)}",
         )
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
     else:
