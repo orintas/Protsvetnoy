@@ -109,14 +109,5 @@ class JsonClient:
             raise ApiError(f"POST {response.url} returned a non-object JSON response")
         return result
 
-    def put(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        response = self._request_with_retry("PUT", path, json=payload)
-        if response.is_error:
-            raise ApiError(f"PUT {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
-        result = response.json()
-        if not isinstance(result, dict):
-            raise ApiError(f"PUT {response.url} returned a non-object JSON response")
-        return result
-
     def close(self) -> None:
         self._client.close()

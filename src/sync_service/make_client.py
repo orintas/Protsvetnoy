@@ -21,6 +21,11 @@ class MakeClient:
             return payload["blueprint"]
         return payload
 
+    def datastore_records(self, datastore_id: int, *, limit: int = 1000) -> list[dict[str, Any]]:
+        payload = self._client.get(f"/data-stores/{datastore_id}/data", params={"pg[limit]": limit})
+        records = payload.get("records", [])
+        return [r for r in records if isinstance(r, dict)]
+
     def list_scenarios(self, team_id: int | None = None) -> list[dict[str, Any]]:
         params = {"teamId": team_id} if team_id is not None else None
         payload = self._client.get("/scenarios", params=params)

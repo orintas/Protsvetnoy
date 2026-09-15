@@ -45,5 +45,22 @@ class NovicloudClient:
         params = {"na_dzien": date} if date else None
         return self._client.get("/stanymag", params=params)
 
+    def documents(self, *, typ_dok: str, sklep_id: int, date_from: str | None = None) -> dict[str, Any]:
+        """Retail documents (`/dokumenty`) for one store, optionally since a date.
+
+        typ_dok: comma-separated Novicloud document type codes (21,112 = retail
+        sale receipts, 8 = returns). date_from: "YYYY-MM-DDTHH:MM:SS", sent as
+        `data_wystawienia=min<date_from>` (matches production usage confirmed
+        against the live API).
+        """
+        params: list[tuple[str, str]] = [("typ_dok", typ_dok), ("sklep.id", str(sklep_id))]
+        if date_from:
+            params.append(("data_wystawienia", f"min{date_from}"))
+        return self._client.get("/dokumenty", params=params)
+
+    def get_url(self, url: str) -> dict[str, Any]:
+        """Follow an absolute link returned by the API (e.g. a document's positions or a product)."""
+        return self._client.get_url(url)
+
     def close(self) -> None:
         self._client.close()

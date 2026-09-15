@@ -67,14 +67,56 @@ sync-cli moysklad-stocks
 The commands only read data. They print a compact summary and do not create or
 change documents.
 
-## Test synchronization worker
+## Novicloud sales/returns sync (retaildemand / retailsalesreturn)
 
-The `worker` service checks Novicloud sales and returns every five minutes and
-shows the results in the web interface under “Журнал синхронизации”. In the
-current test mode it only reads data and writes an idempotent SQLite log to the
-shared `sync-data` volume; it does not create documents in MoySklad. Keep
-`DRY_RUN=true` until document mapping and duplicate protection are explicitly
-verified.
+The `worker` service (`src/sync_service/novicloud_retail_sync.py`, `sync-cli
+sync-worker`) creates real `retaildemand` and `retailsalesreturn` documents in
+MoySklad from Novicloud POS receipts, every 15 minutes. Ported field-for-field
+from the "Sales from Navicloud to MoySklad" / "Returns from Navicloud to
+MoySklad" Make.com scenarios (both disabled 2026-09-15 once this went live —
+running both at once would double-create documents), verified against real
+production data before cutover: computed positions/cashSum/noCashSum for an
+already-Make-synced document matched MoySklad's actual stored document
+byte-for-byte.
+
+Scoped to the four Poland stores in `config/store-mappings.json` (Westfield
+Mokotow, Manufaktura, Wola Park, Wroclavia — all under organization "Varvikas
+Grupp OU Filiale Poland"); that mapping's fields (`retail_store_id`,
+`organization_id`, `owner_id`, `department_id`, `currency_id`) came from
+Make's own "Stores" data store (id `10562`, readable via
+`MakeClient.datastore_records`), not from any MoySklad API — if a store's
+config ever needs to change, re-derive it from there or from a real document
+Make already created for that store, not by guessing.
+
+Per store, per run:
+
+1. Cursor: the `moment` of the most recent `retaildemand` (or
+   `retailsalesreturn`) already in MoySklad for that store's `retailStore` —
+   self-healing, since a failed creation never advances it.
+2. Fetch Novicloud `/dokumenty` since that cursor — `typ_dok=21,112` for
+   sales, `typ_dok=8` for returns.
+3. Skip a document if one with the same `name` already exists in MoySklad for
+   that `retailStore` (the boundary document at the cursor date always
+   reappears in step 2's results — `min` is inclusive — and is skipped here,
+   not treated as backlog).
+4. Resolve each line item's MoySklad product via Novicloud's `opis_3` custom
+   field (holds the MoySklad product UUID directly — no separate mapping
+   table). A line with no `opis_3` is logged as an error and excluded; the
+   document is still created with whichever lines did resolve, unless none
+   did (then it's skipped entirely, retried next cycle).
+5. Ensure an open retail shift exists for the store (reuse one with no
+   `closeDate`, else create one) — looked up once per run, only when actually
+   needed.
+6. Split the paid amount into `cashSum`/`noCashSum` from the payments array
+   (payment form id `2` = non-cash); returns negate both.
+7. Create the document. A 2s pause between API calls throttles Novicloud,
+   which is stricter than MoySklad about request rate.
+
+Errors (a failed store, or a document with unmapped products) are logged to
+the same `data/sync.sqlite3` log shown in the web interface's "Синхронизация
+продаж" section, not silently retried into a growing backlog — they surface
+for a human to fix (usually: set `opis_3` on the Novicloud product) and keep
+being retried every cycle until then.
 
 ## Yandex Market synchronization (replacing TopSeller's connector)
 
@@ -267,9 +309,9 @@ Start the private web app on the VPS with `docker compose up -d --build`. Open
 distinct task:
 
 - **Novicloud** — compares the Novicloud and MoySklad catalogs, generates the
-  CSV/XLSX import file for Novicloud, and shows the read-only Novicloud
-  sales/returns check log from the `worker` service (test mode, no documents
-  are created yet);
+  CSV/XLSX import file for Novicloud, and shows the `worker` service's live
+  sales/returns sync log (real `retaildemand`/`retailsalesreturn` documents
+  created in MoySklad for the four Poland stores);
 - **МойСклад** — closes stale retail shifts for the Poland/Lithuania/Latvia/
   Estonia stores (see below);
 - **Категории** — checkboxes for which MoySklad product categories (group
@@ -333,5 +375,5 @@ open, and the closing log.
 ## Store mapping
 
 The verified Make Data Store mappings are kept in
-`data/store-mappings.json`. Novicloud store IDs are mapped to MoySklad store
+`config/store-mappings.json`. Novicloud store IDs are mapped to MoySklad store
 UUIDs; for example, Novicloud store `100` maps to Wroclavia.

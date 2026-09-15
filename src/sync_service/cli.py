@@ -27,7 +27,7 @@ def main() -> None:
         web_main()
         return
     if args.command == "sync-worker":
-        from .sync_log import worker
+        from .novicloud_retail_sync import worker
         worker()
         return
     if args.command == "yandex-market-stock-sync-worker":

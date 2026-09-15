@@ -124,61 +124,106 @@ class MoySkladClient:
             body["salesChannel"] = self._meta("saleschannel", sales_channel_id)
         return self._client.post("/entity/customerorder", body)
 
-    def create_retail_sale(
+    def last_document_moment(self, entity: str, retail_store_id: str) -> str | None:
+        """Most recent `moment` of a document (e.g. retaildemand) for one retail store, or None if there's none yet."""
+        href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
+        payload = self._client.get(f"/entity/{entity}", params={"filter": f"retailStore={href}", "order": "moment,desc", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0].get("moment") if rows and isinstance(rows[0], dict) else None
+
+    def document_exists(self, entity: str, *, name: str, retail_store_id: str) -> bool:
+        href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
+        payload = self._client.get(f"/entity/{entity}", params={"filter": f"name={name};retailStore={href}", "limit": 1})
+        return bool(payload.get("rows"))
+
+    def find_open_retail_shift(self, retail_store_id: str) -> dict[str, Any] | None:
+        href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
+        payload = self._client.get("/entity/retailshift", params={"filter": f"retailStore={href};closeDate=", "order": "created,desc", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def create_retail_shift(self, *, organization_id: str, store_id: str, retail_store_id: str, department_id: str, owner_id: str) -> dict[str, Any]:
+        body = {
+            "organization": self._meta("organization", organization_id),
+            "store": self._meta("store", store_id),
+            "retailStore": self._meta("retailstore", retail_store_id),
+            "group": self._meta("group", department_id),
+            "owner": self._meta("employee", owner_id),
+        }
+        return self._client.post("/entity/retailshift", body)
+
+    def create_retail_demand(
         self,
         *,
         name: str,
         moment: str,
+        document_number: str,
+        check_number: str,
+        organization_id: str,
         store_id: str,
         retail_store_id: str,
         retail_shift_id: str,
-        organization_id: str,
-        external_code: str,
+        department_id: str,
+        owner_id: str,
+        currency_id: str,
         positions: list[dict[str, Any]],
-        cash_sum: float,
-        non_cash_sum: float,
+        cash_sum: int,
+        non_cash_sum: int,
     ) -> dict[str, Any]:
-        return self._client.post(
-            "/entity/retaildemand",
-            {
-                "name": name,
-                "moment": moment,
-                "store": {
-                    "meta": {
-                        "href": f"{self._client.base_url}/entity/store/{store_id}",
-                        "type": "store",
-                        "mediaType": "application/json",
-                    }
-                },
-                "retailStore": {
-                    "meta": {
-                        "href": f"{self._client.base_url}/entity/retailstore/{retail_store_id}",
-                        "type": "retailstore",
-                        "mediaType": "application/json",
-                    }
-                },
-                "retailShift": {
-                    "meta": {
-                        "href": f"{self._client.base_url}/entity/retailshift/{retail_shift_id}",
-                        "type": "retailshift",
-                        "mediaType": "application/json",
-                    }
-                },
-                "organization": {
-                    "meta": {
-                        "href": f"{self._client.base_url}/entity/organization/{organization_id}",
-                        "type": "organization",
-                        "mediaType": "application/json",
-                    }
-                },
-                "externalCode": external_code,
-                "vatEnabled": True,
-                "vatIncluded": True,
-                "cashSum": cash_sum,
-                "noCashSum": non_cash_sum,
-                "positions": positions,
-            },
-        )
+        body = {
+            "name": name,
+            "moment": moment,
+            "applicable": True,
+            "documentNumber": document_number,
+            "checkNumber": check_number,
+            "description": "",
+            "cashSum": cash_sum,
+            "noCashSum": non_cash_sum,
+            "organization": self._meta("organization", organization_id),
+            "store": self._meta("store", store_id),
+            "retailStore": self._meta("retailstore", retail_store_id),
+            "retailShift": self._meta("retailshift", retail_shift_id),
+            "group": self._meta("group", department_id),
+            "owner": self._meta("employee", owner_id),
+            "rate": {"currency": self._meta("currency", currency_id)},
+            "positions": positions,
+        }
+        return self._client.post("/entity/retaildemand", body)
+
+    def create_retail_return(
+        self,
+        *,
+        name: str,
+        moment: str,
+        organization_id: str,
+        store_id: str,
+        retail_store_id: str,
+        retail_shift_id: str,
+        department_id: str,
+        owner_id: str,
+        currency_id: str,
+        positions: list[dict[str, Any]],
+        cash_sum: int,
+        non_cash_sum: int,
+    ) -> dict[str, Any]:
+        body = {
+            "name": name,
+            "moment": moment,
+            "description": "",
+            "vatEnabled": True,
+            "vatIncluded": True,
+            "cashSum": cash_sum,
+            "noCashSum": non_cash_sum,
+            "organization": self._meta("organization", organization_id),
+            "store": self._meta("store", store_id),
+            "retailStore": self._meta("retailstore", retail_store_id),
+            "retailShift": self._meta("retailshift", retail_shift_id),
+            "group": self._meta("group", department_id),
+            "owner": self._meta("employee", owner_id),
+            "rate": {"currency": self._meta("currency", currency_id)},
+            "positions": positions,
+        }
+        return self._client.post("/entity/retailsalesreturn", body)
 
     def open_retail_shifts(self, organization_id: str, since: datetime) -> list[dict[str, Any]]:
         """Retail shifts for an organization that have no closeDate yet.

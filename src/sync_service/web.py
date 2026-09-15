@@ -216,7 +216,7 @@ def _dispatch(path, environ, start_response):
 </div></section>
 <section class="card accordion" id="section-sales">
 <div class="accordion-header" data-section="sales" role="button" tabindex="0">
-<div><h2>Синхронизация продаж</h2><p>Тестовый режим: документы в МойСклад пока не создаются. Проверка выполняется каждые 5 минут.</p></div>
+<div><h2>Синхронизация продаж</h2><p>Боевой режим: чеки и возвраты из Novicloud создаются в МойСклад (retaildemand/retailsalesreturn) для магазинов Польши. Проверка каждые 15 минут.</p></div>
 <div style="display:flex;align-items:center;gap:14px"><button class="button secondary" id="refresh-log" type="button">Обновить</button><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-sales" hidden>
@@ -312,7 +312,7 @@ if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??''
 return String(value);}
 function showLogDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
 const doc=docNumber(entry);
-title.textContent=(entry.kind==='sale'?'Продажа':entry.kind==='return'?'Возврат':entry.kind==='order'?'Заказ':'Событие')+(doc?' · '+doc:'');
+title.textContent=(entry.kind==='sale'?'Продажа':entry.kind==='return'?'Возврат':entry.kind==='sale_error'?'Ошибка продажи':entry.kind==='return_error'?'Ошибка возврата':entry.kind==='order'?'Заказ':'Событие')+(doc?' · '+doc:'');
 let payload={};try{payload=JSON.parse(entry.payload);}catch(e){payload={};}
 const labels=fieldLabels();
 let rowsHtml='<dt>Сообщение</dt><dd>'+entry.message+'</dd><dt>Время проверки</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd>';
