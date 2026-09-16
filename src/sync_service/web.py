@@ -18,7 +18,7 @@ from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import process_new_order, sync_order_delivery_state
+from .yandex_market_order_sync import process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -117,19 +117,36 @@ def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
 
 
 def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) -> None:
-    """Mirror DELIVERY/DELIVERED status pushes onto the MoySklad order's state."""
+    """Mirror DELIVERY/DELIVERED status pushes onto the MoySklad order's
+    state, and use the opportunity to notice — and retry — a label that
+    never got confirmed sent (see retry_label_if_missing)."""
     settings = Settings.from_env()
+    order_id = int(notification["orderId"])
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id)
+    telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url) if settings.telegram_bot_token else None
     try:
         sync_order_delivery_state(
-            order_id=int(notification["orderId"]),
+            order_id=order_id,
             status=notification.get("status"),
             substatus=notification.get("substatus"),
             moysklad=moysklad,
             log=log,
         )
+        retry_label_if_missing(
+            order_id=order_id,
+            campaign_id=int(notification["campaignId"]),
+            moysklad=moysklad,
+            yandex=yandex,
+            telegram=telegram,
+            telegram_chat_id=settings.telegram_label_chat_id,
+            log=log,
+        )
     finally:
         moysklad.close()
+        yandex.close()
+        if telegram is not None:
+            telegram.close()
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -391,7 +408,7 @@ shopifyHelpModal.onclick=e=>{if(e.target===shopifyHelpModal)shopifyHelpModal.cla
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
-const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',order_state_updated:'Статус заказа обновлён',order_state_error:'Ошибка статуса заказа',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
+const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',order_state_updated:'Статус заказа обновлён',order_state_error:'Ошибка статуса заказа',label_retry_error:'Повтор отправки этикетки не удался',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
 async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');allYmLogEntries=await response.json();
 const select=document.getElementById('ym-log-kind'), current=select.value, kinds=[...new Set(allYmLogEntries.map(e=>e.kind))].sort();
 select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ymKindLabels[k]||k)+'</option>').join('');

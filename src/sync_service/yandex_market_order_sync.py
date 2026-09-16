@@ -21,6 +21,9 @@ SALES_CHANNEL_ID = "5a2f722a-549c-11ef-0a80-0493000bcbe7"  # "Яндекс Ма�
 DELIVERING_STATE_ID = "ea763d96-9bb8-11ed-0a80-0076000cbaed"  # "Доставляется"
 COMPLETED_STATE_ID = "8e499530-ac67-11e4-7a40-e89700075e01"  # "Выполнен"
 
+LABEL_RETRY_KIND = "label_retry_error"
+MAX_LABEL_RETRIES = 3
+
 # campaignId -> MoySklad store id, one per physical shop.
 CAMPAIGN_STORES: dict[str, str] = {
     "149179204": "497d98c2-7e21-11ee-0a80-0e2a000dc91f",  # ТЦ Авиапарк
@@ -83,6 +86,34 @@ def _build_positions(moysklad: MoySkladClient, items: list[dict[str, Any]]) -> t
             "assortment": {"meta": product["meta"]},
         })
     return positions, missing_codes
+
+
+def _send_label(
+    *,
+    order_id: int,
+    campaign_id: int,
+    items: list[dict[str, Any]],
+    yandex: YandexMarketClient,
+    telegram: TelegramClient | None,
+    telegram_chat_id: str,
+    log: YandexMarketSyncLog,
+    external_code: str,
+) -> bool:
+    """Returns whether the label was actually sent (False only for the
+    "Telegram isn't configured" case — a real send failure raises instead)."""
+    label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
+    if telegram is not None and telegram_chat_id:
+        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+        telegram.send_document(
+            chat_id=telegram_chat_id,
+            document=label_pdf,
+            filename=f"{order_id}.pdf",
+            caption=f"Яндекс.Маркет · {store_name} · заказ {order_id}\n{_format_items(items)}",
+        )
+        log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
+        return True
+    log.add("label_sent", "error", f"Заказ {order_id}: Telegram не настроен, этикетка не отправлена", external_code)
+    return False
 
 
 def process_new_order(
@@ -148,18 +179,48 @@ def process_new_order(
         yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
         log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
 
-    label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
-    if telegram is not None and telegram_chat_id:
-        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
-        telegram.send_document(
-            chat_id=telegram_chat_id,
-            document=label_pdf,
-            filename=f"{order_id}.pdf",
-            caption=f"Яндекс.Маркет · {store_name} · заказ {order_id}\n{_format_items(items)}",
-        )
-        log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
-    else:
-        log.add("label_sent", "error", f"Заказ {order_id}: Telegram не настроен, этикетка не отправлена", external_code)
+    _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+
+
+def retry_label_if_missing(
+    *,
+    order_id: int,
+    campaign_id: int,
+    moysklad: MoySkladClient,
+    yandex: YandexMarketClient,
+    telegram: TelegramClient | None,
+    telegram_chat_id: str,
+    log: YandexMarketSyncLog,
+) -> None:
+    """Best-effort nudge, called alongside every delivery-status update: if
+    the order exists in MoySklad but its label was never confirmed sent (the
+    original attempt hit e.g. a transient Telegram-proxy failure), try again —
+    up to MAX_LABEL_RETRIES times total. Attempts are tracked as numbered log
+    rows (":1", ":2", ...) rather than a plain count, since the log's own
+    (kind, external_id) uniqueness would otherwise collapse repeat failures
+    for the same order into a single row.
+    """
+    external_code = str(order_id)
+    if log.has_success("label_sent", external_code):
+        return
+    if moysklad.customer_order_by_external_code(external_code) is None:
+        return  # order was never created — not this function's job to fix
+
+    attempts_so_far = log.count_matching(LABEL_RETRY_KIND, f"{external_code}:")
+    if attempts_so_far >= MAX_LABEL_RETRIES:
+        return
+    attempt = attempts_so_far + 1
+
+    try:
+        order = yandex.order_by_id(order_id)
+        if order is None:
+            raise RuntimeError("не удалось получить заказ из Яндекс.Маркета")
+        items = order.get("items") or []
+        sent = _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+        if not sent:
+            raise RuntimeError("Telegram не настроен")
+    except Exception as error:
+        log.add(LABEL_RETRY_KIND, "error", f"Заказ {order_id}: повторная попытка {attempt}/{MAX_LABEL_RETRIES} отправить этикетку не удалась: {error}", f"{external_code}:{attempt}")
 
 
 def sync_order_delivery_state(

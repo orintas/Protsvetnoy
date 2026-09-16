@@ -2,7 +2,9 @@ from sync_service.yandex_market_order_sync import (
     CAMPAIGN_STORES,
     COMPLETED_STATE_ID,
     DELIVERING_STATE_ID,
+    MAX_LABEL_RETRIES,
     process_new_order,
+    retry_label_if_missing,
     sync_order_delivery_state,
 )
 from sync_service.yandex_market_sync import YandexMarketSyncLog
@@ -200,3 +202,43 @@ def test_delivery_status_for_unknown_order_logs_error_without_crashing(tmp_path)
     sync_order_delivery_state(order_id=999, status="DELIVERED", substatus=None, moysklad=moysklad, log=log)
     assert moysklad.state_updates == []
     assert log.recent()[0]["kind"] == "order_state_error"
+
+
+def test_retry_label_sends_it_when_order_exists_but_label_never_confirmed(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "already-there"})
+    yandex = FakeYandex(order=_order())
+    telegram = FakeTelegram()
+    retry_label_if_missing(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=telegram, telegram_chat_id="-100123", log=log)
+    assert yandex.label_calls == [(999, "149179260")]
+    assert telegram.sent[0][0] == "-100123"
+    assert log.has_success("label_sent", "999")
+
+
+def test_retry_label_does_nothing_once_already_confirmed_sent(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    log.add("label_sent", "success", "already sent", "999")
+    moysklad = FakeMoySklad(existing_order={"id": "already-there"})
+    yandex = FakeYandex(order=_order())
+    retry_label_if_missing(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=FakeTelegram(), telegram_chat_id="-100123", log=log)
+    assert yandex.label_calls == []
+
+
+def test_retry_label_does_nothing_when_order_was_never_created(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order=None)
+    yandex = FakeYandex(order=_order())
+    retry_label_if_missing(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=FakeTelegram(), telegram_chat_id="-100123", log=log)
+    assert yandex.label_calls == []
+
+
+def test_retry_label_stops_after_max_attempts(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "already-there"})
+    yandex = FakeYandex(order=_order(), fail_label=True)
+    for _ in range(MAX_LABEL_RETRIES + 2):
+        retry_label_if_missing(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=FakeTelegram(), telegram_chat_id="-100123", log=log)
+    assert yandex.label_calls == []  # get_order_label always raised, so no send ever happened
+    errors = [e for e in log.recent() if e["kind"] == "label_retry_error"]
+    assert len(errors) == MAX_LABEL_RETRIES
+    assert not log.has_success("label_sent", "999")

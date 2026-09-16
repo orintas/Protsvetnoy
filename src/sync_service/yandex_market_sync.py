@@ -49,6 +49,18 @@ class YandexMarketSyncLog:
             ).fetchone()
             return row is not None
 
+    def count_matching(self, kind: str, external_id_prefix: str) -> int:
+        """Count rows for a kind whose external_id starts with a given prefix —
+        used to cap numbered retry attempts (external_id "<order>:1", "<order>:2", ...)
+        that would otherwise collapse into one row under the (kind, external_id)
+        uniqueness this table enforces for plain, unprefixed ids."""
+        with sqlite3.connect(self.path) as db:
+            row = db.execute(
+                "SELECT COUNT(*) FROM sync_log WHERE kind=? AND external_id LIKE ?",
+                (kind, external_id_prefix + "%"),
+            ).fetchone()
+            return row[0] if row else 0
+
     def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
         """Match against the full history, not just the most recent rows — an
         order number (external_id) or anything in the message text."""

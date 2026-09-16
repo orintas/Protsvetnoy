@@ -27,3 +27,22 @@ def test_search_finds_an_order_outside_the_recent_window(tmp_path):
     found = log.search("61703852544")
     assert len(found) == 1
     assert found[0]["external_id"] == "61703852544"
+
+
+def test_has_success_checks_kind_and_status(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    assert log.has_success("label_sent", "1") is False
+    log.add("label_sent", "error", "failed", "1")
+    assert log.has_success("label_sent", "1") is False
+    log.add("label_sent", "success", "sent", "2")
+    assert log.has_success("label_sent", "2") is True
+    assert log.has_success("order_created", "2") is False
+
+
+def test_count_matching_counts_by_external_id_prefix(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    assert log.count_matching("label_retry_error", "999:") == 0
+    log.add("label_retry_error", "error", "attempt 1", "999:1")
+    log.add("label_retry_error", "error", "attempt 2", "999:2")
+    log.add("label_retry_error", "error", "unrelated order", "1000:1")
+    assert log.count_matching("label_retry_error", "999:") == 2
