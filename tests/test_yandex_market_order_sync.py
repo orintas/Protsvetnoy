@@ -73,13 +73,29 @@ def test_known_campaigns_have_a_store_mapping():
     assert set(CAMPAIGN_STORES) == {"149179204", "149179258", "149179260", "149179270"}
 
 
-def test_skips_entirely_when_order_already_exists(tmp_path):
+def test_skips_entirely_when_order_and_label_already_done(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    log.add("label_sent", "success", "already sent", "1")
     moysklad = FakeMoySklad(existing_order={"id": "already-there"})
     yandex = FakeYandex()
     process_new_order(order_id=1, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=None, telegram_chat_id="", log=log)
     assert moysklad.created is None
-    assert log.recent() == []
+    assert yandex.label_calls == []  # never even asked Market for the label again
+
+
+def test_resumes_at_label_step_when_order_exists_but_label_was_never_confirmed_sent(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "already-there"})
+    yandex = FakeYandex(order=_order())
+    telegram = FakeTelegram()
+    process_new_order(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.created is None  # order creation NOT retried
+    assert yandex.status_calls == []  # assembly confirmation NOT retried
+    assert yandex.label_calls == [(999, "149179260")]
+    assert telegram.sent[0][0] == "-100123"
+    kinds = [e["kind"] for e in log.recent()]
+    assert kinds == ["label_sent"]
 
 
 def test_unknown_campaign_logs_error_and_does_nothing(tmp_path):

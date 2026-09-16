@@ -38,6 +38,17 @@ class YandexMarketSyncLog:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
 
+    def has_success(self, kind: str, external_id: str) -> bool:
+        """Whether a given (kind, external_id) step already succeeded — used to
+        resume a multi-step pipeline (e.g. a retried webhook) at the step that
+        actually failed, instead of redoing everything or skipping too much."""
+        with sqlite3.connect(self.path) as db:
+            row = db.execute(
+                "SELECT 1 FROM sync_log WHERE kind=? AND external_id=? AND status='success' LIMIT 1",
+                (kind, external_id),
+            ).fetchone()
+            return row is not None
+
     def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
         """Match against the full history, not just the most recent rows — an
         order number (external_id) or anything in the message text."""

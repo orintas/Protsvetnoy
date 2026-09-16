@@ -97,52 +97,56 @@ def process_new_order(
 ) -> None:
     """Create the MoySklad order, confirm assembly, and push the label.
 
-    Idempotent on the MoySklad customerorder's externalCode: once that
-    document exists, every later call for the same order_id is a no-op. This
-    does not track partial failures per step (e.g. order created but label
-    send failed) — a retry after a partial failure will skip everything,
-    since document existence is the only idempotency signal. Known v1
-    limitation; the error log still shows exactly which step failed so it can
-    be finished by hand.
+    Idempotent on the MoySklad customerorder's externalCode, but resumable
+    past that: if the order already exists (created on an earlier attempt)
+    and the label was never confirmed sent, a retry (Market resends
+    ORDER_CREATED on webhook failure) picks up at the label step instead of
+    doing nothing — order creation and assembly confirmation are not
+    re-attempted, since MoySklad/Market's own idempotency for those isn't
+    guaranteed the way the label step's is (via has_success).
     """
     external_code = str(order_id)
-    if moysklad.customer_order_by_external_code(external_code) is not None:
+    order_created_already = moysklad.customer_order_by_external_code(external_code) is not None
+    if order_created_already and log.has_success("label_sent", external_code):
         return
 
-    store_id = CAMPAIGN_STORES.get(str(campaign_id))
-    if not store_id:
-        log.add("order_pipeline_error", "error", f"Заказ {order_id}: неизвестная кампания {campaign_id}, склад не определён", None, {"order_id": order_id, "campaign_id": campaign_id})
-        return
+    store_id = None
+    if not order_created_already:
+        store_id = CAMPAIGN_STORES.get(str(campaign_id))
+        if not store_id:
+            log.add("order_pipeline_error", "error", f"Заказ {order_id}: неизвестная кампания {campaign_id}, склад не определён", None, {"order_id": order_id, "campaign_id": campaign_id})
+            return
 
     order = yandex.order_by_id(order_id)
     if order is None:
         log.add("order_pipeline_error", "error", f"Заказ {order_id}: не удалось получить данные заказа из Яндекс.Маркета", None, {"order_id": order_id, "campaign_id": campaign_id})
         return
-
     items = order.get("items") or []
-    positions, missing_codes = _build_positions(moysklad, items)
-    if missing_codes:
-        log.add("order_pipeline_error", "error", f"Заказ {order_id}: товары не найдены в МойСклад по коду: {', '.join(missing_codes)}", None, order)
-    if not positions:
-        log.add("order_pipeline_error", "error", f"Заказ {order_id}: ни одной позиции не удалось сопоставить, заказ не создан", None, order)
-        return
 
-    description = "Заказанные артикулы: " + ", ".join(str(item.get("offerId") or "") for item in items)
-    moysklad.create_customer_order(
-        name=str(order_id),
-        moment=_moysklad_moment(order.get("creationDate")),
-        organization_id=ORGANIZATION_ID,
-        agent_id=AGENT_ID,
-        store_id=store_id,
-        external_code=external_code,
-        positions=positions,
-        description=description,
-        sales_channel_id=SALES_CHANNEL_ID,
-    )
-    log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+    if not order_created_already:
+        positions, missing_codes = _build_positions(moysklad, items)
+        if missing_codes:
+            log.add("order_pipeline_error", "error", f"Заказ {order_id}: товары не найдены в МойСклад по коду: {', '.join(missing_codes)}", None, order)
+        if not positions:
+            log.add("order_pipeline_error", "error", f"Заказ {order_id}: ни одной позиции не удалось сопоставить, заказ не создан", None, order)
+            return
 
-    yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
-    log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
+        description = "Заказанные артикулы: " + ", ".join(str(item.get("offerId") or "") for item in items)
+        moysklad.create_customer_order(
+            name=str(order_id),
+            moment=_moysklad_moment(order.get("creationDate")),
+            organization_id=ORGANIZATION_ID,
+            agent_id=AGENT_ID,
+            store_id=store_id,
+            external_code=external_code,
+            positions=positions,
+            description=description,
+            sales_channel_id=SALES_CHANNEL_ID,
+        )
+        log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+
+        yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
+        log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
 
     label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
     if telegram is not None and telegram_chat_id:

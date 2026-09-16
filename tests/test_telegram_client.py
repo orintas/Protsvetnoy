@@ -55,3 +55,31 @@ def test_send_document_raises_on_http_error():
     client = _client_with_handler(handler)
     with pytest.raises(RuntimeError, match="400"):
         client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
+
+
+def test_send_document_retries_on_transport_error_then_succeeds(monkeypatch):
+    import sync_service.telegram_client as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise httpx.ConnectError("Connection reset by peer", request=request)
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    client = _client_with_handler(handler)
+    client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
+    assert attempts["count"] == 3
+
+
+def test_send_document_raises_after_exhausting_retries_on_transport_error(monkeypatch):
+    import sync_service.telegram_client as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection reset by peer", request=request)
+
+    client = _client_with_handler(handler)
+    with pytest.raises(httpx.ConnectError):
+        client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
