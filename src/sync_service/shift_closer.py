@@ -125,6 +125,13 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                 )
                 continue
             try:
+                if client.retail_shift_close_date(str(shift.get("id"))):
+                    log.add(
+                        "shift", "success",
+                        f"[{country}] {store}: смена №{shift.get('name')} уже закрыта самой кассой — пропущено",
+                        info,
+                    )
+                    continue
                 client.close_retail_shift(str(shift.get("id")), close_date)
                 log.add(
                     "shift", "success",

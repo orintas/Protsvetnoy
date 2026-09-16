@@ -309,6 +309,15 @@ class MoySkladClient:
                 return result
             payload = self._client.get_url(str(next_link))
 
+    def retail_shift_close_date(self, shift_id: str) -> str | None:
+        """Re-read one shift's closeDate right before closing it — the nightly
+        sweep's own "open shifts" list can go stale between listing and acting
+        if the store's own POS (e.g. Касса МойСклад) closes the same shift in
+        the meantime; closing an already-closed shift fails with a confusing
+        "name" uniqueness error (code 3006) rather than a clear "already closed"."""
+        payload = self._client.get(f"/entity/retailshift/{shift_id}")
+        return payload.get("closeDate")
+
     def close_retail_shift(self, shift_id: str, close_date: str) -> None:
         self._client.put(f"/entity/retailshift/{shift_id}", {"closeDate": close_date})
 
