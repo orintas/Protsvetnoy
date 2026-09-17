@@ -119,7 +119,7 @@ def _send_label(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{order_id}.pdf",
-            caption=f"Яндекс.Маркет · {store_name} · заказ {order_id}\n{_format_items(items)}",
+            caption=f"Яндекс.Маркет\n{store_name}\nЗаказ №{order_id}\n{_format_items(items)}",
             parse_mode="HTML",
         )
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)

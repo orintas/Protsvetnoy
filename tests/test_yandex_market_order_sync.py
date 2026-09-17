@@ -127,7 +127,7 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
     assert yandex.label_calls == [(999, "149179260")]
     assert telegram.sent[0][0] == "-100123"
     assert telegram.sent[0][1] == b"%PDF-fake"
-    assert telegram.sent[0][3] == "Яндекс.Маркет · ТЦ Ривьера · заказ 999\nRGL02 × 1"
+    assert telegram.sent[0][3] == "Яндекс.Маркет\nТЦ Ривьера\nЗаказ №999\nRGL02 × 1"
     assert telegram.sent[0][4] == "HTML"
 
 
@@ -140,7 +140,7 @@ def test_caption_highlights_items_ordered_more_than_once(tmp_path):
     telegram = FakeTelegram()
     process_new_order(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=telegram, telegram_chat_id="-100123", log=log)
 
-    assert telegram.sent[0][3] == "Яндекс.Маркет · ТЦ Ривьера · заказ 999\n🔴 <b>RGL02 × 2</b>"
+    assert telegram.sent[0][3] == "Яндекс.Маркет\nТЦ Ривьера\nЗаказ №999\n🔴 <b>RGL02 × 2</b>"
     assert telegram.sent[0][4] == "HTML"
 
     kinds = [e["kind"] for e in log.recent()]
