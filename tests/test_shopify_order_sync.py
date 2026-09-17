@@ -5,8 +5,10 @@ import hmac
 from sync_service.shopify_order_sync import (
     BALTIC_WAREHOUSE_CHAIN,
     COUNTRY_AGENTS,
+    CURRENCY_ID,
     MAIN_STORE_ID,
     POLAND_WAREHOUSE_CHAIN,
+    SHIPPING_STATE_ID,
     ULEMISTE_STORE_ID,
     WOLA_PARK_STORE_ID,
     process_new_order,
@@ -45,7 +47,16 @@ def _order(order_id=1001, name="#7775", country_code="EE", line_items=None):
         "id": order_id,
         "name": name,
         "created_at": "2026-09-16T17:48:46+03:00",
-        "shipping_address": {"country_code": country_code},
+        "shipping_address": {
+            "country_code": country_code,
+            "name": "Jane Doe",
+            "address1": "Main St 1",
+            "address2": "",
+            "city": "Tallinn",
+            "zip": "10111",
+            "country": "Estonia",
+            "phone": "+3725551234",
+        },
         "line_items": line_items if line_items is not None else [{"sku": "ABC", "quantity": 1, "price": "14.00"}],
     }
 
@@ -63,7 +74,9 @@ def test_creates_order_from_main_warehouse_when_stock_available(tmp_path):
     assert moysklad.created["external_code"] == "1001"
     assert moysklad.created["agent_id"] == COUNTRY_AGENTS["EE"]
     assert "name" not in moysklad.created  # MoySklad auto-numbers it
-    assert moysklad.created["description"].startswith("#7775\n")
+    assert moysklad.created["description"] == "#7775\nАдрес доставки: Jane Doe, Main St 1, Tallinn, 10111, Estonia, +3725551234"
+    assert moysklad.created["currency_id"] == CURRENCY_ID
+    assert moysklad.created["state_id"] == SHIPPING_STATE_ID
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["order_created"]
@@ -157,6 +170,18 @@ def test_no_matching_products_at_all_skips_order_creation(tmp_path):
     moysklad = FakeMoySklad(products={})
     process_new_order(order=_order(), moysklad=moysklad, log=log)
     assert moysklad.created is None
+
+
+def test_description_falls_back_to_order_name_when_address_is_missing(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(
+        products={"ABC": _product("ABC")},
+        stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 5}]},
+    )
+    order = _order()
+    order["shipping_address"] = {"country_code": "EE"}  # no address fields at all
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["description"] == "#7775"
 
 
 def test_verify_webhook_signature_accepts_correct_hmac():

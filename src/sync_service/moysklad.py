@@ -137,6 +137,15 @@ class MoySkladClient:
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
+    def _state_meta(self, state_id: str) -> dict[str, Any]:
+        return {
+            "meta": {
+                "href": f"{self._client.base_url}/entity/customerorder/metadata/states/{state_id}",
+                "type": "state",
+                "mediaType": "application/json",
+            }
+        }
+
     def create_customer_order(
         self,
         *,
@@ -149,6 +158,8 @@ class MoySkladClient:
         positions: list[dict[str, Any]],
         description: str = "",
         sales_channel_id: str | None = None,
+        currency_id: str | None = None,
+        state_id: str | None = None,
     ) -> dict[str, Any]:
         """`name=None` lets MoySklad assign the next number in its own shared
         sequence — the convention already used for every manually-entered
@@ -166,6 +177,10 @@ class MoySkladClient:
             body["name"] = name
         if sales_channel_id:
             body["salesChannel"] = self._meta("saleschannel", sales_channel_id)
+        if currency_id:
+            body["rate"] = {"currency": self._meta("currency", currency_id)}
+        if state_id:
+            body["state"] = self._state_meta(state_id)
         return self._client.post("/entity/customerorder", body)
 
     def update_customer_order_state(self, order_id: str, state_id: str) -> dict[str, Any]:
@@ -176,16 +191,7 @@ class MoySkladClient:
         but the id itself has to be looked up per account via GET
         /entity/customerorder/metadata; not reusable across MoySklad accounts.
         """
-        body = {
-            "state": {
-                "meta": {
-                    "href": f"{self._client.base_url}/entity/customerorder/metadata/states/{state_id}",
-                    "type": "state",
-                    "mediaType": "application/json",
-                }
-            }
-        }
-        return self._client.put(f"/entity/customerorder/{order_id}", body)
+        return self._client.put(f"/entity/customerorder/{order_id}", {"state": self._state_meta(state_id)})
 
     def last_document_moment(self, entity: str, retail_store_id: str) -> str | None:
         """Most recent `moment` of a document (e.g. retaildemand) for one retail store, or None if there's none yet."""

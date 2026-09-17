@@ -26,6 +26,8 @@ def verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 # organization, agent placeholders) and cross-checked against the API directly.
 ORGANIZATION_ID = "666e33cc-1b25-11ea-0a80-061e0003c973"  # Varvikas Grupp OU
 SALES_CHANNEL_ID = "233f92ab-d2d8-11ed-0a80-10df000eaa30"  # "Shopify"
+CURRENCY_ID = "5100bbd5-1cec-11ea-0a80-04b1000ad00d"  # EUR
+SHIPPING_STATE_ID = "dd675d83-a396-11e2-c56e-001b21d91495"  # customerorder state "Отгружать"
 
 # Baltic + Finland: ship from the main warehouse first, Ulemiste as fallback.
 MAIN_STORE_ID = "d9a80084-1bf4-11ea-0a80-057b000493d9"  # warehouse "ProTsvetnoy OU"
@@ -99,6 +101,20 @@ def _pick_store(moysklad: MoySkladClient, country_code: str, skus_needed: dict[s
     return chain[-1]
 
 
+def _format_address(order: dict[str, Any]) -> str:
+    address = order.get("shipping_address") or {}
+    parts = [
+        address.get("name"),
+        address.get("address1"),
+        address.get("address2"),
+        address.get("city"),
+        address.get("zip"),
+        address.get("country"),
+        address.get("phone"),
+    ]
+    return ", ".join(str(part) for part in parts if part)
+
+
 def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     missing_skus: list[str] = []
@@ -153,7 +169,8 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
             skus_needed[sku] = skus_needed.get(sku, 0) + (item.get("quantity") or 1)
     store_id = _pick_store(moysklad, country_code, skus_needed)
 
-    description = f"{order_name}\nЗаказа из интернет магазина нужно упаковать, наклеить наклейку и отправить через паркомат."
+    address = _format_address(order)
+    description = f"{order_name}\nАдрес доставки: {address}" if address else order_name
     moysklad.create_customer_order(
         moment=_moysklad_moment(order.get("created_at")),
         organization_id=ORGANIZATION_ID,
@@ -163,5 +180,7 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
         positions=positions,
         description=description,
         sales_channel_id=SALES_CHANNEL_ID,
+        currency_id=CURRENCY_ID,
+        state_id=SHIPPING_STATE_ID,
     )
     log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
