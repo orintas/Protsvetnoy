@@ -330,7 +330,15 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <p class="muted" style="margin:0 0 6px"><strong>Ассортимент</strong> — раз в сутки, в 03:00 по Москве, по выбранным категориям МойСклад (шестерёнка → «Категории»).</p>
 <p class="muted" style="margin:0"><strong>Остатки</strong> — каждые 30 минут, 09:00–22:00 по Москве, по выбранным складам (шестерёнка → «Склады»), суммируются в одно число на товар. Подробности — кнопка «?».</p>
 </div></section>
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Shopify — журнал синхронизации</h2><p style="margin:0">Товары и остатки, отправленные в Shopify.</p></div><button class="button secondary" id="refresh-shopify-log" type="button">Обновить</button></div>
+<section class="card accordion" id="section-shopify-orders">
+<div class="accordion-header" data-section="shopify-orders" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация заказов</h2><button class="help-btn" id="shopify-orders-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" hidden>
+<p class="muted" style="margin:0">Боевой режим: новый заказ Shopify по вебхуку сразу создаётся в МойСклад как заказ покупателя. Подробности — кнопка «?».</p>
+</div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Shopify — журнал синхронизации</h2><p style="margin:0">Товары, остатки и заказы, отправленные в/из Shopify.</p></div><button class="button secondary" id="refresh-shopify-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="shopify-log-kind" class="field"><option value="">Все типы</option></select><input id="shopify-log-search" class="field" placeholder="Поиск по артикулу" style="min-width:220px"></div>
 <div id="shopify-sync-log" class="log"></div></section>
 </section>
@@ -363,6 +371,22 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <p class="muted" style="margin:0 0 10px"><strong>Остатки.</strong> Каждые 30 минут, с 09:00 до 22:00 по Москве, сервис суммирует остатки по всем выбранным складам для каждого уже синхронизированного товара и обновляет его доступное количество в Shopify. Отправляются только значения, которые реально изменились.</p>
 <p class="muted" style="margin:0">Если ни один склад не отмечен — синхронизировать нечего.</p>
 <button class="button secondary modal-close" id="shopify-help-close" type="button">Закрыть</button>
+</div></div>
+<div class="modal-overlay" id="shopify-orders-help-modal"><div class="modal">
+<h3>Как работает синхронизация заказов Shopify</h3>
+<p class="muted" style="margin:0 0 10px">Срабатывает сразу по вебхуку Shopify <code>orders/create</code> (подпись запроса проверяется секретом приложения). Для каждого нового заказа:</p>
+<ol class="muted" style="margin:0 0 14px;padding-left:20px;line-height:1.7">
+<li>Проверяет, нет ли уже заказа с этим ID Shopify в МойСклад (по <code>externalCode</code>) — если есть, ничего не делает.</li>
+<li>Определяет покупателя по стране доставки: подставляется существующий контрагент-заглушка «<b>XX</b> клиент e-shop» (EE, LT, LV, FI, PL, DE, FR и т.д. — те же, что уже используются для заказов, оформленных вручную). Если страна не входит в список — заказ не создаётся, ошибка в журнале.</li>
+<li>Подбирает склад по стране доставки, проверяя остатки по каждому товару заказа:
+<br>· Финляндия, Эстония, Латвия, Литва — сначала основной склад (ProTsvetnoy OU), если чего-то не хватает — склад Ulemiste;
+<br>· остальная Европа — сначала Wola Park, если не хватает — любой другой активный склад Польши.
+<br>Берётся первый склад в цепочке, где хватает всех позиций; если не хватает нигде — заказ всё равно создаётся с последнего склада в цепочке.</li>
+<li>Сопоставляет товары заказа с МойСклад по артикулу (SKU). Товары без совпадения — в журнал как ошибка; если совпала хотя бы одна позиция, заказ создаётся, если ни одной — не создаётся.</li>
+<li>Создаёт заказ покупателя: организация «Varvikas Grupp OU», канал продаж «Shopify», номер присваивает сам МойСклад (как и всем заказам сейчас), а номер заказа Shopify (например «#7775») уходит в описание документа.</li>
+</ol>
+<p class="muted" style="margin:0">Отмены, возвраты и изменения уже созданных заказов синхронизация пока не обрабатывает — только создание нового заказа.</p>
+<button class="button secondary modal-close" id="shopify-orders-help-close" type="button">Закрыть</button>
 </div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
 <button class="modal-close-x" id="categories-close-x" type="button" aria-label="Закрыть" title="Закрыть">×</button>
@@ -448,6 +472,10 @@ const shopifyHelpBtn=document.getElementById('shopify-help'), shopifyHelpModal=d
 shopifyHelpBtn.onclick=()=>shopifyHelpModal.classList.add('open');
 document.getElementById('shopify-help-close').onclick=()=>shopifyHelpModal.classList.remove('open');
 shopifyHelpModal.onclick=e=>{if(e.target===shopifyHelpModal)shopifyHelpModal.classList.remove('open');};
+const shopifyOrdersHelpBtn=document.getElementById('shopify-orders-help'), shopifyOrdersHelpModal=document.getElementById('shopify-orders-help-modal');
+shopifyOrdersHelpBtn.onclick=()=>shopifyOrdersHelpModal.classList.add('open');
+document.getElementById('shopify-orders-help-close').onclick=()=>shopifyOrdersHelpModal.classList.remove('open');
+shopifyOrdersHelpModal.onclick=e=>{if(e.target===shopifyOrdersHelpModal)shopifyOrdersHelpModal.classList.remove('open');};
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
