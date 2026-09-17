@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -67,7 +68,17 @@ def _moysklad_moment(iso_moment: str | None) -> str:
 
 
 def _format_items(items: list[dict[str, Any]]) -> str:
-    return "\n".join(f"{item.get('offerId') or '(пусто)'} × {item.get('count', 1)}" for item in items)
+    """HTML-formatted for Telegram (parse_mode=HTML): a line for count > 1 is
+    bolded and marked with 🔴 — Telegram captions have no colored text, so
+    this is the closest practical equivalent — to catch the cashier's eye
+    when the same item is ordered twice."""
+    lines = []
+    for item in items:
+        sku = escape(str(item.get("offerId") or "(пусто)"))
+        count = item.get("count", 1)
+        line = f"{sku} × {count}"
+        lines.append(f"🔴 <b>{line}</b>" if count and count > 1 else line)
+    return "\n".join(lines)
 
 
 def _build_positions(moysklad: MoySkladClient, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -109,6 +120,7 @@ def _send_label(
             document=label_pdf,
             filename=f"{order_id}.pdf",
             caption=f"Яндекс.Маркет · {store_name} · заказ {order_id}\n{_format_items(items)}",
+            parse_mode="HTML",
         )
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
         return True

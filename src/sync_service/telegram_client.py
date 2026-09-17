@@ -21,14 +21,17 @@ class TelegramClient:
         retried the same way JsonClient retries MoySklad/Novicloud."""
         self._client = httpx.Client(base_url=f"https://api.telegram.org/bot{bot_token}", timeout=30.0, proxy=proxy or None)
 
-    def send_document(self, *, chat_id: str, document: bytes, filename: str, caption: str = "") -> dict[str, Any]:
+    def send_document(self, *, chat_id: str, document: bytes, filename: str, caption: str = "", parse_mode: str | None = None) -> dict[str, Any]:
+        data = {"chat_id": chat_id, "caption": caption}
+        if parse_mode:
+            data["parse_mode"] = parse_mode
         attempt = 0
         while True:
             attempt += 1
             try:
                 response = self._client.post(
                     "/sendDocument",
-                    data={"chat_id": chat_id, "caption": caption},
+                    data=data,
                     files={"document": (filename, document, "application/pdf")},
                 )
             except httpx.TransportError:
