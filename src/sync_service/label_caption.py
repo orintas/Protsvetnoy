@@ -25,3 +25,9 @@ def format_items_html(items: list[dict[str, Any]]) -> str:
 def build_caption(*, marketplace: str, store_name: str, order_label: str, items: list[dict[str, Any]]) -> str:
     """marketplace/store_name/order_label each get their own line, then one line per item."""
     return f"{marketplace}\n{store_name}\n{order_label}\n{format_items_html(items)}"
+
+
+def format_items_plain(items: list[dict[str, Any]]) -> str:
+    """Same one-line-per-item shape as format_items_html, but plain text —
+    for a MoySklad document's `description` field, which doesn't render HTML."""
+    return "\n".join(f"{item.get('sku') or '(пусто)'} × {item.get('count', 1)}" for item in items)

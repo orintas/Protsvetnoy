@@ -1,4 +1,4 @@
-from sync_service.label_caption import build_caption, format_items_html
+from sync_service.label_caption import build_caption, format_items_html, format_items_plain
 
 
 def test_format_items_html_plain_for_single_count():
@@ -21,3 +21,8 @@ def test_format_items_html_joins_multiple_lines():
 def test_build_caption_puts_each_field_on_its_own_line():
     caption = build_caption(marketplace="OZON", store_name="ТЦ Ривьера", order_label="Заказ №123", items=[{"sku": "A", "count": 1}])
     assert caption == "OZON\nТЦ Ривьера\nЗаказ №123\nA × 1"
+
+
+def test_format_items_plain_no_html_and_no_highlighting():
+    items = [{"sku": "A", "count": 1}, {"sku": "B", "count": 3}]
+    assert format_items_plain(items) == "A × 1\nB × 3"

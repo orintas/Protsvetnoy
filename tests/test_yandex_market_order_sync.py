@@ -122,6 +122,7 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
     assert moysklad.created["store_id"] == CAMPAIGN_STORES["149179260"]
     assert moysklad.created["external_code"] == "999"
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 36130000, "assortment": {"meta": product["meta"]}}]
+    assert moysklad.created["description"] == "RGL02 × 1"
 
     assert yandex.status_calls == [(999, "149179260", "PROCESSING", "READY_TO_SHIP")]
     assert yandex.label_calls == [(999, "149179260")]
@@ -129,6 +130,22 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
     assert telegram.sent[0][1] == b"%PDF-fake"
     assert telegram.sent[0][3] == "Яндекс.Маркет\nТЦ Ривьера\nЗаказ №999\nRGL02 × 1"
     assert telegram.sent[0][4] == "HTML"
+
+
+def test_description_lists_each_ordered_sku_with_quantity_on_its_own_line(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    product_a = {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/a", "type": "product"}}
+    product_b = {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/b", "type": "product"}}
+    moysklad = FakeMoySklad(products={"RGL02": product_a, "LE148": product_b})
+    order = _order()
+    order["items"] = [
+        {"offerId": "RGL02", "count": 2, "prices": {"payment": {"value": 100.0}}},
+        {"offerId": "LE148", "count": 1, "prices": {"payment": {"value": 50.0}}},
+    ]
+    yandex = FakeYandex(order=order)
+    process_new_order(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=None, telegram_chat_id="", log=log)
+
+    assert moysklad.created["description"] == "RGL02 × 2\nLE148 × 1"
 
 
 def test_caption_highlights_items_ordered_more_than_once(tmp_path):

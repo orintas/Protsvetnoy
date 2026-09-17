@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .label_caption import build_caption
+from .label_caption import build_caption, format_items_plain
 from .moysklad import MoySkladClient
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
@@ -161,7 +161,8 @@ def process_new_order(
             log.add("order_pipeline_error", "error", f"Заказ {order_id}: ни одной позиции не удалось сопоставить, заказ не создан", None, order)
             return
 
-        description = "Заказанные артикулы: " + ", ".join(str(item.get("offerId") or "") for item in items)
+        description_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
+        description = format_items_plain(description_items)
         moysklad.create_customer_order(
             name=str(order_id),
             moment=_moysklad_moment(order.get("creationDate")),
