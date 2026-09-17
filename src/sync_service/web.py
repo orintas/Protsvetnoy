@@ -13,6 +13,8 @@ from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .shift_closer import ShiftCloseLog, list_open_shifts
+from .shopify_order_sync import process_new_order as process_new_shopify_order
+from .shopify_order_sync import verify_webhook_signature as verify_shopify_webhook_signature
 from .shopify_sync import ShopifySyncLog
 from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
@@ -147,6 +149,47 @@ def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) ->
         yandex.close()
         if telegram is not None:
             telegram.close()
+
+
+def _shopify_order_webhook(environ, start_response):
+    """Receives Shopify's orders/create webhook and creates the matching
+    MoySklad customerorder (see process_new_shopify_order). Authenticity is
+    checked via the X-Shopify-Hmac-Sha256 signature (Shopify has no source-IP
+    allowlist, unlike Yandex Market) — the raw body bytes are needed for that,
+    so this reads them directly rather than through _read_json_body.
+    """
+    settings = Settings.from_env()
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        length = 0
+    raw_body = environ["wsgi.input"].read(length) if length else b""
+    signature = environ.get("HTTP_X_SHOPIFY_HMAC_SHA256", "")
+    if not verify_shopify_webhook_signature(raw_body, signature, settings.shopify_api_secret):
+        start_response("401 Unauthorized", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"invalid signature"]
+
+    log = ShopifySyncLog()
+    try:
+        order = loads(raw_body.decode("utf-8")) if raw_body else {}
+        if not isinstance(order, dict):
+            raise ValueError("Shopify order payload is not a JSON object")
+    except Exception as error:
+        ErrorLog().log_exception("shopify_order_webhook", error, context="Некорректный payload заказа Shopify")
+        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"bad request"]
+
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    try:
+        process_new_shopify_order(order=order, moysklad=moysklad, log=log)
+    except Exception as error:
+        ErrorLog().log_exception("shopify_order_webhook", error, context=f"Ошибка обработки заказа Shopify {order.get('name')}")
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"internal error"]
+    finally:
+        moysklad.close()
+    start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+    return [b"ok"]
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -433,7 +476,7 @@ catch(error){target.innerHTML='<p class="error">Не удалось загруз
 let allShopifyLogEntries=[];
 let shopifySearchResults=null;
 let shopifySearchTimer=null;
-const shopifyKindLabels={catalog_created:'Товар создан',catalog_update:'Товар обновлён',catalog_error:'Ошибка ассортимента',stock_sync:'Остаток изменён',stock_run:'Синхронизация остатков',stock_error:'Ошибка остатков'};
+const shopifyKindLabels={catalog_created:'Товар создан',catalog_update:'Товар обновлён',catalog_error:'Ошибка ассортимента',stock_sync:'Остаток изменён',stock_run:'Синхронизация остатков',stock_error:'Ошибка остатков',order_created:'Заказ создан',order_error:'Ошибка заказа'};
 async function loadShopifyLog(){const target=document.getElementById('shopify-sync-log');try{const response=await fetch('/api/shopify-sync-log');allShopifyLogEntries=await response.json();
 const select=document.getElementById('shopify-log-kind'), current=select.value, kinds=[...new Set(allShopifyLogEntries.map(e=>e.kind))].sort();
 select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(shopifyKindLabels[k]||k)+'</option>').join('');
@@ -545,6 +588,8 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return [payload]
     if path == "/api/yandex-market/webhook/notification" and environ.get("REQUEST_METHOD") == "POST":
         return _yandex_market_webhook(environ, start_response)
+    if path == "/api/shopify/webhook/orders" and environ.get("REQUEST_METHOD") == "POST":
+        return _shopify_order_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(

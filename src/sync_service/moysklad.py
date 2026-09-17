@@ -140,7 +140,7 @@ class MoySkladClient:
     def create_customer_order(
         self,
         *,
-        name: str,
+        name: str | None = None,
         moment: str,
         organization_id: str,
         agent_id: str,
@@ -150,8 +150,10 @@ class MoySkladClient:
         description: str = "",
         sales_channel_id: str | None = None,
     ) -> dict[str, Any]:
+        """`name=None` lets MoySklad assign the next number in its own shared
+        sequence — the convention already used for every manually-entered
+        customer order in this account, Shopify included."""
         body: dict[str, Any] = {
-            "name": name,
             "moment": moment,
             "externalCode": external_code,
             "description": description,
@@ -160,6 +162,8 @@ class MoySkladClient:
             "store": self._meta("store", store_id),
             "positions": positions,
         }
+        if name is not None:
+            body["name"] = name
         if sales_channel_id:
             body["salesChannel"] = self._meta("saleschannel", sales_channel_id)
         return self._client.post("/entity/customerorder", body)

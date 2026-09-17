@@ -21,6 +21,7 @@ class Settings:
     shopify_shop_domain: str
     shopify_access_token: str
     shopify_api_version: str
+    shopify_api_secret: str
     make_api_token: str
     make_base_url: str
     telegram_bot_token: str
@@ -54,6 +55,7 @@ class Settings:
             shopify_shop_domain=os.getenv("SHOPIFY_SHOP_DOMAIN", ""),
             shopify_access_token=os.getenv("SHOPIFY_ACCESS_TOKEN", ""),
             shopify_api_version=os.getenv("SHOPIFY_API_VERSION", "2026-07"),
+            shopify_api_secret=os.getenv("SHOPIFY_API_SECRET", ""),
             make_api_token=os.getenv("MAKE_API_TOKEN", ""),
             make_base_url=os.getenv("MAKE_BASE_URL", "https://eu1.make.com/api/v2").rstrip("/"),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
