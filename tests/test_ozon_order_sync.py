@@ -12,6 +12,8 @@ class FakeSettings:
     telegram_bot_token = "test-bot-token"
     telegram_proxy_url = ""
     telegram_label_chat_id = "-100123"
+    moysklad_base_url = "https://api.moysklad.ru/api/remap/1.2"
+    moysklad_token = "test-moysklad-token"
 
 
 class FakeOzon:
@@ -53,11 +55,31 @@ class FakeTelegram:
         pass
 
 
-def _patched(monkeypatch, ozon, telegram=None):
+class FakeMoySklad:
+    def __init__(self, orders_by_name=None):
+        self.orders_by_name = orders_by_name or {}
+        self.description_updates = []
+        self.closed = False
+
+    def customer_order_by_name(self, name):
+        return self.orders_by_name.get(name)
+
+    def update_customer_order_description(self, order_id, description):
+        self.description_updates.append((order_id, description))
+        for order in self.orders_by_name.values():
+            if str(order["id"]) == order_id:
+                order["description"] = description
+
+    def close(self):
+        self.closed = True
+
+
+def _patched(monkeypatch, ozon, telegram=None, moysklad=None):
     import sync_service.ozon_order_sync as mod
     monkeypatch.setattr(mod, "OzonClient", lambda **kwargs: ozon)
     if telegram is not None:
         monkeypatch.setattr(mod, "TelegramClient", lambda **kwargs: telegram)
+    monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad or FakeMoySklad())
 
 
 def _posting(status, *, warehouse="ТЦ Саларис", products=None):
@@ -204,3 +226,64 @@ def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_
     assert queue.pending() == []
     entries = log.recent()
     assert any(e["kind"] == "label_sent" and e["status"] == "error" for e in entries)
+
+
+def test_run_once_prepends_sku_list_to_existing_moysklad_order_description(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": "уже здесь"}})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log)
+
+    assert moysklad.description_updates == [("order-1", "LE148 × 1\nуже здесь")]
+    entries = log.recent()
+    assert any(e["kind"] == "description_updated" and e["status"] == "success" for e in entries)
+
+
+def test_run_once_sets_description_without_leading_separator_when_none_existing(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": ""}})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log)
+
+    assert moysklad.description_updates == [("order-1", "LE148 × 1")]
+
+
+def test_run_once_skips_description_update_when_moysklad_order_not_found_yet(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_packaging")})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log)
+
+    assert moysklad.description_updates == []
+    pending = queue.pending()
+    assert len(pending) == 1 and pending[0]["description_updated"] == 0  # will retry next tick
+
+
+def test_run_once_does_not_repeat_description_update_on_second_tick(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver"), "X-2": _posting("awaiting_deliver")}, fail_label_with={"X-1": "not ready"})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": ""}})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log)
+
+    assert len(moysklad.description_updates) == 1  # only the first tick touched it

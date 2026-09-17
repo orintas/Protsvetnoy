@@ -9,7 +9,8 @@ from typing import Any
 from .config import Settings
 from .error_log import ErrorLog
 from .http import ApiError
-from .label_caption import build_caption
+from .label_caption import build_caption, format_items_plain
+from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
 from .telegram_client import TelegramClient
 from .yandex_market_sync import YandexMarketSyncLog
@@ -53,7 +54,7 @@ class PendingPostings:
                 """CREATE TABLE IF NOT EXISTS pending_postings (
                 posting_number TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, shipped INTEGER NOT NULL DEFAULT 0,
-                done INTEGER NOT NULL DEFAULT 0)"""
+                description_updated INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0)"""
             )
 
     def add(self, posting_number: str) -> bool:
@@ -73,6 +74,10 @@ class PendingPostings:
     def mark_shipped(self, posting_number: str) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE pending_postings SET shipped=1 WHERE posting_number=?", (posting_number,))
+
+    def mark_description_updated(self, posting_number: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE pending_postings SET description_updated=1 WHERE posting_number=?", (posting_number,))
 
     def increment_attempts(self, posting_number: str) -> int:
         with sqlite3.connect(self.path) as db:
@@ -141,7 +146,23 @@ def _send_label(
     return True  # nothing left to retry — the config problem won't fix itself on a re-attempt
 
 
-def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog) -> None:
+def _update_moysklad_description(posting_number: str, details: dict[str, Any], moysklad: MoySkladClient, queue: PendingPostings, log: YandexMarketSyncLog) -> None:
+    """Prepends the ordered SKUs (one per line, with quantity) to whatever
+    description OZON's own MoySklad integration already wrote — that other
+    integration creates the customerorder itself (named after the posting
+    number), we only ever touch its description field."""
+    order = moysklad.customer_order_by_name(posting_number)
+    if order is None:
+        return  # the other integration hasn't created the document yet — retry next tick
+    items = [{"sku": p.get("offer_id"), "count": p.get("quantity", 1)} for p in details.get("products", [])]
+    existing = order.get("description") or ""
+    description = f"{format_items_plain(items)}\n{existing}" if existing else format_items_plain(items)
+    moysklad.update_customer_order_description(str(order["id"]), description)
+    log.add("description_updated", "success", f"Отправление {posting_number}: список товаров добавлен в описание заказа МойСклад", posting_number)
+    queue.mark_description_updated(posting_number)
+
+
+def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog) -> None:
     posting_number = row["posting_number"]
     attempts = queue.increment_attempts(posting_number)
     if attempts > MAX_ATTEMPTS:
@@ -158,6 +179,12 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
         log.add("order_cancelled", "success", f"Отправление {posting_number}: статус «{status}», этикетка не нужна", posting_number)
         queue.mark_done(posting_number)
         return
+
+    if not row["description_updated"]:
+        try:
+            _update_moysklad_description(posting_number, details, moysklad, queue, log)
+        except Exception as error:
+            log.add("order_pipeline_error", "error", f"Отправление {posting_number}: не удалось обновить описание заказа в МойСклад: {error}", posting_number)
 
     already_shipped = bool(row["shipped"])
     if status == SHIP_FROM_STATUS and not already_shipped:
@@ -180,15 +207,17 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
 
 def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLog) -> None:
     ozon = OzonClient(client_id=settings.ozon_client_id, api_key=settings.ozon_api_key)
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url) if settings.telegram_bot_token else None
     try:
         for row in queue.pending():
             try:
-                _process_one(row, queue, ozon, telegram, settings.telegram_label_chat_id, log)
+                _process_one(row, queue, ozon, moysklad, telegram, settings.telegram_label_chat_id, log)
             except Exception as error:
                 log.add("order_pipeline_error", "error", f"Отправление {row['posting_number']}: ошибка обработки: {error}", row["posting_number"])
     finally:
         ozon.close()
+        moysklad.close()
         if telegram is not None:
             telegram.close()
 

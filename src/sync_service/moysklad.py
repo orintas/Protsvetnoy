@@ -137,6 +137,17 @@ class MoySkladClient:
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
+    def customer_order_by_name(self, name: str) -> dict[str, Any] | None:
+        """For orders created by some other integration, keyed by document
+        name rather than externalCode (e.g. OZON's own MoySklad integration
+        names each customerorder after the posting_number)."""
+        payload = self._client.get("/entity/customerorder", params={"filter": f"name={name}", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def update_customer_order_description(self, order_id: str, description: str) -> dict[str, Any]:
+        return self._client.put(f"/entity/customerorder/{order_id}", {"description": description})
+
     def _state_meta(self, state_id: str) -> dict[str, Any]:
         return {
             "meta": {
