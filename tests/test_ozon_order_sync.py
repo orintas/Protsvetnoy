@@ -1,6 +1,9 @@
 from sync_service.http import ApiError
-from sync_service.ozon_order_sync import MAX_ATTEMPTS, PendingPostings, handle_webhook_notification, run_once
+from sync_service.ozon_order_sync import MAX_ATTEMPTS, RFBS_WAREHOUSE_IDS, PendingPostings, handle_webhook_notification, run_once
 from sync_service.yandex_market_sync import YandexMarketSyncLog
+
+RFBS_WAREHOUSE_ID = next(iter(RFBS_WAREHOUSE_IDS))
+MAIN_WAREHOUSE_ID = 23709754228000  # "Склад Цветной" — plain FBS, not rFBS; deliberately excluded
 
 
 class FakeSettings:
@@ -76,12 +79,23 @@ def test_webhook_ping_returns_ack_payload(tmp_path):
 def test_webhook_new_posting_enqueues_once(tmp_path):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
-    result1 = handle_webhook_notification({"message_type": "TYPE_NEW_POSTING", "posting_number": "X-1"}, queue, log)
-    result2 = handle_webhook_notification({"message_type": "TYPE_NEW_POSTING", "posting_number": "X-1"}, queue, log)
+    payload = {"message_type": "TYPE_NEW_POSTING", "posting_number": "X-1", "warehouse_id": RFBS_WAREHOUSE_ID}
+    result1 = handle_webhook_notification(payload, queue, log)
+    result2 = handle_webhook_notification(payload, queue, log)
     assert result1 == {"result": True}
     assert result2 == {"result": True}
     assert [r["posting_number"] for r in queue.pending()] == ["X-1"]
     assert len(log.recent()) == 1  # second, duplicate webhook did not log again
+
+
+def test_webhook_new_posting_for_main_warehouse_is_ignored(tmp_path):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    payload = {"message_type": "TYPE_NEW_POSTING", "posting_number": "X-1", "warehouse_id": MAIN_WAREHOUSE_ID}
+    result = handle_webhook_notification(payload, queue, log)
+    assert result == {"result": True}  # still acked — just not queued
+    assert queue.pending() == []
+    assert log.recent() == []
 
 
 def test_webhook_other_types_are_acked_without_side_effects(tmp_path):

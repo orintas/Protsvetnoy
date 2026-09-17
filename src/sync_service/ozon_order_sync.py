@@ -14,6 +14,17 @@ from .ozon_client import OzonClient
 from .telegram_client import TelegramClient
 from .yandex_market_sync import YandexMarketSyncLog
 
+# Only these 4 rFBS mall warehouses get their labels sent to Telegram — same
+# ids as ozon_stock_sync.OZON_WAREHOUSES minus "Склад Цветной" (Основной
+# склад), which is plain FBS, not rFBS. Per explicit request: the main
+# warehouse's postings are left alone entirely (not even enqueued).
+RFBS_WAREHOUSE_IDS = {
+    1020001195674000,  # Экспресс_ТЦ_Авиапарк
+    1020005000377375,  # ТЦ Саларис
+    1020001195607000,  # ТЦ Ривьера
+    1020000096205000,  # Экспресс_ТЦ Мега Химки
+}
+
 # Statuses at/after which a posting's label is expected to be downloadable —
 # confirmed live: real postings sitting in "awaiting_deliver" already had
 # "label_download" in their available_actions. Ship only applies to postings
@@ -87,7 +98,11 @@ def handle_webhook_notification(payload: dict[str, Any], queue: PendingPostings,
         return {"version": "1.0.0", "name": "Varvikas sync service", "time": now}
     if message_type == "TYPE_NEW_POSTING":
         posting_number = str(payload.get("posting_number") or "")
-        if posting_number and queue.add(posting_number):
+        try:
+            warehouse_id = int(payload.get("warehouse_id") or 0)
+        except (TypeError, ValueError):
+            warehouse_id = 0
+        if posting_number and warehouse_id in RFBS_WAREHOUSE_IDS and queue.add(posting_number):
             log.add("webhook", "success", f"Новое отправление OZON {posting_number}", posting_number, payload)
     return {"result": True}
 
