@@ -124,15 +124,16 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                     info,
                 )
                 continue
+            shift_id = str(shift.get("id"))
+            if client.retail_shift_close_date(shift_id):
+                log.add(
+                    "shift", "success",
+                    f"[{country}] {store}: смена №{shift.get('name')} уже закрыта самой кассой — пропущено",
+                    info,
+                )
+                continue
             try:
-                if client.retail_shift_close_date(str(shift.get("id"))):
-                    log.add(
-                        "shift", "success",
-                        f"[{country}] {store}: смена №{shift.get('name')} уже закрыта самой кассой — пропущено",
-                        info,
-                    )
-                    continue
-                client.close_retail_shift(str(shift.get("id")), close_date)
+                client.close_retail_shift(shift_id, close_date)
                 log.add(
                     "shift", "success",
                     f"[{country}] {store}: закрыта смена №{shift.get('name')} (была открыта {shift.get('moment')}), "
@@ -140,6 +141,18 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                     info,
                 )
             except Exception as error:
+                # The pre-check above narrows the race with the store's own POS
+                # closing the same shift, but can't fully close it — the PUT
+                # itself can still lose that race. Re-check once more before
+                # treating this as a real failure, rather than a benign "someone
+                # else already closed it" surfacing as a confusing 412 (code 3006).
+                if client.retail_shift_close_date(shift_id):
+                    log.add(
+                        "shift", "success",
+                        f"[{country}] {store}: смена №{shift.get('name')} уже закрыта самой кассой — пропущено",
+                        info,
+                    )
+                    continue
                 log.add("shift", "error", f"[{country}] {store}: не удалось закрыть смену №{shift.get('name')}: {error}", info)
     suffix = " (тестовый режим — ничего не закрывалось)" if dry_run and total_open else ""
     log.add("run", "success", f"Проверка завершена: незакрытых смен найдено {total_open}{suffix}")

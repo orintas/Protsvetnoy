@@ -9,6 +9,9 @@ class FakeMoySkladClient:
         self.closed: list[tuple[str, str]] = []
         self.fail_ids: set[str] = set()
         self.already_closed_ids: set[str] = set()
+        # Shifts that only become "closed by the POS" once our own close
+        # attempt fails — simulates the race losing right at the PUT itself.
+        self.close_during_our_attempt_ids: set[str] = set()
 
     def open_retail_shifts(self, organization_id, since):
         return self.shifts_by_org.get(organization_id, [])
@@ -17,6 +20,9 @@ class FakeMoySkladClient:
         return "2026-09-13 21:00:00.000" if shift_id in self.already_closed_ids else None
 
     def close_retail_shift(self, shift_id, close_date):
+        if shift_id in self.close_during_our_attempt_ids:
+            self.already_closed_ids.add(shift_id)
+            raise RuntimeError("boom (412, name uniqueness)")
         if shift_id in self.fail_ids:
             raise RuntimeError("boom")
         self.closed.append((shift_id, close_date))
@@ -66,6 +72,22 @@ def test_skips_shift_the_store_pos_already_closed_since_listing(tmp_path):
 
     assert count == 1
     assert client.closed == []  # never called close_retail_shift on an already-closed shift
+    entries = log.recent()
+    assert any(e["status"] == "success" and "уже закрыта" in e["message"] for e in entries)
+    assert not any(e["status"] == "error" for e in entries)
+
+
+def test_skips_shift_the_store_pos_closes_during_our_own_close_attempt(tmp_path):
+    poland_org = next(iter(TARGET_ORGANIZATIONS))
+    client = FakeMoySkladClient({poland_org: [_shift("s1", "00257")]})
+    client.close_during_our_attempt_ids = {"s1"}
+    log = ShiftCloseLog(str(tmp_path / "race2.sqlite3"))
+    close_moment = datetime(2026, 9, 13, 23, 50, tzinfo=timezone.utc)
+
+    count = run_once(client, log, dry_run=False, close_moment=close_moment)
+
+    assert count == 1
+    assert client.closed == []  # our own close_retail_shift call did fail
     entries = log.recent()
     assert any(e["status"] == "success" and "уже закрыта" in e["message"] for e in entries)
     assert not any(e["status"] == "error" for e in entries)
