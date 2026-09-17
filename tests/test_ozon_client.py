@@ -59,3 +59,47 @@ def test_update_stocks_chunks_at_100_per_request():
     client.update_stocks(items, warehouse_id=1)
 
     assert len(requests) == 2  # 100 + 50
+
+
+def test_posting_details_returns_result_dict():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v3/posting/fbs/get"
+        return httpx.Response(200, json={"result": {"posting_number": "X-1", "status": "awaiting_packaging"}})
+
+    client = _client_with_handler(handler)
+    result = client.posting_details("X-1")
+    assert result == {"posting_number": "X-1", "status": "awaiting_packaging"}
+
+
+def test_posting_details_returns_none_on_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    client = _client_with_handler(handler)
+    assert client.posting_details("missing") is None
+
+
+def test_ship_posting_sends_products_as_packages():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"result": {}})
+
+    client = _client_with_handler(handler)
+    client.ship_posting("X-1", [{"sku": 123, "quantity": 2}])
+
+    assert requests[0].url.path == "/v4/posting/fbs/ship"
+    body = requests[0].content.replace(b" ", b"")
+    assert b'"posting_number":"X-1"' in body
+    assert b'"product_id":123' in body
+    assert b'"quantity":2' in body
+
+
+def test_package_label_returns_raw_pdf_bytes():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/posting/fbs/package-label"
+        return httpx.Response(200, content=b"%PDF-fake", headers={"content-type": "application/pdf"})
+
+    client = _client_with_handler(handler)
+    assert client.package_label(["X-1"]) == b"%PDF-fake"

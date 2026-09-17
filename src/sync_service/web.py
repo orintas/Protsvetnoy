@@ -12,6 +12,7 @@ from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
+from .ozon_order_sync import PendingPostings, handle_webhook_notification
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
 from .shopify_order_sync import verify_webhook_signature as verify_shopify_webhook_signature
@@ -192,6 +193,41 @@ def _shopify_order_webhook(environ, start_response):
     return [b"ok"]
 
 
+def _ozon_webhook(environ, start_response):
+    """Receives OZON's push notifications (TYPE_NEW_POSTING, TYPE_PING, ...).
+
+    OZON has no signature or IP allowlist for these (confirmed — unlike
+    Yandex Market's IP check or Shopify's HMAC), so this accepts any POST;
+    the worst a forged request can do is queue a bogus posting_number, which
+    just fails to resolve via posting_details and gets dropped after
+    MAX_ATTEMPTS — no MoySklad/OZON side effect either way.
+
+    Must answer within 5 seconds or OZON auto-suspends all notifications, so
+    this only logs "new posting seen" and returns — the actual ship/label/
+    Telegram work happens in the separate ozon-order-sync-worker loop.
+    """
+    try:
+        notification = _read_json_body(environ)
+        if not isinstance(notification, dict):
+            raise ValueError("OZON webhook payload is not a JSON object")
+    except Exception as error:
+        ErrorLog().log_exception("ozon_webhook", error, context="Некорректное уведомление OZON")
+        start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": {"code": "ERROR_PARAMETER_VALUE_MISSED", "message": str(error)}}, ensure_ascii=False).encode("utf-8")]
+
+    queue = PendingPostings()
+    log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
+    try:
+        response_body = handle_webhook_notification(notification, queue, log)
+    except Exception as error:
+        ErrorLog().log_exception("ozon_webhook", error, context=f"Ошибка обработки уведомления {notification.get('message_type')}")
+        start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": {"code": "ERROR_UNKNOWN", "message": "internal error"}}, ensure_ascii=False).encode("utf-8")]
+    payload = dumps(response_body, ensure_ascii=False).encode("utf-8")
+    start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+    return [payload]
+
+
 def _ndjson_line(payload: dict) -> bytes:
     return dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -318,15 +354,23 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="shift-close-log" class="log"></div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
-<section class="card accordion" id="section-ozon-stock">
-<div class="accordion-header" data-section="ozon-stock" role="button" tabindex="0">
-<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><button class="help-btn" id="ozon-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
+<section class="card accordion" id="section-ozon-orders">
+<div class="accordion-header" data-section="ozon-orders" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация заказов и этикеток</h2><button class="help-btn" id="ozon-orders-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
 <span class="accordion-chevron">▸</span>
 </div>
 <div class="accordion-body" hidden>
-<p class="muted" style="margin:0">Каждые 30 минут — по тем же 4 складам, что и Яндекс.Маркет (ТМ Авиапарк, ТЦ Саларис, ТЦ Ривьера, ТЦ МЕГА Химки), плюс Основной склад. Подробности — кнопка «?».</p>
+<p class="muted" style="margin:0">Боевой режим: по вебхуку от OZON сервис подтверждает упаковку отправления и, как только становится доступна этикетка, отправляет её в Telegram. Подробности — кнопка «?».</p>
 </div></section>
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">OZON — журнал синхронизации</h2><p style="margin:0">Остатки, отправленные в OZON.</p></div><button class="button secondary" id="refresh-ozon-log" type="button">Обновить</button></div>
+<section class="card accordion" id="section-ozon-stock">
+<div class="accordion-header" data-section="ozon-stock" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><span class="muted" style="font-size:13px">— отключена</span></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" hidden>
+<p class="muted" style="margin:0">Временно отключена. Раньше — каждые 30 минут по тем же 4 складам, что и Яндекс.Маркет (ТМ Авиапарк, ТЦ Саларис, ТЦ Ривьера, ТЦ МЕГА Химки), плюс Основной склад.</p>
+</div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">OZON — журнал синхронизации</h2><p style="margin:0">Заказы, этикетки и (пока отключённые) остатки OZON.</p></div><button class="button secondary" id="refresh-ozon-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="ozon-log-kind" class="field"><option value="">Все типы</option></select><input id="ozon-log-search" class="field" placeholder="Поиск по артикулу" style="min-width:220px"></div>
 <div id="ozon-sync-log" class="log"></div></section>
 </section>
@@ -398,17 +442,18 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <p class="muted" style="margin:0">Отмены, возвраты и изменения уже созданных заказов синхронизация пока не обрабатывает — только создание нового заказа.</p>
 <button class="button secondary modal-close" id="shopify-orders-help-close" type="button">Закрыть</button>
 </div></div>
-<div class="modal-overlay" id="ozon-help-modal"><div class="modal">
-<h3>Как работает синхронизация остатков OZON</h3>
-<p class="muted" style="margin:0 0 10px">Каждые 30 минут сервис проходит по 5 складам OZON и для каждого:</p>
+<div class="modal-overlay" id="ozon-orders-help-modal"><div class="modal">
+<h3>Как работает синхронизация заказов и этикеток OZON</h3>
+<p class="muted" style="margin:0 0 10px">OZON присылает вебхук на каждое событие по отправлению. При новом отправлении (<code>TYPE_NEW_POSTING</code>) сервис:</p>
 <ol class="muted" style="margin:0 0 14px;padding-left:20px;line-height:1.7">
-<li>Раз в сутки обновляет список артикулов (offer_id) из OZON — какие товары вообще есть в магазине.</li>
-<li>Берёт фактические остатки по соответствующему складу МойСклад.</li>
-<li>Сравнивает с тем, что отправляли в прошлый раз, и отправляет в OZON только изменившиеся значения. Товар, пропавший из остатков МойСклад (распродан), всё равно получает 0 — а не пропускается.</li>
+<li>Ставит номер отправления в очередь и сразу отвечает OZON — у него всего 5 секунд на ответ, вся дальнейшая работа идёт в фоне.</li>
+<li>Фоновый процесс (раз в 30 секунд) запрашивает у OZON полные данные отправления.</li>
+<li>Если отправление ещё в статусе «в сборке» — подтверждает упаковку (аналог «сборка подтверждена» у Яндекс.Маркета).</li>
+<li>После этого пробует получить этикетку. OZON формирует её не сразу (обычно 45–60 секунд) — если она ещё не готова, сервис просто попробует на следующем цикле, до 40 попыток.</li>
+<li>Как только этикетка готова — отправляет её в тот же Telegram-чат, с той же структурой подписи, что и у Яндекс.Маркета: площадка, склад, номер заказа, список товаров (повторяющийся товар — жирным и с 🔴).</li>
 </ol>
-<p class="muted" style="margin:0 0 10px">Четыре склада — те же самые магазины, что уже использует Яндекс.Маркет (ТМ Авиапарк, ТЦ Саларис, ТЦ Ривьера, ТЦ МЕГА Химки), плюс пятый склад OZON «Склад Цветной» соответствует «Основному складу» в МойСклад.</p>
-<p class="muted" style="margin:0">Работает независимо от синхронизации Яндекс.Маркета — каждая площадка получает свежие остатки по собственному расписанию.</p>
-<button class="button secondary modal-close" id="ozon-help-close" type="button">Закрыть</button>
+<p class="muted" style="margin:0">Отменённые отправления помечаются как обработанные без попытки получить этикетку. Синхронизация остатков сейчас отключена — эта часть работает независимо от неё.</p>
+<button class="button secondary modal-close" id="ozon-orders-help-close" type="button">Закрыть</button>
 </div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
 <button class="modal-close-x" id="categories-close-x" type="button" aria-label="Закрыть" title="Закрыть">×</button>
@@ -498,10 +543,10 @@ const shopifyOrdersHelpBtn=document.getElementById('shopify-orders-help'), shopi
 shopifyOrdersHelpBtn.onclick=()=>shopifyOrdersHelpModal.classList.add('open');
 document.getElementById('shopify-orders-help-close').onclick=()=>shopifyOrdersHelpModal.classList.remove('open');
 shopifyOrdersHelpModal.onclick=e=>{if(e.target===shopifyOrdersHelpModal)shopifyOrdersHelpModal.classList.remove('open');};
-const ozonHelpBtn=document.getElementById('ozon-help'), ozonHelpModal=document.getElementById('ozon-help-modal');
-ozonHelpBtn.onclick=()=>ozonHelpModal.classList.add('open');
-document.getElementById('ozon-help-close').onclick=()=>ozonHelpModal.classList.remove('open');
-ozonHelpModal.onclick=e=>{if(e.target===ozonHelpModal)ozonHelpModal.classList.remove('open');};
+const ozonOrdersHelpBtn=document.getElementById('ozon-orders-help'), ozonOrdersHelpModal=document.getElementById('ozon-orders-help-modal');
+ozonOrdersHelpBtn.onclick=()=>ozonOrdersHelpModal.classList.add('open');
+document.getElementById('ozon-orders-help-close').onclick=()=>ozonOrdersHelpModal.classList.remove('open');
+ozonOrdersHelpModal.onclick=e=>{if(e.target===ozonOrdersHelpModal)ozonOrdersHelpModal.classList.remove('open');};
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
@@ -550,7 +595,7 @@ document.getElementById('refresh-shopify-log').onclick=loadShopifyLog;loadShopif
 let allOzonLogEntries=[];
 let ozonSearchResults=null;
 let ozonSearchTimer=null;
-const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков'};
+const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков',webhook:'Уведомление OZON',order_created:'Упаковка подтверждена',order_cancelled:'Отправление отменено',order_pipeline_error:'Ошибка заказа',order_error:'Не удалось получить этикетку',label_sent:'Этикетка отправлена'};
 async function loadOzonLog(){const target=document.getElementById('ozon-sync-log');try{const response=await fetch('/api/ozon-sync-log');allOzonLogEntries=await response.json();
 const select=document.getElementById('ozon-log-kind'), current=select.value, kinds=[...new Set(allOzonLogEntries.map(e=>e.kind))].sort();
 select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ozonKindLabels[k]||k)+'</option>').join('');
@@ -664,6 +709,8 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return _yandex_market_webhook(environ, start_response)
     if path == "/api/shopify/webhook/orders" and environ.get("REQUEST_METHOD") == "POST":
         return _shopify_order_webhook(environ, start_response)
+    if path == "/api/ozon/webhook/notifications" and environ.get("REQUEST_METHOD") == "POST":
+        return _ozon_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(

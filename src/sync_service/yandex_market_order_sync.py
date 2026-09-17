@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .label_caption import build_caption
 from .moysklad import MoySkladClient
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
@@ -67,20 +67,6 @@ def _moysklad_moment(iso_moment: str | None) -> str:
     return datetime.now(MOSCOW).strftime("%Y-%m-%d %H:%M:%S.000")
 
 
-def _format_items(items: list[dict[str, Any]]) -> str:
-    """HTML-formatted for Telegram (parse_mode=HTML): a line for count > 1 is
-    bolded and marked with 🔴 — Telegram captions have no colored text, so
-    this is the closest practical equivalent — to catch the cashier's eye
-    when the same item is ordered twice."""
-    lines = []
-    for item in items:
-        sku = escape(str(item.get("offerId") or "(пусто)"))
-        count = item.get("count", 1)
-        line = f"{sku} × {count}"
-        lines.append(f"🔴 <b>{line}</b>" if count and count > 1 else line)
-    return "\n".join(lines)
-
-
 def _build_positions(moysklad: MoySkladClient, items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     missing_codes: list[str] = []
@@ -115,11 +101,12 @@ def _send_label(
     label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
     if telegram is not None and telegram_chat_id:
         store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+        caption_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
         telegram.send_document(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{order_id}.pdf",
-            caption=f"Яндекс.Маркет\n{store_name}\nЗаказ №{order_id}\n{_format_items(items)}",
+            caption=build_caption(marketplace="Яндекс.Маркет", store_name=store_name, order_label=f"Заказ №{order_id}", items=caption_items),
             parse_mode="HTML",
         )
         log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)

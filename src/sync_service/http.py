@@ -80,6 +80,14 @@ class JsonClient:
             raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
         return response.content
 
+    def post_bytes(self, path: str, payload: Mapping[str, Any]) -> bytes:
+        """For endpoints that take a JSON body but return a binary response
+        body (e.g. a PDF label) rather than JSON."""
+        response = self._request_with_retry("POST", path, json=payload)
+        if response.is_error:
+            raise ApiError(f"POST {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        return response.content
+
     def get_bytes_url(self, url: str) -> bytes:
         response = self._request_with_retry("GET", url)
         if response.is_error:
