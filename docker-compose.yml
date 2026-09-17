@@ -40,13 +40,6 @@ services:
     command: ["yandex-market-stock-sync-worker"]
     volumes:
       - sync-data:/app/data
-  ozon-stock-sync-worker:
-    build: .
-    env_file:
-      - .env
-    command: ["ozon-stock-sync-worker"]
-    volumes:
-      - sync-data:/app/data
   shopify-catalog-sync-worker:
     build: .
     env_file:
