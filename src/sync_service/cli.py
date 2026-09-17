@@ -19,6 +19,7 @@ def main() -> None:
     subparsers.add_parser("web-server")
     subparsers.add_parser("sync-worker")
     subparsers.add_parser("yandex-market-stock-sync-worker")
+    subparsers.add_parser("ozon-stock-sync-worker")
     subparsers.add_parser("shopify-catalog-sync-worker")
     subparsers.add_parser("shopify-stock-sync-worker")
     subparsers.add_parser("moysklad-shift-close-worker")
@@ -35,6 +36,10 @@ def main() -> None:
     if args.command == "yandex-market-stock-sync-worker":
         from .yandex_market_stock_sync import worker as ym_stock_worker
         ym_stock_worker()
+        return
+    if args.command == "ozon-stock-sync-worker":
+        from .ozon_stock_sync import worker as ozon_stock_worker
+        ozon_stock_worker()
         return
     if args.command == "shopify-catalog-sync-worker":
         from .shopify_sync import catalog_worker

@@ -318,7 +318,17 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="shift-close-log" class="log"></div></section>
 </section>
 <section id="tab-ozon" class="tab-panel">
-<section class="card"><h2 style="margin:0 0 6px">OZON</h2><p style="margin:0" class="muted">Интеграция с OZON пока не настроена. Раздел зарезервирован для будущей синхронизации.</p></section>
+<section class="card accordion" id="section-ozon-stock">
+<div class="accordion-header" data-section="ozon-stock" role="button" tabindex="0">
+<div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация остатков</h2><button class="help-btn" id="ozon-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
+<span class="accordion-chevron">▸</span>
+</div>
+<div class="accordion-body" hidden>
+<p class="muted" style="margin:0">Каждые 30 минут — по тем же 4 складам, что и Яндекс.Маркет (ТМ Авиапарк, ТЦ Саларис, ТЦ Ривьера, ТЦ МЕГА Химки), плюс Основной склад. Подробности — кнопка «?».</p>
+</div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">OZON — журнал синхронизации</h2><p style="margin:0">Остатки, отправленные в OZON.</p></div><button class="button secondary" id="refresh-ozon-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="ozon-log-kind" class="field"><option value="">Все типы</option></select><input id="ozon-log-search" class="field" placeholder="Поиск по артикулу" style="min-width:220px"></div>
+<div id="ozon-sync-log" class="log"></div></section>
 </section>
 <section id="tab-shopify" class="tab-panel">
 <section class="card accordion" id="section-shopify-sync">
@@ -387,6 +397,18 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 </ol>
 <p class="muted" style="margin:0">Отмены, возвраты и изменения уже созданных заказов синхронизация пока не обрабатывает — только создание нового заказа.</p>
 <button class="button secondary modal-close" id="shopify-orders-help-close" type="button">Закрыть</button>
+</div></div>
+<div class="modal-overlay" id="ozon-help-modal"><div class="modal">
+<h3>Как работает синхронизация остатков OZON</h3>
+<p class="muted" style="margin:0 0 10px">Каждые 30 минут сервис проходит по 5 складам OZON и для каждого:</p>
+<ol class="muted" style="margin:0 0 14px;padding-left:20px;line-height:1.7">
+<li>Раз в сутки обновляет список артикулов (offer_id) из OZON — какие товары вообще есть в магазине.</li>
+<li>Берёт фактические остатки по соответствующему складу МойСклад.</li>
+<li>Сравнивает с тем, что отправляли в прошлый раз, и отправляет в OZON только изменившиеся значения. Товар, пропавший из остатков МойСклад (распродан), всё равно получает 0 — а не пропускается.</li>
+</ol>
+<p class="muted" style="margin:0 0 10px">Четыре склада — те же самые магазины, что уже использует Яндекс.Маркет (ТМ Авиапарк, ТЦ Саларис, ТЦ Ривьера, ТЦ МЕГА Химки), плюс пятый склад OZON «Склад Цветной» соответствует «Основному складу» в МойСклад.</p>
+<p class="muted" style="margin:0">Работает независимо от синхронизации Яндекс.Маркета — каждая площадка получает свежие остатки по собственному расписанию.</p>
+<button class="button secondary modal-close" id="ozon-help-close" type="button">Закрыть</button>
 </div></div>
 <div class="modal-overlay" id="categories-modal"><div class="modal">
 <button class="modal-close-x" id="categories-close-x" type="button" aria-label="Закрыть" title="Закрыть">×</button>
@@ -476,6 +498,10 @@ const shopifyOrdersHelpBtn=document.getElementById('shopify-orders-help'), shopi
 shopifyOrdersHelpBtn.onclick=()=>shopifyOrdersHelpModal.classList.add('open');
 document.getElementById('shopify-orders-help-close').onclick=()=>shopifyOrdersHelpModal.classList.remove('open');
 shopifyOrdersHelpModal.onclick=e=>{if(e.target===shopifyOrdersHelpModal)shopifyOrdersHelpModal.classList.remove('open');};
+const ozonHelpBtn=document.getElementById('ozon-help'), ozonHelpModal=document.getElementById('ozon-help-modal');
+ozonHelpBtn.onclick=()=>ozonHelpModal.classList.add('open');
+document.getElementById('ozon-help-close').onclick=()=>ozonHelpModal.classList.remove('open');
+ozonHelpModal.onclick=e=>{if(e.target===ozonHelpModal)ozonHelpModal.classList.remove('open');};
 let allYmLogEntries=[];
 let ymSearchResults=null;
 let ymSearchTimer=null;
@@ -521,6 +547,26 @@ catch(error){document.getElementById('shopify-sync-log').innerHTML='<p class="er
 document.getElementById('shopify-log-kind').onchange=renderShopifyLog;
 document.getElementById('shopify-log-search').oninput=()=>{clearTimeout(shopifySearchTimer);shopifySearchTimer=setTimeout(searchShopifyLog,300);};
 document.getElementById('refresh-shopify-log').onclick=loadShopifyLog;loadShopifyLog();
+let allOzonLogEntries=[];
+let ozonSearchResults=null;
+let ozonSearchTimer=null;
+const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков'};
+async function loadOzonLog(){const target=document.getElementById('ozon-sync-log');try{const response=await fetch('/api/ozon-sync-log');allOzonLogEntries=await response.json();
+const select=document.getElementById('ozon-log-kind'), current=select.value, kinds=[...new Set(allOzonLogEntries.map(e=>e.kind))].sort();
+select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ozonKindLabels[k]||k)+'</option>').join('');
+ozonSearchResults=null;renderOzonLog();}catch(error){allOzonLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderOzonLog(){const target=document.getElementById('ozon-sync-log'), kind=document.getElementById('ozon-log-kind')?.value||'', query=(document.getElementById('ozon-log-search')?.value||'').trim();
+const source=ozonSearchResults!==null?ozonSearchResults:allOzonLogEntries;
+const filtered=source.filter(e=>!kind||e.kind===kind);
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+target.querySelectorAll('[data-ozon-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ozonLogIndex)]));}
+async function searchOzonLog(){const query=(document.getElementById('ozon-log-search')?.value||'').trim();
+if(!query){ozonSearchResults=null;renderOzonLog();return;}
+try{const response=await fetch('/api/ozon-sync-log?q='+encodeURIComponent(query));ozonSearchResults=await response.json();renderOzonLog();}
+catch(error){document.getElementById('ozon-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+document.getElementById('ozon-log-kind').onchange=renderOzonLog;
+document.getElementById('ozon-log-search').oninput=()=>{clearTimeout(ozonSearchTimer);ozonSearchTimer=setTimeout(searchOzonLog,300);};
+document.getElementById('refresh-ozon-log').onclick=loadOzonLog;loadOzonLog();
 loadShopifyWarehouses();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
@@ -666,6 +712,13 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
     if path == "/api/shopify-sync-log":
         query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
         entries = ShopifySyncLog().search(query) if query else ShopifySyncLog().recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/ozon-sync-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
+        entries = ozon_log.search(query) if query else ozon_log.recent()
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]

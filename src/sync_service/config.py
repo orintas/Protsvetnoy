@@ -22,6 +22,8 @@ class Settings:
     shopify_access_token: str
     shopify_api_version: str
     shopify_api_secret: str
+    ozon_client_id: str
+    ozon_api_key: str
     make_api_token: str
     make_base_url: str
     telegram_bot_token: str
@@ -56,6 +58,8 @@ class Settings:
             shopify_access_token=os.getenv("SHOPIFY_ACCESS_TOKEN", ""),
             shopify_api_version=os.getenv("SHOPIFY_API_VERSION", "2026-07"),
             shopify_api_secret=os.getenv("SHOPIFY_API_SECRET", ""),
+            ozon_client_id=os.getenv("OZON_CLIENT_ID", ""),
+            ozon_api_key=os.getenv("OZON_API_KEY", ""),
             make_api_token=os.getenv("MAKE_API_TOKEN", ""),
             make_base_url=os.getenv("MAKE_BASE_URL", "https://eu1.make.com/api/v2").rstrip("/"),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

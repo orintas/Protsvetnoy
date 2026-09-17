@@ -40,6 +40,8 @@ jobs:
             grep -q '^SHOPIFY_ACCESS_TOKEN=' .env || echo 'SHOPIFY_ACCESS_TOKEN=' >> .env
             grep -q '^SHOPIFY_API_VERSION=' .env || echo 'SHOPIFY_API_VERSION=2026-07' >> .env
             grep -q '^SHOPIFY_API_SECRET=' .env || echo 'SHOPIFY_API_SECRET=' >> .env
+            grep -q '^OZON_CLIENT_ID=' .env || echo 'OZON_CLIENT_ID=' >> .env
+            grep -q '^OZON_API_KEY=' .env || echo 'OZON_API_KEY=' >> .env
             grep -q '^TELEGRAM_BOT_TOKEN=' .env || echo 'TELEGRAM_BOT_TOKEN=' >> .env
             grep -q '^TELEGRAM_LABEL_CHAT_ID=' .env || echo 'TELEGRAM_LABEL_CHAT_ID=' >> .env
             grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env

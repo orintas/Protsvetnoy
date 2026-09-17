@@ -381,6 +381,42 @@ daily assortment refresh) has nothing to diff against, so those are pushed
 as a full baseline and the entry says so explicitly rather than listing
 every offer as "changed".
 
+## OZON synchronization
+
+The `ozon-stock-sync-worker` service pushes sellable stock to OZON's Seller
+API every 30 minutes (`src/sync_service/ozon_stock_sync.py`,
+`OzonClient.update_stocks`, `POST /v2/products/stocks`). Deliberately
+structured as a near-parallel of the Yandex Market stock sync above — same
+`AssortmentCache` class (own files: `data/ozon_assortment.sqlite3` for the
+offer list, a `data/ozon_sync.sqlite3` log reusing `YandexMarketSyncLog`'s
+schema), same diff-only push (only offers whose count actually changed are
+sent), same "missing from MoySklad's per-store report = 0" rule so a
+sold-out item still gets zeroed instead of silently skipped.
+
+`OZON_WAREHOUSES` (`warehouse_id` from `GET /v2/warehouse/list` → MoySklad
+store id) covers 5 warehouses: the same 4 mall stores Yandex Market already
+syncs (`ТМ Авиапарк`, `ТЦ Саларис`, `ТЦ Ривьера`, `ТЦ МЕГА Химки` — literally
+the same MoySklad store ids as `CAMPAIGN_STORES` in
+`yandex_market_order_sync.py`) plus OZON's `Склад Цветной`, which maps to
+MoySklad's `Основной склад`. Confirmed live against both APIs, not just
+matched by name.
+
+OZON limits `POST /v2/products/stocks` to 100 items per request (chunked
+internally by `OzonClient.update_stocks`) and 80 requests/minute; one
+product in one warehouse can only be updated once every 2 minutes
+(`TOO_MANY_REQUESTS` otherwise) — not a concern at a 30-minute sync
+interval. Offer identification is by `offer_id`, which is MoySklad's
+`code` (article/SKU), matching every other marketplace integration in this
+service.
+
+The two marketplaces' stock syncs run as independent workers on independent
+schedules (10 minutes for Yandex Market, 30 for OZON) rather than sharing
+one MoySklad fetch — deliberately, to avoid touching the already-stable,
+well-tested Yandex Market stock sync code for this. They're structurally
+identical so a future merge (fetch each shared store's stock once, push to
+both marketplaces from that single read) would be a small, low-risk change
+if the redundant `/report/stock/all` calls ever become a real cost.
+
 ## Web interface
 
 Start the private web app on the VPS with `docker compose up -d --build`. Open
@@ -399,7 +435,8 @@ distinct task:
   compare/export endpoints read the saved selection
   (`data/category-sync.json`) instead of a fixed list. Shopify's selection
   now actually drives its catalog sync too, not just stored;
-- **OZON** — reserved placeholder tab for a future OZON integration;
+- **OZON** — the stock sync log (5 warehouses, filterable by type with a
+  search box), with a "?" help button explaining the algorithm;
 - **Shopify** — MoySklad warehouse picker for the stock sync (grouped by
   country) and the shared catalog/stock sync log, filterable by type with a
   search box;
