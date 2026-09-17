@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .error_log import ErrorLog
@@ -10,6 +11,18 @@ from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .store_mapping import StoreMapping, load_store_mappings
 from .sync_log import SyncLog
+
+# Sales sync only runs during the shops' opening hours — outside 9:00-23:00
+# there's nothing new to find, so it skips hitting the Novicloud API. Returns
+# aren't restricted (only sales were called out by name).
+WARSAW = ZoneInfo("Europe/Warsaw")
+SALES_SYNC_START_HOUR = 9
+SALES_SYNC_END_HOUR = 23
+
+
+def _within_sales_sync_window(now: datetime | None = None) -> bool:
+    local = (now or datetime.now(WARSAW)).astimezone(WARSAW)
+    return SALES_SYNC_START_HOUR <= local.hour < SALES_SYNC_END_HOUR
 
 # Ported from the "Sales from Navicloud to MoySklad" / "Returns from Navicloud
 # to MoySklad" Make.com scenarios (both disabled 2026-09-15 once this went
@@ -199,17 +212,20 @@ def run_once(settings: Settings, log: SyncLog) -> None:
     )
     total_sales = 0
     total_returns = 0
+    sales_sync_active = _within_sales_sync_window()
     try:
         for store in load_store_mappings():
-            try:
-                total_sales += sync_store_sales(moysklad, novicloud, store, log)
-            except Exception as error:
-                log.add("sale_error", "error", f"{store.name}: ошибка синхронизации продаж: {error}", None)
+            if sales_sync_active:
+                try:
+                    total_sales += sync_store_sales(moysklad, novicloud, store, log)
+                except Exception as error:
+                    log.add("sale_error", "error", f"{store.name}: ошибка синхронизации продаж: {error}", None)
             try:
                 total_returns += sync_store_returns(moysklad, novicloud, store, log)
             except Exception as error:
                 log.add("return_error", "error", f"{store.name}: ошибка синхронизации возвратов: {error}", None)
-        log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}")
+        window_note = "" if sales_sync_active else " (продажи вне окна синхронизации 9:00–23:00 по Варшаве)"
+        log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}{window_note}")
     finally:
         moysklad.close()
         novicloud.close()

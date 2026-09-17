@@ -1,14 +1,27 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
-from sync_service.novicloud_retail_sync import run_once, sync_store_returns, sync_store_sales
+from sync_service.novicloud_retail_sync import _within_sales_sync_window, run_once, sync_store_returns, sync_store_sales
 from sync_service.store_mapping import StoreMapping
 from sync_service.sync_log import SyncLog
+
+WARSAW = ZoneInfo("Europe/Warsaw")
 
 
 @pytest.fixture(autouse=True)
 def _no_rate_limit_sleep(monkeypatch):
     import sync_service.novicloud_retail_sync as mod
     monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _sales_sync_window_open_by_default(monkeypatch):
+    """Most tests care about sale-creation logic, not the time gate — keep the
+    window open unless a test explicitly overrides it."""
+    import sync_service.novicloud_retail_sync as mod
+    monkeypatch.setattr(mod, "_within_sales_sync_window", lambda: True)
 
 STORE = StoreMapping(
     novicloud_store_id=23,
@@ -281,6 +294,48 @@ def test_run_once_logs_a_heartbeat_summary_even_when_nothing_new(tmp_path, monke
     assert len(entries) == 1
     assert entries[0]["kind"] == "run"
     assert entries[0]["message"] == "Проверка завершена: новых чеков 0, возвратов 0"
+
+
+def test_within_sales_sync_window_true_during_opening_hours():
+    assert _within_sales_sync_window(datetime(2026, 9, 17, 9, 0, tzinfo=WARSAW)) is True
+    assert _within_sales_sync_window(datetime(2026, 9, 17, 22, 59, tzinfo=WARSAW)) is True
+
+
+def test_within_sales_sync_window_false_outside_opening_hours():
+    assert _within_sales_sync_window(datetime(2026, 9, 17, 23, 0, tzinfo=WARSAW)) is False
+    assert _within_sales_sync_window(datetime(2026, 9, 17, 3, 0, tzinfo=WARSAW)) is False
+    assert _within_sales_sync_window(datetime(2026, 9, 17, 8, 59, tzinfo=WARSAW)) is False
+
+
+def test_run_once_skips_sales_but_still_syncs_returns_outside_window(tmp_path, monkeypatch):
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    novicloud = FakeNovicloud(
+        docs=[_sale_doc()],
+        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
+        products_by_link={"https://novicloud/towary/1": _product_payload()},
+    )
+    moysklad = FakeMoySklad(open_shift={"id": "shift-1"})
+
+    import sync_service.novicloud_retail_sync as mod
+    monkeypatch.setattr(mod, "_within_sales_sync_window", lambda: False)
+    monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad)
+    monkeypatch.setattr(mod, "NovicloudClient", lambda **kwargs: novicloud)
+
+    class FakeSettings:
+        moysklad_base_url = "x"
+        moysklad_token = "x"
+        novicloud_base_url = "x"
+        novicloud_api_version = "v2"
+        novicloud_account = "x"
+        novicloud_password = "x"
+
+    run_once(FakeSettings(), log)
+
+    assert moysklad.created_demands == []  # sale sync skipped — outside 9:00-23:00
+    assert len(moysklad.created_returns) > 0  # returns aren't time-gated
+    run_entries = [e for e in log.recent(limit=1000) if e["kind"] == "run"]
+    assert len(run_entries) == 1
+    assert "вне окна синхронизации" in run_entries[0]["message"]
 
 
 def test_run_once_continues_other_stores_after_one_fails(tmp_path, monkeypatch):
