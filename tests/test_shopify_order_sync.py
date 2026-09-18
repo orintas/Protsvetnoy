@@ -7,6 +7,7 @@ from sync_service.shopify_order_sync import (
     COUNTRY_AGENTS,
     CURRENCY_ID,
     MAIN_STORE_ID,
+    PLN_CURRENCY_ID,
     POLAND_WAREHOUSE_CHAIN,
     SHIPPING_STATE_ID,
     ULEMISTE_STORE_ID,
@@ -101,6 +102,48 @@ def test_baltic_chain_falls_back_to_last_store_even_when_insufficient_everywhere
     moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={})
     process_new_order(order=_order(country_code="FI"), moysklad=moysklad, log=log)
     assert moysklad.created["store_id"] == BALTIC_WAREHOUSE_CHAIN[-1] == ULEMISTE_STORE_ID
+
+
+def test_poland_orders_use_pln_currency_and_presentment_price(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(
+        products={"ABC": _product("ABC")},
+        stock_by_store={WOLA_PARK_STORE_ID: [{"code": "ABC", "quantity": 2}]},
+    )
+    order = _order(country_code="PL", line_items=[{
+        "sku": "ABC", "quantity": 1, "price": "14.00",
+        "price_set": {"shop_money": {"amount": "14.00", "currency_code": "EUR"}, "presentment_money": {"amount": "61.00", "currency_code": "PLN"}},
+    }])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["currency_id"] == PLN_CURRENCY_ID
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 6100, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_poland_order_falls_back_to_shop_price_when_no_presentment_money(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(
+        products={"ABC": _product("ABC")},
+        stock_by_store={WOLA_PARK_STORE_ID: [{"code": "ABC", "quantity": 2}]},
+    )
+    order = _order(country_code="PL", line_items=[{"sku": "ABC", "quantity": 1, "price": "14.00"}])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["currency_id"] == PLN_CURRENCY_ID
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_non_poland_orders_still_use_eur_and_shop_price(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(
+        products={"ABC": _product("ABC")},
+        stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 5}]},
+    )
+    order = _order(country_code="EE", line_items=[{
+        "sku": "ABC", "quantity": 1, "price": "14.00",
+        "price_set": {"shop_money": {"amount": "14.00", "currency_code": "EUR"}, "presentment_money": {"amount": "61.00", "currency_code": "PLN"}},
+    }])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["currency_id"] == CURRENCY_ID
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_rest_of_europe_uses_wola_park_first(tmp_path):

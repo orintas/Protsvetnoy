@@ -27,6 +27,7 @@ def verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 ORGANIZATION_ID = "666e33cc-1b25-11ea-0a80-061e0003c973"  # Varvikas Grupp OU
 SALES_CHANNEL_ID = "233f92ab-d2d8-11ed-0a80-10df000eaa30"  # "Shopify"
 CURRENCY_ID = "5100bbd5-1cec-11ea-0a80-04b1000ad00d"  # EUR
+PLN_CURRENCY_ID = "cae74fea-26ec-11ee-0a80-02b4000b49e4"  # PLN, злотый — Polish orders are billed in PLN, not EUR
 SHIPPING_STATE_ID = "dd675d83-a396-11e2-c56e-001b21d91495"  # customerorder state "Отгружать"
 
 # Baltic + Finland: ship from the main warehouse first, Ulemiste as fallback.
@@ -115,7 +116,19 @@ def _format_address(order: dict[str, Any]) -> str:
     return ", ".join(str(part) for part in parts if part)
 
 
-def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+def _line_item_price(item: dict[str, Any], *, use_presentment: bool) -> float:
+    """Shopify's `price` field (and price_set.shop_money, which always
+    matches it) is in the shop's base currency (EUR). Polish orders need
+    the actual PLN amount the customer was charged — that's
+    price_set.presentment_money, same per-unit granularity as `price`."""
+    if use_presentment:
+        presentment = ((item.get("price_set") or {}).get("presentment_money") or {}).get("amount")
+        if presentment is not None:
+            return float(presentment)
+    return float(item.get("price") or 0)
+
+
+def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]], *, use_presentment_price: bool) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     missing_skus: list[str] = []
     for item in line_items:
@@ -126,7 +139,7 @@ def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]])
             continue
         positions.append({
             "quantity": item.get("quantity") or 1,
-            "price": round(float(item.get("price") or 0) * 100),
+            "price": round(_line_item_price(item, use_presentment=use_presentment_price) * 100),
             "assortment": {"meta": product["meta"]},
         })
     return positions, missing_skus
@@ -154,8 +167,11 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
         log.add("order_error", "error", f"Заказ {order_name}: страна доставки «{country_code or '?'}» не настроена, покупатель не определён", external_code, order)
         return
 
+    is_poland = country_code == "PL"
+    currency_id = PLN_CURRENCY_ID if is_poland else CURRENCY_ID
+
     line_items = order.get("line_items") or []
-    positions, missing_skus = _build_positions(moysklad, line_items)
+    positions, missing_skus = _build_positions(moysklad, line_items, use_presentment_price=is_poland)
     if missing_skus:
         log.add("order_error", "error", f"Заказ {order_name}: товары не найдены в МойСклад по артикулу: {', '.join(missing_skus)}", external_code, order)
     if not positions:
@@ -180,7 +196,7 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
         positions=positions,
         description=description,
         sales_channel_id=SALES_CHANNEL_ID,
-        currency_id=CURRENCY_ID,
+        currency_id=currency_id,
         state_id=SHIPPING_STATE_ID,
     )
     log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
