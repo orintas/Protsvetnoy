@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .change_log import record
 from .config import Settings
@@ -16,6 +17,12 @@ from .yandex_market_sync import YandexMarketSyncLog
 
 MAX_SKUS_PER_REQUEST = 2000
 ASSORTMENT_TTL = timedelta(hours=24)
+
+# Same shop-hours window as the Shopify stock sync — no point pushing stock
+# changes to the marketplace outside opening hours.
+MOSCOW = ZoneInfo("Europe/Moscow")
+STOCK_SYNC_START_HOUR = 9
+STOCK_SYNC_END_HOUR = 22
 
 
 class AssortmentCache:
@@ -179,8 +186,10 @@ def worker() -> None:
     cache = AssortmentCache()
     errors = ErrorLog()
     while True:
-        try:
-            run_once(settings, log, cache)
-        except Exception as error:
-            errors.log_exception("yandex_market_stock_sync_worker", error, context="Ошибка синхронизации остатков с Яндекс.Маркетом")
+        now = datetime.now(MOSCOW)
+        if STOCK_SYNC_START_HOUR <= now.hour < STOCK_SYNC_END_HOUR:
+            try:
+                run_once(settings, log, cache)
+            except Exception as error:
+                errors.log_exception("yandex_market_stock_sync_worker", error, context="Ошибка синхронизации остатков с Яндекс.Маркетом")
         time.sleep(600)
