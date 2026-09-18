@@ -20,14 +20,28 @@ jobs:
             echo "=== docker compose ps ==="
             docker compose ps -a
             echo
-            echo "=== moysklad-shift-close-worker logs (last 300 lines) ==="
-            docker compose logs --no-color --tail 300 moysklad-shift-close-worker
+            echo "=== curl localhost:80 ==="
+            curl -sv -m 5 -o /dev/null http://localhost:80/ 2>&1 || true
             echo
-            echo "=== worker (novicloud sync) logs (last 50 lines) ==="
-            docker compose logs --no-color --tail 50 worker
+            echo "=== curl localhost:443 (insecure) ==="
+            curl -skv -m 5 -o /dev/null https://localhost:443/ 2>&1 || true
             echo
-            echo "=== container inspect: state/restarts ==="
-            docker inspect -f '{{.Name}}: Status={{.State.Status}} StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}' $(docker compose ps -q moysklad-shift-close-worker) || true
+            echo "=== caddy logs (last 100 lines) ==="
+            docker compose logs --no-color --tail 100 caddy
+            echo
+            echo "=== ufw status ==="
+            sudo ufw status verbose 2>&1 || echo "ufw not available"
+            echo
+            echo "=== iptables -L -n ==="
+            sudo iptables -L -n 2>&1 || echo "iptables not available"
+            echo
+            echo "=== listening ports ==="
+            sudo ss -tlnp 2>&1 || true
+            echo
+            echo "=== disk/memory ==="
+            df -h /
+            echo
+            free -h
             echo
             echo "=== current server time ==="
             date
