@@ -153,12 +153,15 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
             cached = product_map.get(sku)
 
     if cached is not None:
+        # Title is deliberately left untouched here — it's only ever set on
+        # create_product below. A human may retitle the product in Shopify
+        # afterwards, and a nightly catalog sync must not stomp on that.
         shopify.update_product(
             cached["product_id"], cached["variant_id"],
-            title=title, sku=sku, price=price, vendor=VENDOR, product_type=category,
+            sku=sku, price=price, vendor=VENDOR, product_type=category,
             weight_kg=weight, barcode=barcode, image_bytes=image_bytes,
         )
-        log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify ({title})", sku, {"title": title, "price": price})
+        log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})
         return
 
     created = shopify.create_product(

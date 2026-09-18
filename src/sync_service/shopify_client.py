@@ -75,7 +75,6 @@ class ShopifyClient:
         product_id: int,
         variant_id: int,
         *,
-        title: str,
         sku: str,
         price: float,
         vendor: str,
@@ -84,6 +83,8 @@ class ShopifyClient:
         barcode: str | None = None,
         image_bytes: bytes | None = None,
     ) -> dict[str, Any]:
+        """Never touches title — that's set once on create_product and is
+        fair game for a human to edit by hand afterwards in Shopify."""
         variant: dict[str, Any] = {"id": variant_id, "sku": sku, "price": f"{price:.2f}", "weight_unit": "kg", "inventory_management": "shopify"}
         if weight_kg is not None:
             variant["weight"] = weight_kg
@@ -91,7 +92,6 @@ class ShopifyClient:
             variant["barcode"] = barcode
         product: dict[str, Any] = {
             "id": product_id,
-            "title": title,
             "vendor": vendor,
             "product_type": product_type,
             "variants": [variant],

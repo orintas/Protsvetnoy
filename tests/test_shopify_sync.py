@@ -96,6 +96,7 @@ def test_sync_catalog_updates_when_shopify_already_has_the_sku(tmp_path):
     assert shopify.created == []
     assert len(shopify.updated) == 1
     assert shopify.updated[0][:2] == (5, 6)
+    assert "title" not in shopify.updated[0][2]  # never touch an existing product's title
     assert product_map.get("ABC")["inventory_item_id"] == 7
 
 

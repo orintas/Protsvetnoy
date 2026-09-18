@@ -60,10 +60,22 @@ def test_update_product_puts_to_product_id_path():
         return httpx.Response(200, json={"product": {"id": 1}})
 
     client = _client_with_handler(handler)
-    client.update_product(1, 2, title="ABC - Test", sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories")
+    client.update_product(1, 2, sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories")
     assert requests[0].method == "PUT"
     assert requests[0].url.path == "/admin/api/2026-07/products/1.json"
     assert '"inventory_management":"shopify"' in requests[0].content.decode().replace(" ", "")
+
+
+def test_update_product_never_sends_title():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"product": {"id": 1}})
+
+    client = _client_with_handler(handler)
+    client.update_product(1, 2, sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories")
+    assert '"title"' not in requests[0].content.decode()
 
 
 def test_set_inventory_level_posts_expected_body():
