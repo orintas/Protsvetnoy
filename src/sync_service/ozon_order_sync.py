@@ -38,6 +38,12 @@ TERMINAL_STATUSES = {"cancelled", "not_accepted"}
 MAX_ATTEMPTS = 40  # ~20 minutes at the worker's 30s tick — well past OZON's documented 45-60s label delay
 WORKER_TICK_SECONDS = 30
 
+# 3 postings abandoned by the description_updated migration bug (2026-09-17/18,
+# fixed just below) before ever shipping or getting a label sent — requeued
+# once, the first time the fixed code runs against the old table. Safe to
+# remove this once the 2026-09-18 incident is confirmed resolved.
+STUCK_BY_DESCRIPTION_UPDATED_BUG = ["56444838-0115-1", "07223445-0177-1", "76135049-0093-1"]
+
 
 class PendingPostings:
     """Work queue for postings seen via TYPE_NEW_POSTING but not yet fully
@@ -56,6 +62,17 @@ class PendingPostings:
                 attempts INTEGER NOT NULL DEFAULT 0, shipped INTEGER NOT NULL DEFAULT 0,
                 description_updated INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0)"""
             )
+            # CREATE TABLE IF NOT EXISTS is a no-op against a table that already
+            # exists from an earlier deploy — it does not add new columns, so a
+            # column added after the table's first release needs an explicit
+            # migration here or every read of it raises KeyError.
+            existing_columns = {row[1] for row in db.execute("PRAGMA table_info(pending_postings)")}
+            if "description_updated" not in existing_columns:
+                db.execute("ALTER TABLE pending_postings ADD COLUMN description_updated INTEGER NOT NULL DEFAULT 0")
+                db.executemany(
+                    "UPDATE pending_postings SET done=0, attempts=0 WHERE posting_number=? AND done=1",
+                    [(posting_number,) for posting_number in STUCK_BY_DESCRIPTION_UPDATED_BUG],
+                )
 
     def add(self, posting_number: str) -> bool:
         """Returns True if this is a newly-seen posting (False if already queued/done)."""

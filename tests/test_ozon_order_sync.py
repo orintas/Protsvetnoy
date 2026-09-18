@@ -1,5 +1,7 @@
+import sqlite3
+
 from sync_service.http import ApiError
-from sync_service.ozon_order_sync import MAX_ATTEMPTS, RFBS_WAREHOUSE_IDS, PendingPostings, handle_webhook_notification, run_once
+from sync_service.ozon_order_sync import MAX_ATTEMPTS, STUCK_BY_DESCRIPTION_UPDATED_BUG, RFBS_WAREHOUSE_IDS, PendingPostings, handle_webhook_notification, run_once
 from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 RFBS_WAREHOUSE_ID = next(iter(RFBS_WAREHOUSE_IDS))
@@ -287,3 +289,54 @@ def test_run_once_does_not_repeat_description_update_on_second_tick(tmp_path, mo
     run_once(FakeSettings(), queue, log)
 
     assert len(moysklad.description_updates) == 1  # only the first tick touched it
+
+
+def _create_pre_migration_table(path):
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE pending_postings (
+            posting_number TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0, shipped INTEGER NOT NULL DEFAULT 0,
+            done INTEGER NOT NULL DEFAULT 0)"""
+        )
+        for posting_number in [*STUCK_BY_DESCRIPTION_UPDATED_BUG, "unrelated-still-done", "unrelated-still-pending"]:
+            done = 0 if posting_number == "unrelated-still-pending" else 1
+            db.execute(
+                "INSERT INTO pending_postings(posting_number, first_seen_at, attempts, shipped, done) VALUES (?, 'x', 40, 1, ?)",
+                (posting_number, done),
+            )
+
+
+def test_pending_postings_migrates_table_missing_description_updated_column(tmp_path):
+    path = str(tmp_path / "queue.sqlite3")
+    _create_pre_migration_table(path)
+
+    queue = PendingPostings(path)
+
+    assert queue.pending()  # reading no longer raises KeyError
+
+
+def test_pending_postings_requeues_only_the_known_stuck_postings(tmp_path):
+    path = str(tmp_path / "queue.sqlite3")
+    _create_pre_migration_table(path)
+
+    queue = PendingPostings(path)
+
+    requeued = {row["posting_number"] for row in queue.pending()}
+    assert requeued == {*STUCK_BY_DESCRIPTION_UPDATED_BUG, "unrelated-still-pending"}  # "unrelated-still-done" left alone
+    for row in queue.pending():
+        if row["posting_number"] in STUCK_BY_DESCRIPTION_UPDATED_BUG:
+            assert row["attempts"] == 0
+
+
+def test_pending_postings_migration_is_a_noop_on_a_second_open(tmp_path):
+    path = str(tmp_path / "queue.sqlite3")
+    _create_pre_migration_table(path)
+    PendingPostings(path)  # first open: migrates + requeues
+    for posting_number in STUCK_BY_DESCRIPTION_UPDATED_BUG:
+        PendingPostings(path).mark_done(posting_number)  # simulate them completing normally afterwards
+
+    queue = PendingPostings(path)  # second open: column already present
+
+    pending_numbers = {row["posting_number"] for row in queue.pending()}
+    assert pending_numbers == {"unrelated-still-pending"}  # stuck postings stay done, not re-requeued forever
