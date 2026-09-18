@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+from .change_log import record
 from .http import JsonClient
 
 
@@ -68,7 +69,10 @@ class ShopifyClient:
         }
         if image_bytes:
             product["images"] = [{"attachment": base64.b64encode(image_bytes).decode("ascii")}]
-        return self._client.post("/products.json", {"product": product})["product"]
+        result = self._client.post("/products.json", {"product": product})["product"]
+        record(service="shopify", entity_type="product", entity_id=sku, action="create",
+               after={"title": title, "price": price, "product_type": product_type})
+        return result
 
     def update_product(
         self,
@@ -98,13 +102,19 @@ class ShopifyClient:
         }
         if image_bytes:
             product["images"] = [{"attachment": base64.b64encode(image_bytes).decode("ascii")}]
-        return self._client.put(f"/products/{product_id}.json", {"product": product})["product"]
+        result = self._client.put(f"/products/{product_id}.json", {"product": product})["product"]
+        record(service="shopify", entity_type="product", entity_id=sku, action="update",
+               after={"price": price, "product_type": product_type, "vendor": vendor})
+        return result
 
-    def set_inventory_level(self, *, inventory_item_id: int, location_id: int, available: int) -> dict[str, Any]:
-        return self._client.post(
+    def set_inventory_level(self, *, inventory_item_id: int, location_id: int, available: int, previous_available: int | None = None) -> dict[str, Any]:
+        result = self._client.post(
             "/inventory_levels/set.json",
             {"location_id": location_id, "inventory_item_id": inventory_item_id, "available": available},
         )
+        record(service="shopify", entity_type="inventory_level", entity_id=str(inventory_item_id), action="update",
+               before=previous_available, after=available)
+        return result
 
     def locations(self) -> list[dict[str, Any]]:
         payload = self._client.get("/locations.json")

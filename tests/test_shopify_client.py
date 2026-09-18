@@ -1,5 +1,6 @@
 import httpx
 
+import sync_service.change_log as change_log_module
 from sync_service.shopify_client import ShopifyClient
 
 
@@ -99,3 +100,32 @@ def test_locations_returns_rows():
 
     client = _client_with_handler(handler)
     assert client.locations() == [{"id": 66945810655, "name": "Varvikas Main Warehouse"}]
+
+
+def test_set_inventory_level_records_before_after_in_change_log():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"inventory_level": {}})
+
+    client = _client_with_handler(handler)
+    client.set_inventory_level(inventory_item_id=222, location_id=999, available=7, previous_available=3)
+
+    entries = change_log_module._instance.recent()
+    assert len(entries) == 1
+    assert entries[0]["service"] == "shopify"
+    assert entries[0]["entity_type"] == "inventory_level"
+    assert entries[0]["entity_id"] == "222"
+    assert entries[0]["before"] == "3"
+    assert entries[0]["after"] == "7"
+
+
+def test_create_product_records_change_log_entry_with_no_before():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"product": {"id": 1, "variants": [{"id": 2, "inventory_item_id": 3}]}})
+
+    client = _client_with_handler(handler)
+    client.create_product(title="ABC - Test", sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories", body_html="desc")
+
+    entries = change_log_module._instance.recent()
+    assert entries[0]["action"] == "create"
+    assert entries[0]["before"] is None
+    assert entries[0]["entity_id"] == "ABC"

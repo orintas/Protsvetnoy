@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .change_log import record
 from .http import JsonClient
 
 # The "ProTsvetnoy OU" group — the org's non-Russian retail arm. Product
@@ -145,8 +146,11 @@ class MoySkladClient:
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
-    def update_customer_order_description(self, order_id: str, description: str) -> dict[str, Any]:
-        return self._client.put(f"/entity/customerorder/{order_id}", {"description": description})
+    def update_customer_order_description(self, order_id: str, description: str, *, previous_description: str | None = None) -> dict[str, Any]:
+        result = self._client.put(f"/entity/customerorder/{order_id}", {"description": description})
+        record(service="moysklad", entity_type="customerorder.description", entity_id=order_id, action="update",
+               before=previous_description, after=description)
+        return result
 
     def _state_meta(self, state_id: str) -> dict[str, Any]:
         return {
@@ -192,9 +196,12 @@ class MoySkladClient:
             body["rate"] = {"currency": self._meta("currency", currency_id)}
         if state_id:
             body["state"] = self._state_meta(state_id)
-        return self._client.post("/entity/customerorder", body)
+        result = self._client.post("/entity/customerorder", body)
+        record(service="moysklad", entity_type="customerorder", entity_id=external_code, action="create",
+               after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id})
+        return result
 
-    def update_customer_order_state(self, order_id: str, state_id: str) -> dict[str, Any]:
+    def update_customer_order_state(self, order_id: str, state_id: str, *, previous_state_id: str | None = None) -> dict[str, Any]:
         """Move a customerorder to a workflow state (e.g. "Доставляется", "Выполнен").
 
         State ids are per-account custom workflow states, not a fixed enum —
@@ -202,7 +209,10 @@ class MoySkladClient:
         but the id itself has to be looked up per account via GET
         /entity/customerorder/metadata; not reusable across MoySklad accounts.
         """
-        return self._client.put(f"/entity/customerorder/{order_id}", {"state": self._state_meta(state_id)})
+        result = self._client.put(f"/entity/customerorder/{order_id}", {"state": self._state_meta(state_id)})
+        record(service="moysklad", entity_type="customerorder.state", entity_id=order_id, action="update",
+               before=previous_state_id, after=state_id)
+        return result
 
     def last_document_moment(self, entity: str, retail_store_id: str) -> str | None:
         """Most recent `moment` of a document (e.g. retaildemand) for one retail store, or None if there's none yet."""
@@ -230,7 +240,10 @@ class MoySkladClient:
             "group": self._meta("group", department_id),
             "owner": self._meta("employee", owner_id),
         }
-        return self._client.post("/entity/retailshift", body)
+        result = self._client.post("/entity/retailshift", body)
+        record(service="moysklad", entity_type="retailshift", entity_id=str(result.get("id")), action="create",
+               after={"retail_store_id": retail_store_id, "store_id": store_id})
+        return result
 
     def create_retail_demand(
         self,
@@ -270,7 +283,10 @@ class MoySkladClient:
             body["documentNumber"] = document_number
         if check_number is not None:
             body["checkNumber"] = check_number
-        return self._client.post("/entity/retaildemand", body)
+        result = self._client.post("/entity/retaildemand", body)
+        record(service="moysklad", entity_type="retaildemand", entity_id=name, action="create",
+               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id})
+        return result
 
     def create_retail_return(
         self,
@@ -305,7 +321,10 @@ class MoySkladClient:
             "rate": {"currency": self._meta("currency", currency_id)},
             "positions": positions,
         }
-        return self._client.post("/entity/retailsalesreturn", body)
+        result = self._client.post("/entity/retailsalesreturn", body)
+        record(service="moysklad", entity_type="retailsalesreturn", entity_id=name, action="create",
+               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id})
+        return result
 
     def open_retail_shifts(self, organization_id: str, since: datetime) -> list[dict[str, Any]]:
         """Retail shifts for an organization that have no closeDate yet.
@@ -341,6 +360,8 @@ class MoySkladClient:
 
     def close_retail_shift(self, shift_id: str, close_date: str) -> None:
         self._client.put(f"/entity/retailshift/{shift_id}", {"closeDate": close_date})
+        record(service="moysklad", entity_type="retailshift.closeDate", entity_id=shift_id, action="update",
+               before=None, after=close_date)
 
     def close(self) -> None:
         self._client.close()

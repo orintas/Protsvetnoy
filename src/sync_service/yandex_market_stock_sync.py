@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .change_log import record
 from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
@@ -125,6 +126,14 @@ def sync_campaign_stock(
     warehouse_id = CAMPAIGN_WAREHOUSES[campaign_id]
     for chunk in _chunks(items, MAX_SKUS_PER_REQUEST):
         yandex.update_stocks(chunk, campaign_id=campaign_id, warehouse_id=warehouse_id)
+
+    if changes:
+        for change in changes:
+            record(service="yandex_market", entity_type="offer.stock", entity_id=f"{campaign_id}:{change['sku']}", action="update",
+                   before=change["before"], after=change["after"])
+    elif is_first_sync:
+        for offer_id, count in new_counts.items():
+            record(service="yandex_market", entity_type="offer.stock", entity_id=f"{campaign_id}:{offer_id}", action="create", after=count)
 
     cache.save_counts(campaign_id, new_counts)
     return len(offer_ids), changes

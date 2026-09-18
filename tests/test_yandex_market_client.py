@@ -2,6 +2,7 @@ from datetime import datetime
 
 import httpx
 
+import sync_service.change_log as change_log_module
 from sync_service.yandex_market import YandexMarketClient
 
 
@@ -87,6 +88,9 @@ def test_update_order_status_sends_status_and_substatus():
     client.update_order_status(123, campaign_id="21924355", status="PROCESSING", substatus="READY_TO_SHIP")
     assert requests[0].method == "PUT"
     assert requests[0].url.path == "/v2/campaigns/21924355/orders/123/status"
+    entries = change_log_module._instance.recent()
+    assert len(entries) == 1
+    assert entries[0]["service"] == "yandex_market" and entries[0]["entity_id"] == "123"
     body = requests[0].content.replace(b" ", b"")
     assert b'"status":"PROCESSING"' in body
     assert b'"substatus":"READY_TO_SHIP"' in body

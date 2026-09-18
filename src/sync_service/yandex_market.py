@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .change_log import record
 from .http import JsonClient
 
 
@@ -81,10 +82,12 @@ class YandexMarketClient:
         order: dict[str, Any] = {"status": status}
         if substatus:
             order["substatus"] = substatus
-        return self._client.put(
+        result = self._client.put(
             f"/v2/campaigns/{campaign_id}/orders/{order_id}/status",
             {"order": order},
         )
+        record(service="yandex_market", entity_type="order.status", entity_id=str(order_id), action="update", after=order)
+        return result
 
     def campaign_offers(self, campaign_id: str) -> list[str]:
         """Every offerId listed in this campaign, regardless of status (including NO_STOCKS).
@@ -130,7 +133,9 @@ class YandexMarketClient:
             if item.get("vat") is not None:
                 price["vat"] = item["vat"]
             offers.append({"offerId": item["offer_id"], "price": price})
-        return self._client.post(f"/v2/campaigns/{campaign_id}/offer-prices/updates", {"offers": offers})
+        result = self._client.post(f"/v2/campaigns/{campaign_id}/offer-prices/updates", {"offers": offers})
+        record(service="yandex_market", entity_type="offer.price", entity_id=None, action="update", after={"count": len(offers)})
+        return result
 
     def get_order_label(self, order_id: int, *, campaign_id: str) -> bytes:
         """PDF with the shipping label(s) for every box in the order."""

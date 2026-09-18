@@ -27,7 +27,7 @@ class FakeMoySklad:
         self.created = kwargs
         return {"id": "new-order"}
 
-    def update_customer_order_state(self, order_id, state_id):
+    def update_customer_order_state(self, order_id, state_id, *, previous_state_id=None):
         self.state_updates.append((order_id, state_id))
 
 

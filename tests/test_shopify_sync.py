@@ -42,7 +42,7 @@ class FakeShopify:
         self.updated.append((product_id, variant_id, kwargs))
         return {"id": product_id}
 
-    def set_inventory_level(self, *, inventory_item_id, location_id, available):
+    def set_inventory_level(self, *, inventory_item_id, location_id, available, previous_available=None):
         self.inventory_sets.append((inventory_item_id, location_id, available))
 
 

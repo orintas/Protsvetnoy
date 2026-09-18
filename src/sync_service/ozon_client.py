@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .change_log import record
 from .http import ApiError, JsonClient
 
 MAX_STOCKS_PER_REQUEST = 100  # OZON's own limit for POST /v2/products/stocks
@@ -39,6 +40,8 @@ class OzonClient:
         stocks = [{"offer_id": item["sku"], "stock": item["count"], "warehouse_id": warehouse_id} for item in items]
         for i in range(0, len(stocks), MAX_STOCKS_PER_REQUEST):
             self._client.post("/v2/products/stocks", {"stocks": stocks[i : i + MAX_STOCKS_PER_REQUEST]})
+        for item in items:
+            record(service="ozon", entity_type="offer.stock", entity_id=f"{warehouse_id}:{item['sku']}", action="update", after=item["count"])
 
     def posting_details(self, posting_number: str) -> dict[str, Any] | None:
         """Full posting info — products (with offer_id/sku/quantity), status,
@@ -66,6 +69,7 @@ class OzonClient:
         """
         packages = [{"products": [{"product_id": p["sku"], "quantity": p["quantity"]} for p in products]}]
         self._client.post("/v4/posting/fbs/ship", {"posting_number": posting_number, "packages": packages})
+        record(service="ozon", entity_type="posting.ship", entity_id=posting_number, action="update", after={"products": len(products)})
 
     def package_label(self, posting_numbers: list[str]) -> bytes:
         """Raw PDF bytes for the given postings' shipping labels — confirmed

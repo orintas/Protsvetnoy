@@ -1,3 +1,4 @@
+import sync_service.change_log as change_log_module
 from sync_service.yandex_market_order_sync import CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
 from sync_service.yandex_market_stock_sync import AssortmentCache, run_once, sync_campaign_stock
 from sync_service.yandex_market_sync import YandexMarketSyncLog
@@ -87,6 +88,14 @@ def test_sync_campaign_stock_reports_changes_against_previous_run(tmp_path):
     assert changes == [{"sku": "RGL02", "before": 3, "after": 1}]
     # only the changed sku was actually sent to Yandex, not the unchanged STABLE
     assert yandex.calls[-1] == ("149179260", [{"sku": "RGL02", "count": 1}])
+
+    # first sync logged 2 "create" rows (baseline for RGL02 and STABLE); this second
+    # sync's actual change is the most recent row
+    update_entries = [e for e in change_log_module._instance.recent() if e["action"] == "update"]
+    assert len(update_entries) == 1
+    assert update_entries[0]["entity_id"] == "149179260:RGL02"
+    assert update_entries[0]["before"] == "3"
+    assert update_entries[0]["after"] == "1"
 
 
 def test_sync_campaign_stock_sends_nothing_when_nothing_changed(tmp_path):

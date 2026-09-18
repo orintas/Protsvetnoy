@@ -174,7 +174,7 @@ def _update_moysklad_description(posting_number: str, details: dict[str, Any], m
     items = [{"sku": p.get("offer_id"), "count": p.get("quantity", 1)} for p in details.get("products", [])]
     existing = order.get("description") or ""
     description = f"{format_items_plain(items)}\n{existing}" if existing else format_items_plain(items)
-    moysklad.update_customer_order_description(str(order["id"]), description)
+    moysklad.update_customer_order_description(str(order["id"]), description, previous_description=existing or None)
     log.add("description_updated", "success", f"Отправление {posting_number}: список товаров добавлен в описание заказа МойСклад", posting_number)
     queue.mark_description_updated(posting_number)
 

@@ -1,5 +1,6 @@
 import httpx
 
+import sync_service.change_log as change_log_module
 from sync_service.ozon_client import OzonClient
 
 
@@ -103,3 +104,29 @@ def test_package_label_returns_raw_pdf_bytes():
 
     client = _client_with_handler(handler)
     assert client.package_label(["X-1"]) == b"%PDF-fake"
+
+
+def test_ship_posting_records_change_log_entry():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": {}})
+
+    client = _client_with_handler(handler)
+    client.ship_posting("X-1", [{"sku": 123, "quantity": 2}])
+
+    entries = change_log_module._instance.recent()
+    assert len(entries) == 1
+    assert entries[0]["service"] == "ozon"
+    assert entries[0]["entity_type"] == "posting.ship"
+    assert entries[0]["entity_id"] == "X-1"
+
+
+def test_update_stocks_records_one_change_log_entry_per_item():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": []})
+
+    client = _client_with_handler(handler)
+    client.update_stocks([{"sku": "A1", "count": 5}, {"sku": "A2", "count": 0}], warehouse_id=999)
+
+    entries = change_log_module._instance.recent()
+    assert len(entries) == 2
+    assert {e["entity_id"] for e in entries} == {"999:A1", "999:A2"}

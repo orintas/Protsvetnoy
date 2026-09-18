@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+import sync_service.change_log as change_log_module
 from sync_service.telegram_client import TelegramClient
 
 
@@ -38,6 +39,12 @@ def test_send_document_posts_multipart_with_caption():
     assert b"%PDF-fake" in body
     assert b"hello" in body
 
+    entries = change_log_module._instance.recent()
+    assert len(entries) == 1
+    assert entries[0]["service"] == "telegram"
+    assert entries[0]["action"] == "send"
+    assert entries[0]["entity_id"] == "-100123"
+
 
 def test_send_document_raises_on_ok_false():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -46,6 +53,7 @@ def test_send_document_raises_on_ok_false():
     client = _client_with_handler(handler)
     with pytest.raises(RuntimeError, match="chat not found"):
         client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
+    assert change_log_module._instance.recent() == []  # failed send is not logged as a change
 
 
 def test_send_document_raises_on_http_error():

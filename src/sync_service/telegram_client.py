@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from .change_log import record
+
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 1.5
 
@@ -45,6 +47,7 @@ class TelegramClient:
         payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram sendDocument returned ok=false: {payload}")
+        record(service="telegram", entity_type="document", entity_id=chat_id, action="send", after={"filename": filename, "caption": caption})
         return payload
 
     def close(self) -> None:

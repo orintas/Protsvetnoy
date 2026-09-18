@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
 from .category_sync import CategorySyncConfig
+from .change_log import ChangeLog
 from .config import Settings
 from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
@@ -323,6 +324,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
+<button class="tab-btn" data-tab="changes" type="button">Изменения</button>
 </nav>
 <section id="tab-catalog" class="tab-panel active">
 <section class="card accordion" id="section-catalog">
@@ -403,6 +405,11 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 </section>
 <section id="tab-errors" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
+</section>
+<section id="tab-changes" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал изменений</h2><p style="margin:0">Всё, что сервис записал через API — МойСклад, Яндекс.Маркет, OZON, Shopify, Telegram — по принципу «было → стало». Хранится 6 месяцев. Нажмите на запись для подробностей.</p></div><button class="button secondary" id="refresh-changes-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="changes-log-service" class="field"><option value="">Все сервисы</option></select><input id="changes-log-search" class="field" placeholder="Поиск по артикулу/заказу" style="min-width:220px"></div>
+<div id="changes-log" class="log"></div></section>
 </section>
 <div class="modal-overlay" id="log-detail-modal"><div class="modal"><h3 id="log-detail-title">Детали записи</h3><dl class="detail-grid" id="log-detail-body"></dl><button class="button secondary modal-close" id="log-detail-close" type="button">Закрыть</button></div></div>
 <div class="modal-overlay" id="catalog-help-modal"><div class="modal"><h3>Как работает синхронизация ассортимента</h3><ol>
@@ -613,6 +620,31 @@ catch(error){document.getElementById('ozon-sync-log').innerHTML='<p class="error
 document.getElementById('ozon-log-kind').onchange=renderOzonLog;
 document.getElementById('ozon-log-search').oninput=()=>{clearTimeout(ozonSearchTimer);ozonSearchTimer=setTimeout(searchOzonLog,300);};
 document.getElementById('refresh-ozon-log').onclick=loadOzonLog;loadOzonLog();
+let allChangesLogEntries=[];
+let changesSearchResults=null;
+let changesSearchTimer=null;
+const changeServiceLabels={moysklad:'МойСклад',yandex_market:'Яндекс.Маркет',ozon:'OZON',shopify:'Shopify',telegram:'Telegram'};
+const changeActionLabels={create:'Создано',update:'Изменено',send:'Отправлено'};
+async function loadChangesLog(){const target=document.getElementById('changes-log');try{const response=await fetch('/api/change-log');allChangesLogEntries=await response.json();
+const select=document.getElementById('changes-log-service'), current=select.value, services=[...new Set(allChangesLogEntries.map(e=>e.service))].sort();
+select.innerHTML='<option value="">Все сервисы</option>'+services.map(s=>'<option value="'+s+'"'+(s===current?' selected':'')+'>'+(changeServiceLabels[s]||s)+'</option>').join('');
+changesSearchResults=null;renderChangesLog();}catch(error){allChangesLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderChangesLog(){const target=document.getElementById('changes-log'), service=document.getElementById('changes-log-service')?.value||'', query=(document.getElementById('changes-log-search')?.value||'').trim();
+const source=changesSearchResults!==null?changesSearchResults:allChangesLogEntries;
+const filtered=source.filter(e=>!service||e.service===service);
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge success">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(e.entity_id?' · '+escapeHtml(e.entity_id):'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>').join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
+target.querySelectorAll('[data-changes-log-index]').forEach(row=>row.onclick=()=>showChangeDetail(filtered[Number(row.dataset.changesLogIndex)]));}
+async function searchChangesLog(){const query=(document.getElementById('changes-log-search')?.value||'').trim();
+if(!query){changesSearchResults=null;renderChangesLog();return;}
+try{const response=await fetch('/api/change-log?q='+encodeURIComponent(query));changesSearchResults=await response.json();renderChangesLog();}
+catch(error){document.getElementById('changes-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+function showChangeDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
+title.textContent=(changeServiceLabels[entry.service]||entry.service)+' · '+entry.entity_type;
+body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Сущность</dt><dd>'+escapeHtml(entry.entity_id||'—')+'</dd><dt>Действие</dt><dd>'+(changeActionLabels[entry.action]||entry.action)+'</dd>'+(entry.summary?'<dt>Комментарий</dt><dd>'+escapeHtml(entry.summary)+'</dd>':'')+'<dt>Было</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.before||'—')+'</pre></dd><dt>Стало</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.after||'—')+'</pre></dd>';
+modal.classList.add('open');}
+document.getElementById('changes-log-service').onchange=renderChangesLog;
+document.getElementById('changes-log-search').oninput=()=>{clearTimeout(changesSearchTimer);changesSearchTimer=setTimeout(searchChangesLog,300);};
+document.getElementById('refresh-changes-log').onclick=loadChangesLog;loadChangesLog();
 loadShopifyWarehouses();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
@@ -767,6 +799,13 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
         ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
         entries = ozon_log.search(query) if query else ozon_log.recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/change-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        change_log = ChangeLog()
+        entries = change_log.search(query) if query else change_log.recent()
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]

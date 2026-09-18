@@ -251,5 +251,7 @@ def sync_order_delivery_state(
         log.add("order_state_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «{label}» не проставлен", external_code)
         return
 
-    moysklad.update_customer_order_state(str(order["id"]), state_id)
+    previous_state_href = ((order.get("state") or {}).get("meta") or {}).get("href", "")
+    previous_state_id = previous_state_href.rsplit("/", 1)[-1] or None
+    moysklad.update_customer_order_state(str(order["id"]), state_id, previous_state_id=previous_state_id)
     log.add("order_state_updated", "success", f"Заказ {order_id}: статус в МойСклад изменён на «{label}»", external_code)

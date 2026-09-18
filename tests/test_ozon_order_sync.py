@@ -66,7 +66,7 @@ class FakeMoySklad:
     def customer_order_by_name(self, name):
         return self.orders_by_name.get(name)
 
-    def update_customer_order_description(self, order_id, description):
+    def update_customer_order_description(self, order_id, description, *, previous_description=None):
         self.description_updates.append((order_id, description))
         for order in self.orders_by_name.values():
             if str(order["id"]) == order_id:

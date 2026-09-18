@@ -191,7 +191,7 @@ def sync_stock(moysklad: MoySkladClient, shopify: ShopifyClient, warehouse_ids: 
         if cached.get("last_available") == available:
             continue
         try:
-            shopify.set_inventory_level(inventory_item_id=cached["inventory_item_id"], location_id=location_id, available=available)
+            shopify.set_inventory_level(inventory_item_id=cached["inventory_item_id"], location_id=location_id, available=available, previous_available=cached.get("last_available"))
         except Exception as error:
             log.add("stock_error", "error", f"{sku}: ошибка обновления остатка: {error}", sku)
             continue
