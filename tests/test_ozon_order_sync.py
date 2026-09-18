@@ -1,5 +1,6 @@
 import sqlite3
 
+from sync_service.error_log import ErrorLog
 from sync_service.http import ApiError
 from sync_service.ozon_order_sync import MAX_ATTEMPTS, STUCK_BY_DESCRIPTION_UPDATED_BUG, RFBS_WAREHOUSE_IDS, PendingPostings, handle_webhook_notification, run_once
 from sync_service.yandex_market_sync import YandexMarketSyncLog
@@ -134,12 +135,13 @@ def test_webhook_other_types_are_acked_without_side_effects(tmp_path):
 def test_run_once_ships_a_posting_still_awaiting_packaging_and_waits_for_label(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_packaging")})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert ozon.ship_calls == [("X-1", [{"offer_id": "LE148", "sku": 1536499166, "quantity": 1}])]
     assert ozon.label_calls == []  # too early — label not attempted the same tick as shipping
@@ -151,12 +153,13 @@ def test_run_once_ships_a_posting_still_awaiting_packaging_and_waits_for_label(t
 def test_run_once_sends_label_once_posting_is_ready(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert ozon.ship_calls == []  # already past awaiting_packaging — no ship call needed
     assert ozon.label_calls == [["X-1"]]
@@ -169,12 +172,13 @@ def test_run_once_sends_label_once_posting_is_ready(tmp_path, monkeypatch):
 def test_run_once_retries_when_label_not_ready_yet(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")}, fail_label_with={"X-1": "The next postings aren't ready"})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert telegram.sent == []
     pending = queue.pending()
@@ -184,12 +188,13 @@ def test_run_once_retries_when_label_not_ready_yet(tmp_path, monkeypatch):
 def test_run_once_marks_cancelled_posting_done_without_shipping_or_labeling(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled")})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert ozon.ship_calls == [] and ozon.label_calls == [] and telegram.sent == []
     assert queue.pending() == []
@@ -200,22 +205,46 @@ def test_run_once_marks_cancelled_posting_done_without_shipping_or_labeling(tmp_
 def test_run_once_gives_up_after_max_attempts(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")}, fail_label_with={"X-1": "not ready"})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
     for _ in range(MAX_ATTEMPTS + 1):
-        run_once(FakeSettings(), queue, log)
+        run_once(FakeSettings(), queue, log, errors)
 
     assert queue.pending() == []  # gave up
     error_entries = [e for e in log.recent(limit=1000) if e["kind"] == "order_error"]
     assert len(error_entries) == 1
+    assert "awaiting_deliver" in error_entries[0]["message"]  # last observed status, for diagnosis
+
+    unified_errors = errors.recent()
+    assert len(unified_errors) == 1
+    assert unified_errors[0]["source"] == "ozon_order_sync"
+    assert "X-1" in unified_errors[0]["message"]
+
+
+def test_run_once_records_lookup_failed_as_last_status_when_posting_details_returns_none(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={})  # posting_details returns None for every lookup
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    for _ in range(MAX_ATTEMPTS + 1):
+        run_once(FakeSettings(), queue, log, errors)
+
+    error_entries = [e for e in log.recent(limit=1000) if e["kind"] == "order_error"]
+    assert "lookup_failed" in error_entries[0]["message"]
 
 
 def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
     _patched(monkeypatch, ozon, telegram=None)
@@ -223,7 +252,7 @@ def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_
     class NoTelegramSettings(FakeSettings):
         telegram_bot_token = ""
 
-    run_once(NoTelegramSettings(), queue, log)
+    run_once(NoTelegramSettings(), queue, log, errors)
 
     assert queue.pending() == []
     entries = log.recent()
@@ -233,13 +262,14 @@ def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_
 def test_run_once_prepends_sku_list_to_existing_moysklad_order_description(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
     telegram = FakeTelegram()
     moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": "уже здесь"}})
     _patched(monkeypatch, ozon, telegram, moysklad)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert moysklad.description_updates == [("order-1", "LE148 × 1\nуже здесь")]
     entries = log.recent()
@@ -249,13 +279,14 @@ def test_run_once_prepends_sku_list_to_existing_moysklad_order_description(tmp_p
 def test_run_once_sets_description_without_leading_separator_when_none_existing(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
     telegram = FakeTelegram()
     moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": ""}})
     _patched(monkeypatch, ozon, telegram, moysklad)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert moysklad.description_updates == [("order-1", "LE148 × 1")]
 
@@ -263,13 +294,14 @@ def test_run_once_sets_description_without_leading_separator_when_none_existing(
 def test_run_once_skips_description_update_when_moysklad_order_not_found_yet(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_packaging")})
     telegram = FakeTelegram()
     moysklad = FakeMoySklad(orders_by_name={})
     _patched(monkeypatch, ozon, telegram, moysklad)
 
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert moysklad.description_updates == []
     pending = queue.pending()
@@ -279,14 +311,15 @@ def test_run_once_skips_description_update_when_moysklad_order_not_found_yet(tmp
 def test_run_once_does_not_repeat_description_update_on_second_tick(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver"), "X-2": _posting("awaiting_deliver")}, fail_label_with={"X-1": "not ready"})
     telegram = FakeTelegram()
     moysklad = FakeMoySklad(orders_by_name={"X-1": {"id": "order-1", "description": ""}})
     _patched(monkeypatch, ozon, telegram, moysklad)
 
-    run_once(FakeSettings(), queue, log)
-    run_once(FakeSettings(), queue, log)
+    run_once(FakeSettings(), queue, log, errors)
+    run_once(FakeSettings(), queue, log, errors)
 
     assert len(moysklad.description_updates) == 1  # only the first tick touched it
 

@@ -60,7 +60,8 @@ class PendingPostings:
                 """CREATE TABLE IF NOT EXISTS pending_postings (
                 posting_number TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, shipped INTEGER NOT NULL DEFAULT 0,
-                description_updated INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0)"""
+                description_updated INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0,
+                last_status TEXT)"""
             )
             # CREATE TABLE IF NOT EXISTS is a no-op against a table that already
             # exists from an earlier deploy — it does not add new columns, so a
@@ -73,6 +74,8 @@ class PendingPostings:
                     "UPDATE pending_postings SET done=0, attempts=0 WHERE posting_number=? AND done=1",
                     [(posting_number,) for posting_number in STUCK_BY_DESCRIPTION_UPDATED_BUG],
                 )
+            if "last_status" not in existing_columns:
+                db.execute("ALTER TABLE pending_postings ADD COLUMN last_status TEXT")
 
     def add(self, posting_number: str) -> bool:
         """Returns True if this is a newly-seen posting (False if already queued/done)."""
@@ -105,6 +108,14 @@ class PendingPostings:
     def mark_done(self, posting_number: str) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE pending_postings SET done=1 WHERE posting_number=?", (posting_number,))
+
+    def update_last_status(self, posting_number: str, status: str) -> None:
+        """Records what the last tick actually observed (an OZON status, or
+        'lookup_failed' when posting_details itself errored) — purely
+        diagnostic, so a give-up message says what it was stuck on instead
+        of nothing at all."""
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE pending_postings SET last_status=? WHERE posting_number=?", (status, posting_number))
 
 
 def handle_webhook_notification(payload: dict[str, Any], queue: PendingPostings, log: YandexMarketSyncLog) -> dict[str, Any]:
@@ -179,19 +190,24 @@ def _update_moysklad_description(posting_number: str, details: dict[str, Any], m
     queue.mark_description_updated(posting_number)
 
 
-def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog) -> None:
+def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
     posting_number = row["posting_number"]
     attempts = queue.increment_attempts(posting_number)
     if attempts > MAX_ATTEMPTS:
-        log.add("order_error", "error", f"Отправление {posting_number}: этикетка не появилась за {MAX_ATTEMPTS} попыток, дальше не пробуем", posting_number)
+        last_status = row.get("last_status") or "неизвестен (posting_details ни разу не ответил за это время)"
+        message = f"Отправление {posting_number}: этикетка не появилась за {MAX_ATTEMPTS} попыток, дальше не пробуем. Последний известный статус: {last_status}"
+        log.add("order_error", "error", message, posting_number)
+        errors.add("ozon_order_sync", message)
         queue.mark_done(posting_number)
         return
 
     details = ozon.posting_details(posting_number)
     if details is None:
+        queue.update_last_status(posting_number, "lookup_failed")
         return  # transient/lookup failure — try again next tick
 
     status = details.get("status")
+    queue.update_last_status(posting_number, status or "(пусто)")
     if status in TERMINAL_STATUSES:
         log.add("order_cancelled", "success", f"Отправление {posting_number}: статус «{status}», этикетка не нужна", posting_number)
         queue.mark_done(posting_number)
@@ -222,14 +238,14 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
             queue.mark_done(posting_number)
 
 
-def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLog) -> None:
+def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
     ozon = OzonClient(client_id=settings.ozon_client_id, api_key=settings.ozon_api_key)
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url) if settings.telegram_bot_token else None
     try:
         for row in queue.pending():
             try:
-                _process_one(row, queue, ozon, moysklad, telegram, settings.telegram_label_chat_id, log)
+                _process_one(row, queue, ozon, moysklad, telegram, settings.telegram_label_chat_id, log, errors)
             except Exception as error:
                 log.add("order_pipeline_error", "error", f"Отправление {row['posting_number']}: ошибка обработки: {error}", row["posting_number"])
     finally:
@@ -246,7 +262,7 @@ def worker() -> None:
     errors = ErrorLog()
     while True:
         try:
-            run_once(settings, queue, log)
+            run_once(settings, queue, log, errors)
         except Exception as error:
             errors.log_exception("ozon_order_sync_worker", error, context="Ошибка синхронизации заказов/этикеток OZON")
         time.sleep(WORKER_TICK_SECONDS)
