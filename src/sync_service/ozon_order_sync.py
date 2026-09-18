@@ -140,6 +140,17 @@ def handle_webhook_notification(payload: dict[str, Any], queue: PendingPostings,
     return {"result": True}
 
 
+def _log_error(log: YandexMarketSyncLog, errors: ErrorLog, kind: str, message: str, posting_number: str) -> None:
+    """Every OZON-pipeline failure goes through here so it always shows up
+    in both places — the OZON-specific log (for context alongside the rest
+    of that posting's history) and the shared error journal (so a real
+    failure is visible without having to know to look at the OZON tab).
+    A prior version logged some failures to only one of the two, which is
+    exactly the kind of gap this centralizes against."""
+    log.add(kind, "error", message, posting_number)
+    errors.add("ozon_order_sync", message)
+
+
 def _send_label(
     *,
     posting_number: str,
@@ -148,6 +159,7 @@ def _send_label(
     telegram: TelegramClient | None,
     telegram_chat_id: str,
     log: YandexMarketSyncLog,
+    errors: ErrorLog,
 ) -> bool:
     """Returns whether the label was actually fetched+sent this call — False
     for "not ready yet" (caller should retry later), raises for anything else."""
@@ -170,7 +182,7 @@ def _send_label(
         )
         log.add("label_sent", "success", f"Отправление {posting_number}: этикетка отправлена в Telegram", posting_number)
         return True
-    log.add("label_sent", "error", f"Отправление {posting_number}: Telegram не настроен, этикетка не отправлена", posting_number)
+    _log_error(log, errors, "label_sent", f"Отправление {posting_number}: Telegram не настроен, этикетка не отправлена", posting_number)
     return True  # nothing left to retry — the config problem won't fix itself on a re-attempt
 
 
@@ -196,8 +208,7 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
     if attempts > MAX_ATTEMPTS:
         last_status = row.get("last_status") or "неизвестен (posting_details ни разу не ответил за это время)"
         message = f"Отправление {posting_number}: этикетка не появилась за {MAX_ATTEMPTS} попыток, дальше не пробуем. Последний известный статус: {last_status}"
-        log.add("order_error", "error", message, posting_number)
-        errors.add("ozon_order_sync", message)
+        _log_error(log, errors, "order_error", message, posting_number)
         queue.mark_done(posting_number)
         return
 
@@ -217,7 +228,7 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
         try:
             _update_moysklad_description(posting_number, details, moysklad, queue, log)
         except Exception as error:
-            log.add("order_pipeline_error", "error", f"Отправление {posting_number}: не удалось обновить описание заказа в МойСклад: {error}", posting_number)
+            _log_error(log, errors, "order_pipeline_error", f"Отправление {posting_number}: не удалось обновить описание заказа в МойСклад: {error}", posting_number)
 
     already_shipped = bool(row["shipped"])
     if status == SHIP_FROM_STATUS and not already_shipped:
@@ -229,12 +240,12 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
             if "already" in str(error).lower():
                 queue.mark_shipped(posting_number)  # a prior attempt (by us or someone else) already succeeded
             else:
-                log.add("order_pipeline_error", "error", f"Отправление {posting_number}: не удалось подтвердить упаковку: {error}", posting_number)
+                _log_error(log, errors, "order_pipeline_error", f"Отправление {posting_number}: не удалось подтвердить упаковку: {error}", posting_number)
                 # not marked shipped — the SHIP_FROM_STATUS branch retries it next tick
         return  # label needs ~45-60s after shipping — try it on a later tick
 
     if status in LABEL_READY_STATUSES or already_shipped:
-        if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log):
+        if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors):
             queue.mark_done(posting_number)
 
 
@@ -247,7 +258,7 @@ def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLo
             try:
                 _process_one(row, queue, ozon, moysklad, telegram, settings.telegram_label_chat_id, log, errors)
             except Exception as error:
-                log.add("order_pipeline_error", "error", f"Отправление {row['posting_number']}: ошибка обработки: {error}", row["posting_number"])
+                _log_error(log, errors, "order_pipeline_error", f"Отправление {row['posting_number']}: ошибка обработки: {error}", row["posting_number"])
     finally:
         ozon.close()
         moysklad.close()

@@ -257,6 +257,25 @@ def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_
     assert queue.pending() == []
     entries = log.recent()
     assert any(e["kind"] == "label_sent" and e["status"] == "error" for e in entries)
+    assert len(errors.recent()) == 1  # also surfaced in the shared error journal
+
+
+def test_run_once_logs_ship_failure_to_both_ozon_log_and_shared_errors(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_packaging")}, fail_ship_with={"X-1": "some ozon error"})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    pipeline_entries = [e for e in log.recent() if e["kind"] == "order_pipeline_error"]
+    assert len(pipeline_entries) == 1 and "some ozon error" in pipeline_entries[0]["message"]
+    unified_errors = errors.recent()
+    assert len(unified_errors) == 1
+    assert "X-1" in unified_errors[0]["message"]
 
 
 def test_run_once_prepends_sku_list_to_existing_moysklad_order_description(tmp_path, monkeypatch):
