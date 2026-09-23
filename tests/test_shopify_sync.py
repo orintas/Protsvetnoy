@@ -25,14 +25,20 @@ class FakeMoySklad:
 
 
 class FakeShopify:
-    def __init__(self, existing_variants=None):
+    def __init__(self, existing_variants=None, existing_by_barcode=None):
         self.existing_variants = existing_variants or {}
+        self.existing_by_barcode = existing_by_barcode or {}
+        self.barcode_lookups = []
         self.created = []
         self.updated = []
         self.inventory_sets = []
 
     def find_variant_by_sku(self, sku):
         return self.existing_variants.get(sku)
+
+    def find_variant_by_barcode(self, barcode):
+        self.barcode_lookups.append(barcode)
+        return self.existing_by_barcode.get(barcode)
 
     def create_product(self, **kwargs):
         self.created.append(kwargs)
@@ -97,7 +103,35 @@ def test_sync_catalog_updates_when_shopify_already_has_the_sku(tmp_path):
     assert len(shopify.updated) == 1
     assert shopify.updated[0][:2] == (5, 6)
     assert "title" not in shopify.updated[0][2]  # never touch an existing product's title
+    assert "vendor" not in shopify.updated[0][2]  # never touch an existing product's vendor
     assert product_map.get("ABC")["inventory_item_id"] == 7
+
+
+def test_sync_catalog_falls_back_to_barcode_when_sku_search_misses(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify(existing_by_barcode={"1234567890123": {"product_id": 5, "variant_id": 6, "inventory_item_id": 7}})
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert shopify.barcode_lookups == ["1234567890123"]
+    assert shopify.created == []  # found via barcode — not a new product
+    assert len(shopify.updated) == 1
+    assert shopify.updated[0][:2] == (5, 6)
+    assert product_map.get("ABC")["inventory_item_id"] == 7
+
+
+def test_sync_catalog_creates_new_product_when_neither_sku_nor_barcode_match(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify()
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert shopify.barcode_lookups == ["1234567890123"]
+    assert len(shopify.created) == 1
 
 
 def test_sync_catalog_reuses_cached_mapping_without_searching_again(tmp_path):

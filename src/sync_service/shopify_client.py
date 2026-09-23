@@ -21,13 +21,14 @@ class ShopifyClient:
     def close(self) -> None:
         self._client.close()
 
-    def find_variant_by_sku(self, sku: str) -> dict[str, Any] | None:
-        """Some SKUs have more than one product in this store (leftover
-        duplicates predating this sync, or a duplicate this sync itself
-        created on an early run when its search missed an existing product).
-        Where that happens, an ACTIVE product is preferred over a DRAFT one —
-        the draft is invisible to customers, so it's never the one worth
-        keeping in sync — rather than an arbitrary first search result."""
+    def _search_variant(self, search_query: str) -> dict[str, Any] | None:
+        """Shared by find_variant_by_sku/find_variant_by_barcode. Some
+        products have more than one match in this store (leftover duplicates
+        predating this sync, or a duplicate this sync itself created on an
+        early run when its search missed an existing product) — where that
+        happens, an ACTIVE product is preferred over a DRAFT one, since the
+        draft is invisible to customers and never the one worth keeping in
+        sync, rather than an arbitrary first search result."""
         query = """
         query($q: String!) {
           productVariants(first: 10, query: $q) {
@@ -35,7 +36,7 @@ class ShopifyClient:
           }
         }
         """
-        payload = self._client.post("/graphql.json", {"query": query, "variables": {"q": f"sku:{sku}"}})
+        payload = self._client.post("/graphql.json", {"query": query, "variables": {"q": search_query}})
         edges = (((payload.get("data") or {}).get("productVariants") or {}).get("edges")) or []
         if not edges:
             return None
@@ -46,6 +47,16 @@ class ShopifyClient:
             "product_id": _numeric_id(node["product"]["id"]),
             "inventory_item_id": _numeric_id(node["inventoryItem"]["id"]),
         }
+
+    def find_variant_by_sku(self, sku: str) -> dict[str, Any] | None:
+        return self._search_variant(f"sku:{sku}")
+
+    def find_variant_by_barcode(self, barcode: str) -> dict[str, Any] | None:
+        """Fallback lookup for when the SKU itself doesn't match anything —
+        e.g. MoySklad's code and Shopify's listed SKU disagree on formatting
+        (a missing hyphen has caused real duplicates) — but the barcode,
+        being copied verbatim rather than retyped, still lines up."""
+        return self._search_variant(f"barcode:{barcode}")
 
     def create_product(
         self,
@@ -88,14 +99,14 @@ class ShopifyClient:
         *,
         sku: str,
         price: float,
-        vendor: str,
         product_type: str,
         weight_kg: float | None = None,
         barcode: str | None = None,
         image_bytes: bytes | None = None,
     ) -> dict[str, Any]:
-        """Never touches title — that's set once on create_product and is
-        fair game for a human to edit by hand afterwards in Shopify."""
+        """Never touches title or vendor — both are set once on
+        create_product and are fair game for a human to edit by hand
+        afterwards in Shopify."""
         variant: dict[str, Any] = {"id": variant_id, "sku": sku, "price": f"{price:.2f}", "weight_unit": "kg", "inventory_management": "shopify"}
         if weight_kg is not None:
             variant["weight"] = weight_kg
@@ -103,7 +114,6 @@ class ShopifyClient:
             variant["barcode"] = barcode
         product: dict[str, Any] = {
             "id": product_id,
-            "vendor": vendor,
             "product_type": product_type,
             "variants": [variant],
         }
@@ -111,7 +121,7 @@ class ShopifyClient:
             product["images"] = [{"attachment": base64.b64encode(image_bytes).decode("ascii")}]
         result = self._client.put(f"/products/{product_id}.json", {"product": product})["product"]
         record(service="shopify", entity_type="product", entity_id=sku, action="update",
-               after={"price": price, "product_type": product_type, "vendor": vendor})
+               after={"price": price, "product_type": product_type})
         return result
 
     def set_inventory_level(self, *, inventory_item_id: int, location_id: int, available: int, previous_available: int | None = None) -> dict[str, Any]:

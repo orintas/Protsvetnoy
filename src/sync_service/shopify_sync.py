@@ -148,17 +148,24 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
     cached = product_map.get(sku)
     if cached is None:
         found = shopify.find_variant_by_sku(sku)
+        if found is None and barcode:
+            # SKU search can miss a real match (e.g. MoySklad's code and
+            # Shopify's listed SKU disagree on formatting) — the barcode is
+            # copied verbatim rather than retyped, so it's a more reliable
+            # fallback before concluding the product doesn't exist yet.
+            found = shopify.find_variant_by_barcode(barcode)
         if found is not None:
             product_map.set(sku, product_id=found["product_id"], variant_id=found["variant_id"], inventory_item_id=found["inventory_item_id"])
             cached = product_map.get(sku)
 
     if cached is not None:
-        # Title is deliberately left untouched here — it's only ever set on
-        # create_product below. A human may retitle the product in Shopify
-        # afterwards, and a nightly catalog sync must not stomp on that.
+        # Title and vendor are deliberately left untouched here — both are
+        # only ever set on create_product below. A human may edit either by
+        # hand afterwards in Shopify, and a nightly catalog sync must not
+        # stomp on that.
         shopify.update_product(
             cached["product_id"], cached["variant_id"],
-            sku=sku, price=price, vendor=VENDOR, product_type=category,
+            sku=sku, price=price, product_type=category,
             weight_kg=weight, barcode=barcode, image_bytes=image_bytes,
         )
         log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})

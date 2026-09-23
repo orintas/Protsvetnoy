@@ -74,6 +74,25 @@ def test_find_variant_by_sku_falls_back_to_first_result_when_none_are_active():
     assert result == {"variant_id": 111, "inventory_item_id": 222, "product_id": 333}
 
 
+def test_find_variant_by_barcode_searches_by_barcode_and_parses_result():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={
+            "data": {"productVariants": {"edges": [{"node": {
+                "id": "gid://shopify/ProductVariant/111", "sku": "ABC",
+                "inventoryItem": {"id": "gid://shopify/InventoryItem/222"},
+                "product": {"id": "gid://shopify/Product/333", "title": "Test", "status": "ACTIVE"},
+            }}]}}
+        })
+
+    client = _client_with_handler(handler)
+    result = client.find_variant_by_barcode("4600000000000")
+    assert result == {"variant_id": 111, "inventory_item_id": 222, "product_id": 333}
+    assert "barcode:4600000000000" in requests[0].content.decode()
+
+
 def test_create_product_posts_variant_and_base64_image():
     requests: list[httpx.Request] = []
 
@@ -100,13 +119,13 @@ def test_update_product_puts_to_product_id_path():
         return httpx.Response(200, json={"product": {"id": 1}})
 
     client = _client_with_handler(handler)
-    client.update_product(1, 2, sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories")
+    client.update_product(1, 2, sku="ABC", price=12.5, product_type="Accessories")
     assert requests[0].method == "PUT"
     assert requests[0].url.path == "/admin/api/2026-07/products/1.json"
     assert '"inventory_management":"shopify"' in requests[0].content.decode().replace(" ", "")
 
 
-def test_update_product_never_sends_title():
+def test_update_product_never_sends_title_or_vendor():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -114,8 +133,10 @@ def test_update_product_never_sends_title():
         return httpx.Response(200, json={"product": {"id": 1}})
 
     client = _client_with_handler(handler)
-    client.update_product(1, 2, sku="ABC", price=12.5, vendor="TM Varvikas", product_type="Accessories")
-    assert '"title"' not in requests[0].content.decode()
+    client.update_product(1, 2, sku="ABC", price=12.5, product_type="Accessories")
+    body = requests[0].content.decode()
+    assert '"title"' not in body
+    assert '"vendor"' not in body
 
 
 def test_set_inventory_level_posts_expected_body():
