@@ -35,6 +35,45 @@ def test_find_variant_by_sku_returns_none_when_not_found():
     assert client.find_variant_by_sku("MISSING") is None
 
 
+def test_find_variant_by_sku_prefers_active_product_over_draft_duplicate():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "data": {"productVariants": {"edges": [
+                {"node": {
+                    "id": "gid://shopify/ProductVariant/111", "sku": "ABC",
+                    "inventoryItem": {"id": "gid://shopify/InventoryItem/222"},
+                    "product": {"id": "gid://shopify/Product/333", "title": "Draft copy", "status": "DRAFT"},
+                }},
+                {"node": {
+                    "id": "gid://shopify/ProductVariant/444", "sku": "ABC",
+                    "inventoryItem": {"id": "gid://shopify/InventoryItem/555"},
+                    "product": {"id": "gid://shopify/Product/666", "title": "Active copy", "status": "ACTIVE"},
+                }},
+            ]}}
+        })
+
+    client = _client_with_handler(handler)
+    result = client.find_variant_by_sku("ABC")
+    assert result == {"variant_id": 444, "inventory_item_id": 555, "product_id": 666}
+
+
+def test_find_variant_by_sku_falls_back_to_first_result_when_none_are_active():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "data": {"productVariants": {"edges": [
+                {"node": {
+                    "id": "gid://shopify/ProductVariant/111", "sku": "ABC",
+                    "inventoryItem": {"id": "gid://shopify/InventoryItem/222"},
+                    "product": {"id": "gid://shopify/Product/333", "title": "Only draft", "status": "DRAFT"},
+                }},
+            ]}}
+        })
+
+    client = _client_with_handler(handler)
+    result = client.find_variant_by_sku("ABC")
+    assert result == {"variant_id": 111, "inventory_item_id": 222, "product_id": 333}
+
+
 def test_create_product_posts_variant_and_base64_image():
     requests: list[httpx.Request] = []
 

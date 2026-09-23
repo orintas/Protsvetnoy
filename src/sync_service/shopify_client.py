@@ -22,10 +22,16 @@ class ShopifyClient:
         self._client.close()
 
     def find_variant_by_sku(self, sku: str) -> dict[str, Any] | None:
+        """Some SKUs have more than one product in this store (leftover
+        duplicates predating this sync, or a duplicate this sync itself
+        created on an early run when its search missed an existing product).
+        Where that happens, an ACTIVE product is preferred over a DRAFT one —
+        the draft is invisible to customers, so it's never the one worth
+        keeping in sync — rather than an arbitrary first search result."""
         query = """
         query($q: String!) {
-          productVariants(first: 1, query: $q) {
-            edges { node { id sku inventoryItem { id } product { id title } } }
+          productVariants(first: 10, query: $q) {
+            edges { node { id sku inventoryItem { id } product { id title status } } }
           }
         }
         """
@@ -33,7 +39,8 @@ class ShopifyClient:
         edges = (((payload.get("data") or {}).get("productVariants") or {}).get("edges")) or []
         if not edges:
             return None
-        node = edges[0]["node"]
+        nodes = [e["node"] for e in edges]
+        node = next((n for n in nodes if n["product"].get("status") == "ACTIVE"), nodes[0])
         return {
             "variant_id": _numeric_id(node["id"]),
             "product_id": _numeric_id(node["product"]["id"]),
