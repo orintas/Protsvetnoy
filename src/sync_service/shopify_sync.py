@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from .category_sync import CategorySyncConfig
 from .config import Settings
 from .error_log import ErrorLog
+from .http import ApiError
 from .moysklad import MoySkladClient
 from .shopify_client import ShopifyClient
 from .shopify_warehouses import ShopifyWarehouseConfig
@@ -103,12 +104,38 @@ class ShopifyProductMap:
         with sqlite3.connect(self.path) as db:
             return [row[0] for row in db.execute("SELECT sku FROM product_map")]
 
+    def delete(self, sku: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("DELETE FROM product_map WHERE sku=?", (sku,))
+
 
 def _retail_price(product: dict[str, Any]) -> float | None:
     for entry in product.get("salePrices") or []:
         if ((entry.get("priceType") or {}).get("name")) == RETAIL_PRICE_TYPE_NAME:
             return round(entry.get("value", 0)) / 100
     return None
+
+
+def _resolve_variant(shopify: ShopifyClient, product_map: ShopifyProductMap, sku: str, barcode: str | None) -> dict[str, Any] | None:
+    found = shopify.find_variant_by_sku(sku)
+    if found is None and barcode:
+        # SKU search can miss a real match (e.g. MoySklad's code and
+        # Shopify's listed SKU disagree on formatting) — the barcode is
+        # copied verbatim rather than retyped, so it's a more reliable
+        # fallback before concluding the product doesn't exist yet.
+        found = shopify.find_variant_by_barcode(barcode)
+    if found is None:
+        return None
+    product_map.set(sku, product_id=found["product_id"], variant_id=found["variant_id"], inventory_item_id=found["inventory_item_id"])
+    return product_map.get(sku)
+
+
+def _update_shopify_product(shopify: ShopifyClient, cached: dict[str, Any], *, sku: str, price: float, category: str, weight: float | None, barcode: str | None, image_bytes: bytes | None) -> None:
+    shopify.update_product(
+        cached["product_id"], cached["variant_id"],
+        sku=sku, price=price, product_type=category,
+        weight_kg=weight, barcode=barcode, image_bytes=image_bytes,
+    )
 
 
 def sync_catalog(moysklad: MoySkladClient, shopify: ShopifyClient, categories: list[str], product_map: ShopifyProductMap, log: ShopifySyncLog) -> None:
@@ -147,29 +174,29 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
 
     cached = product_map.get(sku)
     if cached is None:
-        found = shopify.find_variant_by_sku(sku)
-        if found is None and barcode:
-            # SKU search can miss a real match (e.g. MoySklad's code and
-            # Shopify's listed SKU disagree on formatting) — the barcode is
-            # copied verbatim rather than retyped, so it's a more reliable
-            # fallback before concluding the product doesn't exist yet.
-            found = shopify.find_variant_by_barcode(barcode)
-        if found is not None:
-            product_map.set(sku, product_id=found["product_id"], variant_id=found["variant_id"], inventory_item_id=found["inventory_item_id"])
-            cached = product_map.get(sku)
+        cached = _resolve_variant(shopify, product_map, sku, barcode)
 
     if cached is not None:
         # Title and vendor are deliberately left untouched here — both are
         # only ever set on create_product below. A human may edit either by
         # hand afterwards in Shopify, and a nightly catalog sync must not
         # stomp on that.
-        shopify.update_product(
-            cached["product_id"], cached["variant_id"],
-            sku=sku, price=price, product_type=category,
-            weight_kg=weight, barcode=barcode, image_bytes=image_bytes,
-        )
-        log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})
-        return
+        try:
+            _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
+            log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})
+            return
+        except ApiError as error:
+            if "404" not in str(error):
+                raise
+            # The cached product is gone (e.g. a duplicate was manually
+            # deleted in Shopify) — drop the stale mapping and re-resolve
+            # once instead of failing this SKU every night from now on.
+            product_map.delete(sku)
+            cached = _resolve_variant(shopify, product_map, sku, barcode)
+            if cached is not None:
+                _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
+                log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify (карточка была пересоздана)", sku, {"price": price})
+                return
 
     created = shopify.create_product(
         title=title, sku=sku, price=price, vendor=VENDOR, product_type=category,

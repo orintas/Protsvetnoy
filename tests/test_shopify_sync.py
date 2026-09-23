@@ -1,5 +1,6 @@
 import pytest
 
+from sync_service.http import ApiError
 from sync_service.shopify_sync import ShopifyProductMap, ShopifySyncLog, sync_catalog, sync_stock
 
 
@@ -25,9 +26,10 @@ class FakeMoySklad:
 
 
 class FakeShopify:
-    def __init__(self, existing_variants=None, existing_by_barcode=None):
+    def __init__(self, existing_variants=None, existing_by_barcode=None, fail_update_for=None):
         self.existing_variants = existing_variants or {}
         self.existing_by_barcode = existing_by_barcode or {}
+        self.fail_update_for = fail_update_for or set()
         self.barcode_lookups = []
         self.created = []
         self.updated = []
@@ -45,6 +47,8 @@ class FakeShopify:
         return {"id": 100 + len(self.created), "variants": [{"id": 200 + len(self.created), "inventory_item_id": 300 + len(self.created)}]}
 
     def update_product(self, product_id, variant_id, **kwargs):
+        if product_id in self.fail_update_for:
+            raise ApiError(f"PUT https://x/products/{product_id}.json failed with HTTP 404: Not Found")
         self.updated.append((product_id, variant_id, kwargs))
         return {"id": product_id}
 
@@ -144,6 +148,38 @@ def test_sync_catalog_reuses_cached_mapping_without_searching_again(tmp_path):
     sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
 
     assert shopify.updated[0][:2] == (9, 10)
+
+
+def test_sync_catalog_heals_stale_cache_when_cached_product_was_deleted(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    product_map.set("ABC", product_id=9, variant_id=10, inventory_item_id=11)  # a deleted duplicate's stale id
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify(
+        existing_variants={"ABC": {"product_id": 42, "variant_id": 43, "inventory_item_id": 44}},  # the surviving product
+        fail_update_for={9},
+    )
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert shopify.updated == [(42, 43, {"sku": "ABC", "price": 12.5, "product_type": "Accessories", "weight_kg": 0.5, "barcode": "1234567890123", "image_bytes": None})]
+    assert product_map.get("ABC")["product_id"] == 42  # cache repaired, not left pointing at the deleted product
+    kinds = [e["kind"] for e in log.recent()]
+    assert kinds == ["catalog_update"]  # healed silently — no error logged
+
+
+def test_sync_catalog_creates_new_product_when_stale_cache_points_to_a_fully_deleted_sku(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    product_map.set("ABC", product_id=9, variant_id=10, inventory_item_id=11)
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify(fail_update_for={9})  # no other match anywhere — the product is truly gone
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert shopify.updated == []
+    assert len(shopify.created) == 1
+    assert product_map.get("ABC")["product_id"] == 101
 
 
 def test_sync_catalog_logs_error_when_no_retail_price(tmp_path):
