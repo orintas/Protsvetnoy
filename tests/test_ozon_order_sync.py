@@ -85,11 +85,12 @@ def _patched(monkeypatch, ozon, telegram=None, moysklad=None):
     monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad or FakeMoySklad())
 
 
-def _posting(status, *, warehouse="ТЦ Саларис", products=None):
+def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None):
     return {
         "status": status,
         "delivery_method": {"warehouse": warehouse},
         "products": products or [{"offer_id": "LE148", "sku": 1536499166, "quantity": 1}],
+        "available_actions": available_actions or [],
     }
 
 
@@ -166,6 +167,26 @@ def test_run_once_sends_label_once_posting_is_ready(tmp_path, monkeypatch):
     assert telegram.sent[0][0] == "-100123"
     assert telegram.sent[0][3] == "OZON\nТЦ Саларис\nЗаказ №X-1\nLE148 × 1"
     assert telegram.sent[0][4] == "HTML"
+    assert queue.pending() == []  # marked done
+
+
+def test_run_once_sends_label_when_status_is_unrecognized_but_ozon_says_it_is_downloadable(tmp_path, monkeypatch):
+    """A real Express/courier-partner posting sat in "awaiting_registration"
+    (not in LABEL_READY_STATUSES) for its whole lifetime while OZON already
+    listed the label as downloadable — available_actions must be trusted
+    over the hardcoded status allowlist."""
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_registration", available_actions=["label_download", "cancel"])})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert ozon.ship_calls == []
+    assert ozon.label_calls == [["X-1"]]
     assert queue.pending() == []  # marked done
 
 

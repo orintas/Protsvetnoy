@@ -27,11 +27,14 @@ RFBS_WAREHOUSE_IDS = {
 }
 
 # Statuses at/after which a posting's label is expected to be downloadable —
-# confirmed live: real postings sitting in "awaiting_deliver" already had
-# "label_download" in their available_actions. Ship only applies to postings
-# still in "awaiting_packaging"; anything already past that (whichever way it
-# got there) skips straight to trying the label.
+# kept as a fallback for when available_actions is missing/empty. The
+# primary signal is OZON's own available_actions list (see LABEL_ACTION
+# below): a real Express/courier-partner posting sat in
+# "awaiting_registration" — not in this set — for its entire lifetime while
+# already listing "label_download" as available, so relying on status name
+# alone missed it for the whole 20-minute retry window.
 LABEL_READY_STATUSES = {"awaiting_deliver", "delivering", "driver_pickup", "delivered"}
+LABEL_ACTION = "label_download"
 SHIP_FROM_STATUS = "awaiting_packaging"
 TERMINAL_STATUSES = {"cancelled", "not_accepted"}
 
@@ -244,7 +247,8 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
                 # not marked shipped — the SHIP_FROM_STATUS branch retries it next tick
         return  # label needs ~45-60s after shipping — try it on a later tick
 
-    if status in LABEL_READY_STATUSES or already_shipped:
+    label_downloadable = LABEL_ACTION in (details.get("available_actions") or [])
+    if status in LABEL_READY_STATUSES or already_shipped or label_downloadable:
         if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors):
             queue.mark_done(posting_number)
 
