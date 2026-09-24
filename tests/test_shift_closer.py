@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sync_service.shift_closer import TARGET_ORGANIZATIONS, ShiftCloseLog, run_once
+from sync_service.shift_closer import CLOSE_HOUR, CLOSE_MINUTE, TARGET_ORGANIZATIONS, ShiftCloseLog, _pending_close_target, run_once
 
 
 class FakeMoySkladClient:
@@ -8,12 +8,15 @@ class FakeMoySkladClient:
         self.shifts_by_org = shifts_by_org
         self.closed: list[tuple[str, str]] = []
         self.fail_ids: set[str] = set()
+        self.fail_orgs: set[str] = set()
         self.already_closed_ids: set[str] = set()
         # Shifts that only become "closed by the POS" once our own close
         # attempt fails — simulates the race losing right at the PUT itself.
         self.close_during_our_attempt_ids: set[str] = set()
 
     def open_retail_shifts(self, organization_id, since):
+        if organization_id in self.fail_orgs:
+            raise RuntimeError("boom (503)")
         return self.shifts_by_org.get(organization_id, [])
 
     def retail_shift_close_date(self, shift_id):
@@ -100,3 +103,52 @@ def test_last_run_date_persists(tmp_path):
     assert log.last_run_date() == "2026-09-13"
     log.set_last_run_date("2026-09-14")
     assert log.last_run_date() == "2026-09-14"
+
+
+def test_one_country_failing_to_list_shifts_does_not_abort_the_others(tmp_path):
+    orgs = list(TARGET_ORGANIZATIONS)
+    client = FakeMoySkladClient({orgs[1]: [_shift("ok-1", "001")]})
+    client.fail_orgs = {orgs[0]}  # Poland's own listing call 503s
+    log = ShiftCloseLog(str(tmp_path / "shift_close.sqlite3"))
+    close_moment = datetime(2026, 9, 13, 23, 50, tzinfo=timezone.utc)
+
+    count = run_once(client, log, dry_run=False, close_moment=close_moment)
+
+    assert count == 1  # Lithuania's shift was still found and closed
+    assert client.closed == [("ok-1", "2026-09-13 23:50:00.000")]
+    entries = log.recent()
+    assert any(e["kind"] == "run_error" and e["status"] == "error" for e in entries)
+    assert any(e["kind"] == "run" and e["status"] == "success" for e in entries)  # still reaches the summary line
+
+
+def test_pending_close_target_returns_none_before_close_hour(tmp_path):
+    now = datetime(2026, 9, 24, CLOSE_HOUR - 1, 0, tzinfo=timezone.utc)
+    assert _pending_close_target(now, None) is None
+
+
+def test_pending_close_target_fires_at_close_time_when_not_run_today(tmp_path):
+    now = datetime(2026, 9, 24, CLOSE_HOUR, CLOSE_MINUTE, tzinfo=timezone.utc)
+    target = _pending_close_target(now, "2026-09-23")
+    assert target == now
+
+
+def test_pending_close_target_returns_none_when_already_run_today(tmp_path):
+    now = datetime(2026, 9, 24, CLOSE_HOUR, CLOSE_MINUTE, tzinfo=timezone.utc)
+    assert _pending_close_target(now, "2026-09-24") is None
+
+
+def test_pending_close_target_catches_up_a_fully_missed_day_at_any_hour(tmp_path):
+    # last successful run was two days before "now" — yesterday's run never
+    # completed (e.g. MoySklad 503s right up until the retry window closed
+    # at midnight) — must retry yesterday's own close time, not wait for
+    # tonight's normally-scheduled run.
+    now = datetime(2026, 9, 24, 4, 0, tzinfo=timezone.utc)  # early morning, well before tonight's close hour
+    target = _pending_close_target(now, "2026-09-22")
+    assert target == datetime(2026, 9, 23, CLOSE_HOUR, CLOSE_MINUTE, tzinfo=timezone.utc)
+
+
+def test_pending_close_target_does_not_catch_up_when_only_one_day_behind(tmp_path):
+    # last_run_date is yesterday — completely normal (just waiting for
+    # tonight's close hour), not a missed day.
+    now = datetime(2026, 9, 24, 4, 0, tzinfo=timezone.utc)
+    assert _pending_close_target(now, "2026-09-23") is None

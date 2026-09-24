@@ -106,7 +106,15 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
     close_date = close_moment.strftime("%Y-%m-%d %H:%M:%S.000")
     total_open = 0
     for org_id, country in TARGET_ORGANIZATIONS.items():
-        open_shifts = client.open_retail_shifts(org_id, since)
+        try:
+            open_shifts = client.open_retail_shifts(org_id, since)
+        except Exception as error:
+            # A transient failure listing one country's shifts (e.g. a
+            # MoySklad 503) must not abort the other three — this used to
+            # propagate straight out of run_once, skipping every remaining
+            # country for the night and leaving their shifts unchecked.
+            log.add("run_error", "error", f"[{country}] не удалось получить список незакрытых смен: {error}", {"org_id": org_id})
+            continue
         total_open += len(open_shifts)
         for shift in open_shifts:
             store = _store_name(shift) or "неизвестный магазин"
@@ -159,19 +167,45 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
     return total_open
 
 
+def _pending_close_target(now: datetime, last_run_date: str | None) -> datetime | None:
+    """Which close-moment (if any) is due right now.
+
+    Normally that's today's CLOSE_HOUR:CLOSE_MINUTE, once reached and not
+    already run today. But if the previous day's run never completed (e.g.
+    MoySklad returning 503 for the few minutes before the retry window used
+    to close at midnight — confirmed live on 2026-09-23/24, which left all
+    four countries' shifts unchecked for the whole night), that missed day
+    is retried at any hour today using its own close time, rather than
+    silently waiting for tonight's run and leaving a full day's shifts open
+    in the meantime.
+    """
+    today = now.date()
+    today_target = now.replace(hour=CLOSE_HOUR, minute=CLOSE_MINUTE, second=0, microsecond=0)
+    if last_run_date:
+        try:
+            last_run = datetime.fromisoformat(last_run_date).date()
+        except ValueError:
+            last_run = None
+        if last_run is not None and last_run < today - timedelta(days=1):
+            missed_day = today - timedelta(days=1)
+            return today_target.replace(year=missed_day.year, month=missed_day.month, day=missed_day.day)
+    if now >= today_target and last_run_date != today.isoformat():
+        return today_target
+    return None
+
+
 def worker() -> None:
     settings = Settings.from_env()
     log = ShiftCloseLog()
     errors = ErrorLog()
     while True:
         now = datetime.now(CLOSE_TIMEZONE)
-        target = now.replace(hour=CLOSE_HOUR, minute=CLOSE_MINUTE, second=0, microsecond=0)
-        today = now.date().isoformat()
-        if now >= target and log.last_run_date() != today:
+        target = _pending_close_target(now, log.last_run_date())
+        if target is not None:
             client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
             try:
                 run_once(client, log, dry_run=settings.moysklad_shift_close_dry_run, close_moment=target)
-                log.set_last_run_date(today)
+                log.set_last_run_date(target.date().isoformat())
             except Exception as error:
                 errors.log_exception("moysklad_shift_close_worker", error, context="Ошибка проверки незакрытых смен МойСклад (PL/LT/LV/EE)")
             finally:
