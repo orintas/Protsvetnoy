@@ -358,8 +358,16 @@ class MoySkladClient:
         payload = self._client.get(f"/entity/retailshift/{shift_id}")
         return payload.get("closeDate")
 
-    def close_retail_shift(self, shift_id: str, close_date: str) -> None:
-        self._client.put(f"/entity/retailshift/{shift_id}", {"closeDate": close_date})
+    def close_retail_shift(self, shift_id: str, close_date: str, *, name: str | None = None) -> None:
+        """`name` is only ever passed to work around a live-confirmed MoySklad
+        quirk: closing a shift can be rejected for a "name" uniqueness
+        conflict with another shift in the same store, even though closeDate
+        is the only field actually being changed — retrying under a
+        suffixed name (e.g. "00265-1") is the caller's fallback for that."""
+        body: dict[str, Any] = {"closeDate": close_date}
+        if name is not None:
+            body["name"] = name
+        self._client.put(f"/entity/retailshift/{shift_id}", body)
         record(service="moysklad", entity_type="retailshift.closeDate", entity_id=shift_id, action="update",
                before=None, after=close_date)
 

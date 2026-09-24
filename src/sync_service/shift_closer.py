@@ -79,6 +79,39 @@ def _store_name(shift: dict[str, Any]) -> str:
     return ""
 
 
+def _is_from_a_later_day(shift: dict[str, Any], close_moment: datetime) -> bool:
+    """True for a shift opened after close_moment's own calendar day — e.g. a
+    store's brand new shift for today, encountered while catching up a
+    missed earlier day. Confirmed live: a catch-up run for a missed night
+    swept up a store's freshly-opened current shift too (same lookback
+    window covers both), and the two happened to share the same
+    auto-generated name, triggering MoySklad's uniqueness conflict on the
+    old one. Must never be touched — it's still legitimately in use."""
+    moment = str(shift.get("moment") or "")
+    if len(moment) < 10:
+        return False
+    return moment[:10] > close_moment.date().isoformat()
+
+
+def _close_with_renamed_fallback(client: MoySkladClient, shift_id: str, close_date: str, name: str | None) -> str | None:
+    """MoySklad's "name" uniqueness constraint can reject closing a shift
+    even though closeDate is the only field being changed — confirmed live:
+    two same-named shifts existing at once in the same store trips it.
+    Retries closing under a suffixed name (00265-1, 00265-2, ...) rather
+    than leaving the shift open indefinitely. Returns the name it actually
+    closed under, or None if every attempt was rejected."""
+    if not name:
+        return None
+    for suffix in range(1, 6):
+        candidate = f"{name}-{suffix}"
+        try:
+            client.close_retail_shift(shift_id, close_date, name=candidate)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
 def list_open_shifts(client: MoySkladClient, *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Read-only view of currently open PL/LT/LV/EE shifts — never logs or closes anything."""
     now = now or datetime.now(CLOSE_TIMEZONE)
@@ -115,8 +148,10 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
             # country for the night and leaving their shifts unchecked.
             log.add("run_error", "error", f"[{country}] не удалось получить список незакрытых смен: {error}", {"org_id": org_id})
             continue
-        total_open += len(open_shifts)
         for shift in open_shifts:
+            if _is_from_a_later_day(shift, close_moment):
+                continue  # today's own shift, encountered only via a catch-up run for an earlier day — never touch it
+            total_open += 1
             store = _store_name(shift) or "неизвестный магазин"
             info = {
                 "id": shift.get("id"),
@@ -161,6 +196,16 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                         info,
                     )
                     continue
+                if "уникальности" in str(error).lower():
+                    closed_as = _close_with_renamed_fallback(client, shift_id, close_date, shift.get("name"))
+                    if closed_as:
+                        log.add(
+                            "shift", "success",
+                            f"[{country}] {store}: закрыта смена №{shift.get('name')} под номером {closed_as} "
+                            f"(конфликт имён с другой сменой в этом магазине), дата закрытия {close_date}",
+                            info,
+                        )
+                        continue
                 log.add("shift", "error", f"[{country}] {store}: не удалось закрыть смену №{shift.get('name')}: {error}", info)
     suffix = " (тестовый режим — ничего не закрывалось)" if dry_run and total_open else ""
     log.add("run", "success", f"Проверка завершена: незакрытых смен найдено {total_open}{suffix}")
