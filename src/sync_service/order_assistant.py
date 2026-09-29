@@ -32,9 +32,16 @@ IMAGE_ORDER_NUMBER_PROMPT = """На фото — чек, этикетка или
 # Loose order-number shapes worth trying against MoySklad — deliberately
 # permissive (the real check is "does MoySklad actually have an order under
 # this id", via resolve_order_by_number), so overmatching here is harmless.
+# Bounds are intentionally generous: real OZON posting numbers were observed
+# with prefixes from 5 to 10 digits (e.g. "0113798402-0282-1"), and a tight
+# upper bound previously made the regex match a truncated tail instead of
+# the full number (confirmed live 2026-09-30 — 13 of 14 real posting
+# numbers extracted wrong). \b word boundaries ensure a match always starts
+# at the actual beginning of a digit run rather than silently sliding into
+# the middle of a longer one when it doesn't fit the bound.
 _ORDER_NUMBER_PATTERNS = (
-    re.compile(r"\d{1,6}-\d{3,6}-\d{1,3}"),  # OZON posting number, e.g. 12345-0001-1
-    re.compile(r"\d{8,12}"),  # Yandex Market order id
+    re.compile(r"\b\d{4,15}-\d{2,8}-\d{1,4}\b"),  # OZON posting number, e.g. 87792534-0050-1
+    re.compile(r"\b\d{8,12}\b"),  # Yandex Market order id
 )
 
 

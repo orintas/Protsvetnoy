@@ -89,6 +89,20 @@ def test_extract_order_candidates_finds_ozon_posting_number():
     assert extract_order_candidates("вот отправление 12345-0001-1 не пришло") == ["12345-0001-1"]
 
 
+def test_extract_order_candidates_finds_ozon_posting_number_with_a_long_prefix():
+    """Real posting numbers regularly have an 8-10 digit prefix (e.g.
+    "87792534-0050-1", "0113798402-0282-1") — a previous tight upper bound
+    on the first digit group made the regex match a truncated tail instead
+    of the full number, silently breaking resolution for most real OZON
+    orders. Confirmed live 2026-09-30: 13 of 14 real posting numbers
+    extracted wrong."""
+    candidates = extract_order_candidates("🚚 Приехал курьер в ТЦ Ривьера за заказом 87792534-0050-1")
+    assert candidates[0] == "87792534-0050-1"
+
+    candidates = extract_order_candidates("отправление 0113798402-0282-1 готово")
+    assert candidates[0] == "0113798402-0282-1"
+
+
 def test_extract_order_candidates_ignores_short_numbers():
     assert extract_order_candidates("заказ 123, розы x5") == []
 
@@ -116,6 +130,18 @@ def test_resolve_order_from_text_finds_the_first_matching_candidate():
     order = {"name": "0001234", "description": "Роза x3"}
     moysklad = FakeMoySklad(by_external_code={"62260935105": order})
     assert resolve_order_from_text(text="заказ 62260935105, где он?", moysklad=moysklad) == ("yandex_market", "62260935105", order)
+
+
+def test_resolve_order_from_text_resolves_a_reply_to_a_courier_notice():
+    """The real reported scenario: replying to the bot's own courier-arrival
+    message ("🚚 Приехал курьер в ... за заказом 87792534-0050-1"), whose
+    text ends up in the search text via the reply_to merge in
+    telegram_qa_worker. Must resolve the full posting number, not a
+    truncated prefix."""
+    posting = {"name": "87792534-0050-1", "description": "Мозаика x1"}
+    moysklad = FakeMoySklad(by_name={"87792534-0050-1": posting})
+    result = resolve_order_from_text(text="а что там? 🚚 Приехал курьер в Экспресс_ТЦ_Авиапарк за заказом 87792534-0050-1", moysklad=moysklad)
+    assert result == ("ozon", "87792534-0050-1", posting)
 
 
 def test_resolve_order_from_text_returns_none_when_nothing_resolves():
