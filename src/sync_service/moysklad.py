@@ -175,6 +175,8 @@ class MoySkladClient:
         sales_channel_id: str | None = None,
         currency_id: str | None = None,
         state_id: str | None = None,
+        owner_id: str | None = None,
+        group_id: str | None = None,
     ) -> dict[str, Any]:
         """`name=None` lets MoySklad assign the next number in its own shared
         sequence — the convention already used for every manually-entered
@@ -196,6 +198,10 @@ class MoySkladClient:
             body["rate"] = {"currency": self._meta("currency", currency_id)}
         if state_id:
             body["state"] = self._state_meta(state_id)
+        if owner_id:
+            body["owner"] = self._meta("employee", owner_id)
+        if group_id:
+            body["group"] = self._meta("group", group_id)
         result = self._client.post("/entity/customerorder", body)
         record(service="moysklad", entity_type="customerorder", entity_id=external_code, action="create",
                after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id})

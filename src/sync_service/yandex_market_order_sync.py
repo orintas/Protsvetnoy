@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .label_caption import build_caption, format_items_plain
 from .moysklad import MoySkladClient
+from .order_lock import yandex_market_order_creation
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
@@ -16,6 +17,14 @@ from .yandex_market_sync import YandexMarketSyncLog
 ORGANIZATION_ID = "40b2d5fc-22a4-11ec-0a80-02b1002197e3"  # ООО "ЦВЕТНОЙ МИР"
 AGENT_ID = "fa685205-1cbb-11e8-9107-5048000779ee"  # ООО "ЯНДЕКС.МАРКЕТ", ИНН 7704357909
 SALES_CHANNEL_ID = "5a2f722a-549c-11ef-0a80-0493000bcbe7"  # "Яндекс Маркет FBS"
+# Orders created under the sync's own API token were invisible to the staff
+# member who actually packs them (same issue confirmed for the Shopify
+# pipeline 2026-09-30 — see shopify_order_sync.OWNER_EMPLOYEE_ID). Owning
+# new orders to her directly, in the main department, fixes that at the
+# source. Per explicit correction: Yandex Market orders go to Вероника
+# Рябцева / "Основной", not the Shopify pipeline's Спицын / "ProTsvetnoy OU".
+OWNER_EMPLOYEE_ID = "04d2ad06-669c-11ee-0a80-0951004f1ad4"  # Вероника Рябцева
+GROUP_ID = "08e6b024-d269-11e4-90a2-8ecb0004d9d2"  # "Основной"
 
 # MoySklad customerorder workflow states (GET /entity/customerorder/metadata), matched
 # to Yandex Market's own order status/substatus pushed via ORDER_STATUS_UPDATED.
@@ -164,50 +173,60 @@ def process_new_order(
     guaranteed the way the label step's is (via has_success).
     """
     external_code = str(order_id)
-    order_created_already = moysklad.customer_order_by_external_code(external_code) is not None
-    if order_created_already and log.has_success("label_sent", external_code):
-        return
-
-    store_id = None
-    if not order_created_already:
-        store_id = CAMPAIGN_STORES.get(str(campaign_id))
-        if not store_id:
-            log.add("order_pipeline_error", "error", f"Заказ {order_id}: неизвестная кампания {campaign_id}, склад не определён", None, {"order_id": order_id, "campaign_id": campaign_id})
+    # Market can (and does) resend ORDER_CREATED on webhook failure; the
+    # checks above aren't atomic against MoySklad/the log, so a second
+    # near-simultaneous delivery for the same order must be serialized
+    # against the first rather than run concurrently — otherwise both can
+    # pass a check before either acts on it (a duplicate MoySklad order, or
+    # a duplicate label sent to Telegram). Confirmed live 2026-09-29 for the
+    # analogous Shopify pipeline; see order_lock.py.
+    with yandex_market_order_creation:
+        order_created_already = moysklad.customer_order_by_external_code(external_code) is not None
+        if order_created_already and log.has_success("label_sent", external_code):
             return
 
-    order = yandex.order_by_id(order_id)
-    if order is None:
-        log.add("order_pipeline_error", "error", f"Заказ {order_id}: не удалось получить данные заказа из Яндекс.Маркета", None, {"order_id": order_id, "campaign_id": campaign_id})
-        return
-    items = order.get("items") or []
+        store_id = None
+        if not order_created_already:
+            store_id = CAMPAIGN_STORES.get(str(campaign_id))
+            if not store_id:
+                log.add("order_pipeline_error", "error", f"Заказ {order_id}: неизвестная кампания {campaign_id}, склад не определён", None, {"order_id": order_id, "campaign_id": campaign_id})
+                return
 
-    if not order_created_already:
-        positions, missing_codes = _build_positions(moysklad, items)
-        if missing_codes:
-            log.add("order_pipeline_error", "error", f"Заказ {order_id}: товары не найдены в МойСклад по коду: {', '.join(missing_codes)}", None, order)
-        if not positions:
-            log.add("order_pipeline_error", "error", f"Заказ {order_id}: ни одной позиции не удалось сопоставить, заказ не создан", None, order)
+        order = yandex.order_by_id(order_id)
+        if order is None:
+            log.add("order_pipeline_error", "error", f"Заказ {order_id}: не удалось получить данные заказа из Яндекс.Маркета", None, {"order_id": order_id, "campaign_id": campaign_id})
             return
+        items = order.get("items") or []
 
-        description_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
-        description = format_items_plain(description_items)
-        moysklad.create_customer_order(
-            name=str(order_id),
-            moment=_moysklad_moment(order.get("creationDate")),
-            organization_id=ORGANIZATION_ID,
-            agent_id=AGENT_ID,
-            store_id=store_id,
-            external_code=external_code,
-            positions=positions,
-            description=description,
-            sales_channel_id=SALES_CHANNEL_ID,
-        )
-        log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+        if not order_created_already:
+            positions, missing_codes = _build_positions(moysklad, items)
+            if missing_codes:
+                log.add("order_pipeline_error", "error", f"Заказ {order_id}: товары не найдены в МойСклад по коду: {', '.join(missing_codes)}", None, order)
+            if not positions:
+                log.add("order_pipeline_error", "error", f"Заказ {order_id}: ни одной позиции не удалось сопоставить, заказ не создан", None, order)
+                return
 
-        yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
-        log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
+            description_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
+            description = format_items_plain(description_items)
+            moysklad.create_customer_order(
+                name=str(order_id),
+                moment=_moysklad_moment(order.get("creationDate")),
+                organization_id=ORGANIZATION_ID,
+                agent_id=AGENT_ID,
+                store_id=store_id,
+                external_code=external_code,
+                positions=positions,
+                description=description,
+                sales_channel_id=SALES_CHANNEL_ID,
+                owner_id=OWNER_EMPLOYEE_ID,
+                group_id=GROUP_ID,
+            )
+            log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
 
-    _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+            yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
+            log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
+
+        _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
 
 
 def retry_label_if_missing(

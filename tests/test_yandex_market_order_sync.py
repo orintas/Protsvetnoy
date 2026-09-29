@@ -3,7 +3,9 @@ from sync_service.yandex_market_order_sync import (
     CANCELLED_STATE_ID,
     COMPLETED_STATE_ID,
     DELIVERING_STATE_ID,
+    GROUP_ID,
     MAX_LABEL_RETRIES,
+    OWNER_EMPLOYEE_ID,
     handle_order_cancelled,
     notify_courier_arrived,
     process_new_order,
@@ -134,6 +136,8 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
     assert moysklad.created["external_code"] == "999"
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 36130000, "assortment": {"meta": product["meta"]}}]
     assert moysklad.created["description"] == "RGL02 × 1"
+    assert moysklad.created["owner_id"] == OWNER_EMPLOYEE_ID
+    assert moysklad.created["group_id"] == GROUP_ID
 
     assert yandex.status_calls == [(999, "149179260", "PROCESSING", "READY_TO_SHIP")]
     assert yandex.label_calls == [(999, "149179260")]

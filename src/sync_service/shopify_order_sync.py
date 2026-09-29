@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .moysklad import MoySkladClient
+from .order_lock import shopify_order_creation
 from .shopify_sync import ShopifySyncLog
 
 
@@ -26,6 +27,15 @@ def verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 # organization, agent placeholders) and cross-checked against the API directly.
 ORGANIZATION_ID = "666e33cc-1b25-11ea-0a80-061e0003c973"  # Varvikas Grupp OU
 SALES_CHANNEL_ID = "233f92ab-d2d8-11ed-0a80-10df000eaa30"  # "Shopify"
+# Orders created under the sync's own API token (owner "Kasparas O.") were
+# invisible to the staff member who actually packs them — he couldn't see
+# them in his MoySklad view and kept re-entering the same order by hand
+# (the exact duplicates this file's process_new_order lock exists to
+# prevent one layer up). Owning new orders to him directly, in his own
+# department, fixes that at the source. Confirmed 2026-09-30 against his
+# real employee record and this account's group list.
+OWNER_EMPLOYEE_ID = "475d16c9-18cb-11ee-0a80-08a80023ea46"  # Александр Спицын
+GROUP_ID = "62a11082-1b25-11ea-0a80-030300038a2c"  # "ProTsvetnoy OU"
 CURRENCY_ID = "5100bbd5-1cec-11ea-0a80-04b1000ad00d"  # EUR
 PLN_CURRENCY_ID = "cae74fea-26ec-11ee-0a80-02b4000b49e4"  # PLN, злотый — Polish orders are billed in PLN, not EUR
 SHIPPING_STATE_ID = "dd675d83-a396-11e2-c56e-001b21d91495"  # customerorder state "Отгружать"
@@ -158,45 +168,54 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
     if not external_code:
         log.add("order_error", "error", "Заказ Shopify без id — пропущен", None, order)
         return
-    if moysklad.customer_order_by_external_code(external_code) is not None:
-        return
 
-    country_code = str((order.get("shipping_address") or {}).get("country_code") or "").upper()
-    agent_id = COUNTRY_AGENTS.get(country_code)
-    if not agent_id:
-        log.add("order_error", "error", f"Заказ {order_name}: страна доставки «{country_code or '?'}» не настроена, покупатель не определён", external_code, order)
-        return
+    # Shopify can (and does) deliver the same webhook more than once; the
+    # check-then-create below isn't atomic against MoySklad, so a second
+    # near-simultaneous delivery must be serialized against the first rather
+    # than run concurrently — otherwise both can see "not created yet" and
+    # both create an order (confirmed live 2026-09-29, see order_lock.py).
+    with shopify_order_creation:
+        if moysklad.customer_order_by_external_code(external_code) is not None:
+            return
 
-    is_poland = country_code == "PL"
-    currency_id = PLN_CURRENCY_ID if is_poland else CURRENCY_ID
+        country_code = str((order.get("shipping_address") or {}).get("country_code") or "").upper()
+        agent_id = COUNTRY_AGENTS.get(country_code)
+        if not agent_id:
+            log.add("order_error", "error", f"Заказ {order_name}: страна доставки «{country_code or '?'}» не настроена, покупатель не определён", external_code, order)
+            return
 
-    line_items = order.get("line_items") or []
-    positions, missing_skus = _build_positions(moysklad, line_items, use_presentment_price=is_poland)
-    if missing_skus:
-        log.add("order_error", "error", f"Заказ {order_name}: товары не найдены в МойСклад по артикулу: {', '.join(missing_skus)}", external_code, order)
-    if not positions:
-        log.add("order_error", "error", f"Заказ {order_name}: ни одной позиции не удалось сопоставить, заказ не создан", external_code, order)
-        return
+        is_poland = country_code == "PL"
+        currency_id = PLN_CURRENCY_ID if is_poland else CURRENCY_ID
 
-    skus_needed: dict[str, int] = {}
-    for item in line_items:
-        sku = str(item.get("sku") or "")
-        if sku:
-            skus_needed[sku] = skus_needed.get(sku, 0) + (item.get("quantity") or 1)
-    store_id = _pick_store(moysklad, country_code, skus_needed)
+        line_items = order.get("line_items") or []
+        positions, missing_skus = _build_positions(moysklad, line_items, use_presentment_price=is_poland)
+        if missing_skus:
+            log.add("order_error", "error", f"Заказ {order_name}: товары не найдены в МойСклад по артикулу: {', '.join(missing_skus)}", external_code, order)
+        if not positions:
+            log.add("order_error", "error", f"Заказ {order_name}: ни одной позиции не удалось сопоставить, заказ не создан", external_code, order)
+            return
 
-    address = _format_address(order)
-    description = f"{order_name}\nАдрес доставки: {address}" if address else order_name
-    moysklad.create_customer_order(
-        moment=_moysklad_moment(order.get("created_at")),
-        organization_id=ORGANIZATION_ID,
-        agent_id=agent_id,
-        store_id=store_id,
-        external_code=external_code,
-        positions=positions,
-        description=description,
-        sales_channel_id=SALES_CHANNEL_ID,
-        currency_id=currency_id,
-        state_id=SHIPPING_STATE_ID,
-    )
-    log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+        skus_needed: dict[str, int] = {}
+        for item in line_items:
+            sku = str(item.get("sku") or "")
+            if sku:
+                skus_needed[sku] = skus_needed.get(sku, 0) + (item.get("quantity") or 1)
+        store_id = _pick_store(moysklad, country_code, skus_needed)
+
+        address = _format_address(order)
+        description = f"{order_name}\nАдрес доставки: {address}" if address else order_name
+        moysklad.create_customer_order(
+            moment=_moysklad_moment(order.get("created_at")),
+            organization_id=ORGANIZATION_ID,
+            agent_id=agent_id,
+            store_id=store_id,
+            external_code=external_code,
+            positions=positions,
+            description=description,
+            sales_channel_id=SALES_CHANNEL_ID,
+            currency_id=currency_id,
+            state_id=SHIPPING_STATE_ID,
+            owner_id=OWNER_EMPLOYEE_ID,
+            group_id=GROUP_ID,
+        )
+        log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, order)

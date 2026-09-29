@@ -6,7 +6,9 @@ from sync_service.shopify_order_sync import (
     BALTIC_WAREHOUSE_CHAIN,
     COUNTRY_AGENTS,
     CURRENCY_ID,
+    GROUP_ID,
     MAIN_STORE_ID,
+    OWNER_EMPLOYEE_ID,
     PLN_CURRENCY_ID,
     POLAND_WAREHOUSE_CHAIN,
     SHIPPING_STATE_ID,
@@ -78,6 +80,8 @@ def test_creates_order_from_main_warehouse_when_stock_available(tmp_path):
     assert moysklad.created["description"] == "#7775\nАдрес доставки: Jane Doe, Main St 1, Tallinn, 10111, Estonia, +3725551234"
     assert moysklad.created["currency_id"] == CURRENCY_ID
     assert moysklad.created["state_id"] == SHIPPING_STATE_ID
+    assert moysklad.created["owner_id"] == OWNER_EMPLOYEE_ID
+    assert moysklad.created["group_id"] == GROUP_ID
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["order_created"]
@@ -242,3 +246,60 @@ def test_verify_webhook_signature_rejects_wrong_signature():
 def test_verify_webhook_signature_rejects_empty_secret_or_signature():
     assert verify_webhook_signature(b"{}", "somesig", "") is False
     assert verify_webhook_signature(b"{}", "", "shh") is False
+
+
+def test_process_new_order_is_safe_against_concurrent_duplicate_webhooks(tmp_path):
+    """Shopify can (and does) deliver the same webhook more than once. If
+    two deliveries for the same order run concurrently (this service's web
+    server is multi-threaded) without the order_creation lock, both could
+    pass the "does this order already exist" check before either creates
+    it — confirmed live 2026-09-29 (two real MoySklad orders were created
+    for the same Shopify order). This drives that exact race with real
+    threads and asserts only one order gets created."""
+    import threading
+    import time
+
+    moysklad = FakeMoySklad(
+        products={"ABC": _product("ABC")},
+        stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 5}]},
+    )
+    moysklad.created_calls = []
+    real_create = moysklad.create_customer_order
+
+    def slow_check(external_code):
+        # Capture the current state immediately (what a real MoySklad read
+        # would see at request time), then simulate network latency before
+        # returning it — so a thread that isn't blocked by the lock gets to
+        # run its own check during that window, exactly the gap the real
+        # bug fell through. Without the lock, this reliably reproduces both
+        # threads seeing "not created yet"; with it, the second thread
+        # can't even start its check until the first has fully finished
+        # (including create).
+        value = moysklad.existing_order
+        time.sleep(0.05)
+        return value
+
+    def create_and_persist(**kwargs):
+        result = real_create(**kwargs)
+        moysklad.created_calls.append(kwargs)
+        moysklad.existing_order = {"id": "created"}  # simulate MoySklad now finding it
+        return result
+
+    moysklad.customer_order_by_external_code = slow_check
+    moysklad.create_customer_order = create_and_persist
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    order = _order()
+
+    barrier = threading.Barrier(2)
+
+    def run():
+        barrier.wait()
+        process_new_order(order=order, moysklad=moysklad, log=log)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(moysklad.created_calls) == 1
