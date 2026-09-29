@@ -129,7 +129,7 @@ def test_send_document_raises_after_exhausting_retries_on_transport_error(monkey
         client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
 
 
-def test_set_webhook_posts_url_and_secret_token():
+def test_delete_webhook_posts_to_delete_webhook():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -137,19 +137,55 @@ def test_set_webhook_posts_url_and_secret_token():
         return httpx.Response(200, json={"ok": True, "result": True})
 
     client = _client_with_handler(handler)
-    client.set_webhook(url="https://protsvetnoy.us/api/telegram/webhook", secret_token="s3cr3t")
-    assert requests[0].url.path == "/bottest-token/setWebhook"
-    body = requests[0].content.decode()
-    assert "protsvetnoy.us" in body and "s3cr3t" in body
+    client.delete_webhook()
+    assert requests[0].url.path == "/bottest-token/deleteWebhook"
 
 
-def test_set_webhook_raises_on_ok_false():
+def test_delete_webhook_raises_on_ok_false():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": False, "description": "invalid url"})
+        return httpx.Response(200, json={"ok": False, "description": "boom"})
 
     client = _client_with_handler(handler)
-    with pytest.raises(RuntimeError, match="invalid url"):
-        client.set_webhook(url="not-a-url", secret_token="s3cr3t")
+    with pytest.raises(RuntimeError, match="boom"):
+        client.delete_webhook()
+
+
+def test_get_updates_returns_result_list():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": [{"update_id": 5, "message": {"text": "hi"}}]})
+
+    client = _client_with_handler(handler)
+    updates = client.get_updates(offset=5, timeout=1, allowed_updates=["message"])
+    assert updates == [{"update_id": 5, "message": {"text": "hi"}}]
+    assert requests[0].url.path == "/bottest-token/getUpdates"
+    query = dict(requests[0].url.params)
+    assert query["offset"] == "5"
+    assert query["timeout"] == "1"
+    assert query["allowed_updates"] == '["message"]'
+
+
+def test_get_updates_omits_offset_when_not_given():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": []})
+
+    client = _client_with_handler(handler)
+    client.get_updates()
+    assert "offset" not in dict(requests[0].url.params)
+
+
+def test_get_updates_raises_on_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "description": "boom"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(RuntimeError, match="boom"):
+        client.get_updates()
 
 
 def test_download_file_resolves_path_then_downloads_bytes():

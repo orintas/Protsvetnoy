@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -103,19 +104,45 @@ class TelegramClient:
             raise RuntimeError(f"Telegram file download failed with HTTP {download.status_code}")
         return download.content
 
-    def set_webhook(self, *, url: str, secret_token: str) -> dict[str, Any]:
-        """One-time setup call — registers where Telegram delivers updates
-        (incoming chat messages) for this bot. `secret_token` is echoed back
-        by Telegram on every delivery as the X-Telegram-Bot-Api-Secret-Token
-        header, which is what the inbound webhook endpoint checks instead of
-        an IP allowlist (Telegram doesn't publish stable source ranges)."""
-        response = self._client.post("/setWebhook", data={"url": url, "secret_token": secret_token, "allowed_updates": '["message"]'})
+    def delete_webhook(self) -> dict[str, Any]:
+        """Clears any registered webhook — Telegram refuses long-polling
+        (get_updates) while one is set. Safe/idempotent to call with no
+        webhook registered."""
+        response = self._client.post("/deleteWebhook", data={"drop_pending_updates": "false"})
         if response.is_error:
-            raise RuntimeError(f"Telegram setWebhook failed with HTTP {response.status_code}: {response.text[:500]}")
+            raise RuntimeError(f"Telegram deleteWebhook failed with HTTP {response.status_code}: {response.text[:500]}")
         payload = response.json()
         if not payload.get("ok"):
-            raise RuntimeError(f"Telegram setWebhook returned ok=false: {payload}")
+            raise RuntimeError(f"Telegram deleteWebhook returned ok=false: {payload}")
         return payload
+
+    def get_updates(self, *, offset: int | None = None, timeout: int = 25, allowed_updates: list[str] | None = None) -> list[dict[str, Any]]:
+        """Long-polling read of new updates — this service's only way to
+        receive inbound Telegram messages: Telegram's servers can't reach
+        this Russian-hosted VPS on any inbound path (the mirror image of the
+        already-documented outbound restriction — setWebhook delivery
+        consistently failed with "Connection timed out" even though the
+        service itself answered instantly to a direct external request;
+        confirmed live 2026-09-29), so this pulls through the same working
+        outbound proxy send_message/send_document already use instead of
+        waiting for Telegram to push.
+
+        `offset` should be the last seen update_id + 1 — Telegram keeps
+        redelivering every update at or after `offset` until told otherwise,
+        so the caller is expected to persist and advance it.
+        """
+        params: dict[str, Any] = {"timeout": timeout}
+        if offset is not None:
+            params["offset"] = offset
+        if allowed_updates is not None:
+            params["allowed_updates"] = json.dumps(allowed_updates)
+        response = self._client.get("/getUpdates", params=params, timeout=timeout + 10)
+        if response.is_error:
+            raise RuntimeError(f"Telegram getUpdates failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram getUpdates returned ok=false: {payload}")
+        return payload.get("result") or []
 
     def close(self) -> None:
         self._client.close()

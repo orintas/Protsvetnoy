@@ -45,8 +45,6 @@ jobs:
             grep -q '^OZON_API_KEY=' .env || echo 'OZON_API_KEY=' >> .env
             grep -q '^TELEGRAM_BOT_TOKEN=' .env || echo 'TELEGRAM_BOT_TOKEN=' >> .env
             grep -q '^TELEGRAM_LABEL_CHAT_ID=' .env || echo 'TELEGRAM_LABEL_CHAT_ID=' >> .env
-            grep -q '^TELEGRAM_WEBHOOK_SECRET=' .env || echo 'TELEGRAM_WEBHOOK_SECRET=' >> .env
-            sed -i "s#^TELEGRAM_WEBHOOK_SECRET=.*#TELEGRAM_WEBHOOK_SECRET=${{ secrets.TELEGRAM_WEBHOOK_SECRET }}#" .env
             grep -q '^TELEGRAM_REVIEWS_BOT_TOKEN=' .env || echo 'TELEGRAM_REVIEWS_BOT_TOKEN=' >> .env
             sed -i "s#^TELEGRAM_REVIEWS_BOT_TOKEN=.*#TELEGRAM_REVIEWS_BOT_TOKEN=${{ secrets.TELEGRAM_REVIEWS_BOT_TOKEN }}#" .env
             grep -q '^TELEGRAM_REVIEWS_CHAT_ID=' .env || echo 'TELEGRAM_REVIEWS_CHAT_ID=' >> .env
@@ -62,6 +60,3 @@ jobs:
             grep -q '^TELEGRAM_PROXY_URL=' .env || echo 'TELEGRAM_PROXY_URL=' >> .env
             docker compose up -d --build --remove-orphans
             docker image prune -f
-            if grep -q '^TELEGRAM_BOT_TOKEN=.\+' .env && grep -q '^TELEGRAM_WEBHOOK_SECRET=.\+' .env; then
-              docker compose run --rm web telegram-set-webhook --url https://protsvetnoy.us/api/telegram/webhook || true
-            fi

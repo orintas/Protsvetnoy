@@ -28,7 +28,6 @@ class Settings:
     make_base_url: str
     telegram_bot_token: str
     telegram_label_chat_id: str
-    telegram_webhook_secret: str
     telegram_proxy_url: str
     telegram_reviews_bot_token: str
     telegram_reviews_chat_id: str
@@ -69,7 +68,6 @@ class Settings:
             make_base_url=os.getenv("MAKE_BASE_URL", "https://eu1.make.com/api/v2").rstrip("/"),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_label_chat_id=os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
-            telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
             telegram_proxy_url=os.getenv("TELEGRAM_PROXY_URL", ""),
             telegram_reviews_bot_token=os.getenv("TELEGRAM_REVIEWS_BOT_TOKEN", ""),
             telegram_reviews_chat_id=os.getenv("TELEGRAM_REVIEWS_CHAT_ID", ""),

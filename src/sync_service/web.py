@@ -22,7 +22,6 @@ from .shopify_sync import ShopifySyncLog
 from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
-from .telegram_qa_worker import PendingTelegramMessages, enqueue_if_relevant
 from .yandex_market import YandexMarketClient
 from .yandex_market_order_sync import handle_order_cancelled, notify_courier_arrived, process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
@@ -254,45 +253,6 @@ def _ozon_webhook(environ, start_response):
     payload = dumps(response_body, ensure_ascii=False).encode("utf-8")
     start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
     return [payload]
-
-
-def _telegram_webhook(environ, start_response):
-    """Receives inbound Telegram updates (staff asking about an order — see
-    telegram_qa_worker for the ways that can arrive and how they're
-    answered). Authenticity is checked via the secret token Telegram echoes
-    back on every delivery (set at registration time, see
-    TelegramClient.set_webhook) — Telegram has no signature scheme and
-    doesn't publish stable source IPs, so this is the only verification
-    available, mirroring Shopify's HMAC / Yandex Market's IP-allowlist role
-    for their own webhooks.
-
-    Only ever enqueues (a local sqlite write, no external calls) and
-    answers immediately — actually resolving and answering the question
-    involves several sequential external API calls (MoySklad, the
-    marketplace, Claude, Telegram itself) and used to run right here, which
-    both blocked every other webhook behind it (this server handles one
-    request at a time) and made Telegram itself time out waiting for a
-    response. See telegram_qa_worker.PendingTelegramMessages.
-    """
-    settings = Settings.from_env()
-    secret = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
-    if not settings.telegram_webhook_secret or secret != settings.telegram_webhook_secret:
-        start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
-        return [b"forbidden"]
-    try:
-        update = _read_json_body(environ)
-        if not isinstance(update, dict):
-            raise ValueError("Telegram update payload is not a JSON object")
-    except Exception as error:
-        ErrorLog().log_exception("telegram_webhook", error, context="Некорректное обновление Telegram")
-        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
-        return [b"bad request"]
-    try:
-        enqueue_if_relevant(update, settings=settings, queue=PendingTelegramMessages())
-    except Exception as error:
-        ErrorLog().log_exception("telegram_webhook", error, context="Ошибка постановки сообщения Telegram в очередь")
-    start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
-    return [b"ok"]
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -810,8 +770,6 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return _shopify_order_webhook(environ, start_response)
     if path == "/api/ozon/webhook/notifications" and environ.get("REQUEST_METHOD") == "POST":
         return _ozon_webhook(environ, start_response)
-    if path == "/api/telegram/webhook" and environ.get("REQUEST_METHOD") == "POST":
-        return _telegram_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(
@@ -928,11 +886,12 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
 
 class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """wsgiref's default server handles one request at a time — a single
-    slow request (e.g. one that waits on several external APIs) blocks every
-    other incoming webhook behind it, which is exactly what caused Telegram
-    itself to see "Connection timed out" when the order Q&A handler still
-    ran inline here (see telegram_qa_worker.py, which moved that work off
-    this server entirely). Threading is kept as a second line of defense."""
+    slow handler (one that waits on several external APIs) would otherwise
+    block every other incoming webhook (Yandex Market, OZON, Shopify) behind
+    it for its whole duration. Kept as a general safeguard even though the
+    Telegram order Q&A work that first triggered this concern no longer runs
+    on this server at all — see telegram_qa_worker.py, which pulls messages
+    via polling instead (Telegram can't reach this VPS on any inbound path)."""
 
     daemon_threads = True
 

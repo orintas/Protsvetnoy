@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,63 +23,45 @@ from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
 
-WORKER_TICK_SECONDS = 5
+# Telegram's servers can't reach this Russian-hosted VPS on any inbound
+# path — the mirror image of the already-documented outbound restriction
+# (api.telegram.org unreachable directly, hence the telegram-proxy sidecar).
+# A registered webhook consistently failed with "Connection timed out" even
+# though the service itself answered a direct external request instantly;
+# confirmed live 2026-09-29. So this worker pulls messages via long-polling
+# (get_updates) through the same working outbound proxy send_message/
+# send_document already use, instead of waiting for Telegram to push.
+POLL_TIMEOUT_SECONDS = 25
 
 
-class PendingTelegramMessages:
-    """Work queue for inbound Telegram messages the order Q&A assistant
-    might need to answer. The webhook handler only ever inserts into this —
-    all the slow work (MoySklad/marketplace lookups, the Claude call, the
-    Telegram reply — several sequential external API calls) happens in this
-    worker loop instead. Doing that work inline in the webhook handler
-    blocked every other webhook (Yandex Market, OZON, Shopify) behind it on
-    this service's single-request-at-a-time WSGI server, and made Telegram
-    itself time out waiting for a response — observed live 2026-09-29,
-    mirroring the same reasoning OZON's webhook already follows (see
-    ozon_order_sync.PendingPostings)."""
+class UpdateOffset:
+    """Persists the last Telegram update_id this service has handled, so a
+    worker restart resumes from there instead of Telegram redelivering
+    (and this worker reprocessing/re-answering) everything again."""
 
-    def __init__(self, path: str = "data/telegram_qa_queue.sqlite3") -> None:
+    def __init__(self, path: str = "data/telegram_qa_offset.sqlite3") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.path) as db:
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS pending_messages (
-                id INTEGER PRIMARY KEY, received_at TEXT NOT NULL,
-                message_json TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)"""
-            )
+            db.execute("CREATE TABLE IF NOT EXISTS offset (id INTEGER PRIMARY KEY CHECK (id = 1), update_id INTEGER NOT NULL)")
 
-    def add(self, message: dict[str, Any]) -> None:
+    def get(self) -> int | None:
         with sqlite3.connect(self.path) as db:
-            db.execute(
-                "INSERT INTO pending_messages(received_at, message_json) VALUES (?, ?)",
-                (datetime.now(timezone.utc).isoformat(), json.dumps(message, ensure_ascii=False)),
-            )
+            row = db.execute("SELECT update_id FROM offset WHERE id = 1").fetchone()
+            return row[0] if row else None
 
-    def pending(self) -> list[dict[str, Any]]:
+    def set(self, update_id: int) -> None:
         with sqlite3.connect(self.path) as db:
-            db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM pending_messages WHERE done=0 ORDER BY id")]
-
-    def mark_done(self, row_id: int) -> None:
-        with sqlite3.connect(self.path) as db:
-            db.execute("UPDATE pending_messages SET done=1 WHERE id=?", (row_id,))
+            db.execute("INSERT INTO offset(id, update_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET update_id = excluded.update_id", (update_id,))
 
 
-def enqueue_if_relevant(update: dict[str, Any], *, settings: Settings, queue: PendingTelegramMessages) -> None:
-    """Cheap, local-only checks (no network calls) so the webhook handler
-    that calls this stays fast regardless of what the message contains —
-    the real "is this about an order" resolution happens in the worker."""
-    if not settings.anthropic_api_key:
-        return
-    message = update.get("message")
+def _is_relevant(message: dict[str, Any], settings: Settings) -> bool:
     if not isinstance(message, dict):
-        return
+        return False
     if bool((message.get("from") or {}).get("is_bot")):
-        return
+        return False
     chat_id = str((message.get("chat") or {}).get("id", ""))
-    if not settings.telegram_label_chat_id or chat_id != str(settings.telegram_label_chat_id):
-        return
-    queue.add(message)
+    return bool(settings.telegram_label_chat_id) and chat_id == str(settings.telegram_label_chat_id)
 
 
 def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient) -> tuple[str | None, str | None, dict | None]:
@@ -123,21 +103,19 @@ def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog
     return None, None, None
 
 
-def _process_one(row: dict[str, Any], *, queue: PendingTelegramMessages, settings: Settings, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient, yandex: YandexMarketClient | None, ozon: OzonClient | None) -> None:
-    message = json.loads(row["message_json"])
-    try:
-        marketplace, external_id, order = _resolve_order_for_message(message, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram)
-        if order is None:
-            return  # nothing about an order in this message — silently drop it
-        marketplace_details = fetch_marketplace_details(marketplace=marketplace, external_id=external_id, yandex=yandex, ozon=ozon) if marketplace and external_id else None
-        question = str(message.get("text") or message.get("caption") or "").strip() or DEFAULT_QUESTION
-        answer = answer_question(client=anthropic, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details)
-        telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
-    finally:
-        queue.mark_done(row["id"])
+def _answer_message(message: dict[str, Any], *, settings: Settings, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient, yandex: YandexMarketClient | None, ozon: OzonClient | None) -> None:
+    marketplace, external_id, order = _resolve_order_for_message(message, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram)
+    if order is None:
+        return  # nothing about an order in this message — silently drop it
+    marketplace_details = fetch_marketplace_details(marketplace=marketplace, external_id=external_id, yandex=yandex, ozon=ozon) if marketplace and external_id else None
+    question = str(message.get("text") or message.get("caption") or "").strip() or DEFAULT_QUESTION
+    answer = answer_question(client=anthropic, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details)
+    telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
 
 
-def run_once(settings: Settings, queue: PendingTelegramMessages, errors: ErrorLog) -> None:
+def run_once(settings: Settings, offset_store: UpdateOffset, errors: ErrorLog) -> None:
+    if not settings.anthropic_api_key:
+        return
     yandex_log = YandexMarketSyncLog()
     ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
@@ -146,12 +124,17 @@ def run_once(settings: Settings, queue: PendingTelegramMessages, errors: ErrorLo
     yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id) if settings.yandex_market_api_key else None
     ozon = OzonClient(client_id=settings.ozon_client_id, api_key=settings.ozon_api_key) if settings.ozon_api_key else None
     try:
-        for row in queue.pending():
+        last_offset = offset_store.get()
+        updates = telegram.get_updates(offset=(last_offset + 1) if last_offset is not None else None, timeout=POLL_TIMEOUT_SECONDS, allowed_updates=["message"])
+        for update in updates:
+            message = update.get("message")
             try:
-                _process_one(row, queue=queue, settings=settings, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram, yandex=yandex, ozon=ozon)
+                if _is_relevant(message, settings):
+                    _answer_message(message, settings=settings, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram, yandex=yandex, ozon=ozon)
             except Exception as error:
-                errors.log_exception("telegram_qa_worker", error, context=f"Ошибка ответа на сообщение Telegram id={row['id']}")
-                queue.mark_done(row["id"])  # best-effort Q&A — not retried; staff can just ask again
+                errors.log_exception("telegram_qa_worker", error, context=f"Ошибка ответа на сообщение Telegram update_id={update.get('update_id')}")
+            finally:
+                offset_store.set(update["update_id"])
     finally:
         moysklad.close()
         anthropic.close()
@@ -164,11 +147,19 @@ def run_once(settings: Settings, queue: PendingTelegramMessages, errors: ErrorLo
 
 def worker() -> None:
     settings = Settings.from_env()
-    queue = PendingTelegramMessages()
+    offset_store = UpdateOffset()
     errors = ErrorLog()
+    if settings.telegram_bot_token:
+        client = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url)
+        try:
+            client.delete_webhook()
+        except Exception as error:
+            errors.log_exception("telegram_qa_worker", error, context="Не удалось снять регистрацию вебхука Telegram")
+        finally:
+            client.close()
     while True:
         try:
-            run_once(settings, queue, errors)
+            run_once(settings, offset_store, errors)
         except Exception as error:
             errors.log_exception("telegram_qa_worker", error, context="Ошибка воркера Telegram Q&A")
-        time.sleep(WORKER_TICK_SECONDS)
+            time.sleep(5)  # avoid a tight error loop when get_updates itself keeps failing
