@@ -323,6 +323,55 @@ def test_handle_order_cancelled_moves_moysklad_state_and_notifies_telegram(tmp_p
     assert "cancel_notified" in kinds
 
 
+def test_handle_order_cancelled_does_not_repeat_on_a_redelivered_webhook(tmp_path):
+    """Market can (and does) resend the same ORDER_STATUS_UPDATED webhook —
+    previously this function had no idempotency guard on the Telegram step
+    at all, so every redelivery sent a second cancellation notice."""
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(telegram.messages) == 1
+
+
+def test_handle_order_cancelled_is_safe_against_concurrent_redelivery(tmp_path):
+    """Drives the exact race with real threads: two near-simultaneous
+    deliveries of the same cancellation webhook must not both pass the
+    has_success check before either commits it."""
+    import threading
+    import time
+
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+    real_has_success = log.has_success
+
+    def slow_has_success(kind, external_id):
+        # Capture state immediately, then simulate latency before returning
+        # it — the same technique used to reproduce the Shopify order race.
+        value = real_has_success(kind, external_id)
+        time.sleep(0.05)
+        return value
+
+    log.has_success = slow_has_success
+    barrier = threading.Barrier(2)
+
+    def run():
+        barrier.wait()
+        handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(telegram.messages) == 1
+
+
 def test_handle_order_cancelled_falls_back_to_raw_code_for_unknown_reason(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     moysklad = FakeMoySklad(existing_order={"id": "order-1"})

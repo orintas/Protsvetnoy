@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .label_caption import build_caption, format_items_plain
 from .moysklad import MoySkladClient
-from .order_lock import yandex_market_order_creation
+from .order_lock import yandex_market_order_pipeline
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
@@ -180,7 +180,7 @@ def process_new_order(
     # pass a check before either acts on it (a duplicate MoySklad order, or
     # a duplicate label sent to Telegram). Confirmed live 2026-09-29 for the
     # analogous Shopify pipeline; see order_lock.py.
-    with yandex_market_order_creation:
+    with yandex_market_order_pipeline:
         order_created_already = moysklad.customer_order_by_external_code(external_code) is not None
         if order_created_already and log.has_success("label_sent", external_code):
             return
@@ -245,29 +245,33 @@ def retry_label_if_missing(
     up to MAX_LABEL_RETRIES times total. Attempts are tracked as numbered log
     rows (":1", ":2", ...) rather than a plain count, since the log's own
     (kind, external_id) uniqueness would otherwise collapse repeat failures
-    for the same order into a single row.
+    for the same order into a single row. Locked against
+    yandex_market_order_pipeline: a duplicate delivery of the same
+    status-update webhook could otherwise pass the has_success check twice
+    before either send commits, sending the label to Telegram twice.
     """
-    external_code = str(order_id)
-    if log.has_success("label_sent", external_code):
-        return
-    if moysklad.customer_order_by_external_code(external_code) is None:
-        return  # order was never created — not this function's job to fix
+    with yandex_market_order_pipeline:
+        external_code = str(order_id)
+        if log.has_success("label_sent", external_code):
+            return
+        if moysklad.customer_order_by_external_code(external_code) is None:
+            return  # order was never created — not this function's job to fix
 
-    attempts_so_far = log.count_matching(LABEL_RETRY_KIND, f"{external_code}:")
-    if attempts_so_far >= MAX_LABEL_RETRIES:
-        return
-    attempt = attempts_so_far + 1
+        attempts_so_far = log.count_matching(LABEL_RETRY_KIND, f"{external_code}:")
+        if attempts_so_far >= MAX_LABEL_RETRIES:
+            return
+        attempt = attempts_so_far + 1
 
-    try:
-        order = yandex.order_by_id(order_id)
-        if order is None:
-            raise RuntimeError("не удалось получить заказ из Яндекс.Маркета")
-        items = order.get("items") or []
-        sent = _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
-        if not sent:
-            raise RuntimeError("Telegram не настроен")
-    except Exception as error:
-        log.add(LABEL_RETRY_KIND, "error", f"Заказ {order_id}: повторная попытка {attempt}/{MAX_LABEL_RETRIES} отправить этикетку не удалась: {error}", f"{external_code}:{attempt}")
+        try:
+            order = yandex.order_by_id(order_id)
+            if order is None:
+                raise RuntimeError("не удалось получить заказ из Яндекс.Маркета")
+            items = order.get("items") or []
+            sent = _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+            if not sent:
+                raise RuntimeError("Telegram не настроен")
+        except Exception as error:
+            log.add(LABEL_RETRY_KIND, "error", f"Заказ {order_id}: повторная попытка {attempt}/{MAX_LABEL_RETRIES} отправить этикетку не удалась: {error}", f"{external_code}:{attempt}")
 
 
 def sync_order_delivery_state(
@@ -331,23 +335,27 @@ def notify_courier_arrived(
 ) -> None:
     """Notice for the courier physically arriving at our store to collect
     the order. Fires once per order; replies to the original label message
-    when we still have its message_id on record."""
+    when we still have its message_id on record. Locked against
+    yandex_market_order_pipeline: a duplicate delivery of the same
+    status-update webhook could otherwise pass the has_success check twice
+    before either send commits, notifying Telegram twice."""
     if substatus != COURIER_ARRIVED_SUBSTATUS:
         return
     if telegram is None or not telegram_chat_id:
         return
-    external_code = str(order_id)
-    if log.has_success(COURIER_NOTIFIED_KIND, external_code):
-        return
-    store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
-    label_payload = log.get_payload("label_sent", external_code)
-    reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
-    telegram.send_message(
-        chat_id=telegram_chat_id,
-        text=f"🚚 Приехал курьер в {store_name} за заказом {order_id}",
-        reply_to_message_id=reply_to,
-    )
-    log.add(COURIER_NOTIFIED_KIND, "success", f"Заказ {order_id}: уведомление о курьере отправлено в Telegram", external_code)
+    with yandex_market_order_pipeline:
+        external_code = str(order_id)
+        if log.has_success(COURIER_NOTIFIED_KIND, external_code):
+            return
+        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+        label_payload = log.get_payload("label_sent", external_code)
+        reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+        telegram.send_message(
+            chat_id=telegram_chat_id,
+            text=f"🚚 Приехал курьер в {store_name} за заказом {order_id}",
+            reply_to_message_id=reply_to,
+        )
+        log.add(COURIER_NOTIFIED_KIND, "success", f"Заказ {order_id}: уведомление о курьере отправлено в Telegram", external_code)
 
 
 def handle_order_cancelled(
@@ -364,21 +372,30 @@ def handle_order_cancelled(
     "Unsuccessful" stateType releases the reserve automatically — no
     separate reservation call), then notify Telegram, replying to the
     original label message when we still have its message_id on record.
+
+    Guarded by has_success on "cancel_notified" and locked against
+    yandex_market_order_pipeline: Market can resend the same
+    ORDER_STATUS_UPDATED webhook (a documented, expected retry), and without
+    either of those this function had no idempotency at all on the Telegram
+    step — every redelivery sent a second cancellation notice.
     """
     external_code = str(order_id)
-    reason = _cancel_reason_text(substatus)
-    order = moysklad.customer_order_by_external_code(external_code)
-    if order is None:
-        log.add("order_cancel_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «Отменен» не проставлен", external_code)
-    else:
-        previous_state_id = _previous_state_id(order)
-        moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID, previous_state_id=previous_state_id)
-        log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code)
+    with yandex_market_order_pipeline:
+        if log.has_success("cancel_notified", external_code):
+            return
+        reason = _cancel_reason_text(substatus)
+        order = moysklad.customer_order_by_external_code(external_code)
+        if order is None:
+            log.add("order_cancel_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «Отменен» не проставлен", external_code)
+        else:
+            previous_state_id = _previous_state_id(order)
+            moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID, previous_state_id=previous_state_id)
+            log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code)
 
-    if telegram is not None and telegram_chat_id:
-        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
-        text = f"❌ Заказ №{order_id} ({store_name}) отменён.\nПричина: {reason}"
-        label_payload = log.get_payload("label_sent", external_code)
-        reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
-        telegram.send_message(chat_id=telegram_chat_id, text=text, reply_to_message_id=reply_to)
-        log.add("cancel_notified", "success", f"Заказ {order_id}: уведомление об отмене отправлено в Telegram", external_code)
+        if telegram is not None and telegram_chat_id:
+            store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+            text = f"❌ Заказ №{order_id} ({store_name}) отменён.\nПричина: {reason}"
+            label_payload = log.get_payload("label_sent", external_code)
+            reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+            telegram.send_message(chat_id=telegram_chat_id, text=text, reply_to_message_id=reply_to)
+            log.add("cancel_notified", "success", f"Заказ {order_id}: уведомление об отмене отправлено в Telegram", external_code)
