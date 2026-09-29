@@ -24,6 +24,7 @@ def main() -> None:
     subparsers.add_parser("shopify-catalog-sync-worker")
     subparsers.add_parser("shopify-stock-sync-worker")
     subparsers.add_parser("moysklad-shift-close-worker")
+    subparsers.add_parser("health-check-worker")
     args = parser.parse_args()
 
     if args.command == "web-server":
@@ -57,6 +58,10 @@ def main() -> None:
     if args.command == "moysklad-shift-close-worker":
         from .shift_closer import worker as shift_worker
         shift_worker()
+        return
+    if args.command == "health-check-worker":
+        from .health_check import worker as health_check_worker
+        health_check_worker()
         return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):

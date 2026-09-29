@@ -189,3 +189,16 @@ def test_create_product_records_change_log_entry_with_no_before():
     assert entries[0]["action"] == "create"
     assert entries[0]["before"] is None
     assert entries[0]["entity_id"] == "ABC"
+
+
+def test_webhooks_filters_by_topic_and_returns_rows():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"webhooks": [{"id": 1, "topic": "orders/create", "address": "https://x/webhook"}]})
+
+    client = _client_with_handler(handler)
+    result = client.webhooks(topic="orders/create")
+    assert result == [{"id": 1, "topic": "orders/create", "address": "https://x/webhook"}]
+    assert requests[0].url.params["topic"] == "orders/create"

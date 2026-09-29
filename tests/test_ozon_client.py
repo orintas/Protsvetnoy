@@ -130,3 +130,13 @@ def test_update_stocks_records_one_change_log_entry_per_item():
     entries = change_log_module._instance.recent()
     assert len(entries) == 2
     assert {e["entity_id"] for e in entries} == {"999:A1", "999:A2"}
+
+
+def test_notification_list_returns_raw_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/notification/list"
+        return httpx.Response(200, json={"urls": [{"url": "https://x/webhook", "enable": True, "availability_status": "GREEN"}], "total_count": 1})
+
+    client = _client_with_handler(handler)
+    result = client.notification_list()
+    assert result["urls"][0]["availability_status"] == "GREEN"

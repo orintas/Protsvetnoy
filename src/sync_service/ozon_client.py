@@ -80,3 +80,8 @@ class OzonClient:
         postings aren't ready") if called too early — callers should treat
         that as "not ready yet, retry later" rather than a hard failure."""
         return self._client.post_bytes("/v2/posting/fbs/package-label", {"posting_number": posting_numbers})
+
+    def notification_list(self) -> dict[str, Any]:
+        """Registered push-notification subscriptions — confirmed live shape:
+        {"urls": [{"url", "enable", "availability_status" (GREEN/YELLOW/RED), ...}], "total_count", ...}."""
+        return self._client.post("/v1/notification/list", {})

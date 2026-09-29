@@ -138,6 +138,12 @@ class ShopifyClient:
         rows = payload.get("locations", [])
         return [row for row in rows if isinstance(row, dict)]
 
+    def webhooks(self, *, topic: str | None = None) -> list[dict[str, Any]]:
+        params = {"topic": topic} if topic else None
+        payload = self._client.get("/webhooks.json", params=params)
+        rows = payload.get("webhooks", [])
+        return [row for row in rows if isinstance(row, dict)]
+
 
 def _numeric_id(gid: str) -> int:
     """"gid://shopify/ProductVariant/12345" -> 12345."""
