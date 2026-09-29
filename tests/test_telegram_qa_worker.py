@@ -3,8 +3,9 @@ from sync_service.telegram_qa_worker import UpdateOffset, _is_relevant, run_once
 
 
 class FakeSettings:
-    anthropic_api_key = "test-key"
-    anthropic_model = "claude-sonnet-5"
+    yandexgpt_api_key = "test-key"
+    yandexgpt_folder_id = "test-folder"
+    yandexgpt_model = "yandexgpt/latest"
     telegram_label_chat_id = "-100123"
     telegram_bot_token = "bot-token"
     telegram_proxy_url = ""
@@ -51,7 +52,7 @@ class FakeMoySklad:
         pass
 
 
-class FakeAnthropic:
+class FakeLLM:
     def __init__(self, reply="ok", **kwargs):
         self.reply = reply
 
@@ -62,11 +63,11 @@ class FakeAnthropic:
         pass
 
 
-def _install_fakes(monkeypatch, *, telegram, moysklad, anthropic):
+def _install_fakes(monkeypatch, *, telegram, moysklad, llm):
     import sync_service.telegram_qa_worker as mod
     monkeypatch.setattr(mod, "TelegramClient", lambda **kwargs: telegram)
     monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad)
-    monkeypatch.setattr(mod, "AnthropicClient", lambda **kwargs: anthropic)
+    monkeypatch.setattr(mod, "YandexGPTClient", lambda **kwargs: llm)
 
 
 def test_is_relevant_accepts_a_human_message_in_the_right_chat():
@@ -97,7 +98,7 @@ def test_run_once_passes_offset_plus_one_to_get_updates(tmp_path, monkeypatch):
     offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
     offset_store.set(10)
     telegram = FakeTelegram(updates=[])
-    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(), anthropic=FakeAnthropic())
+    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(), llm=FakeLLM())
 
     run_once(FakeSettings(), offset_store, ErrorLog())
 
@@ -108,13 +109,13 @@ def test_run_once_drops_a_message_with_no_resolvable_order(tmp_path, monkeypatch
     offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
     update = {"update_id": 1, "message": {"message_id": 1, "chat": {"id": -100123}, "from": {"is_bot": False}, "text": "когда обед?"}}
     telegram = FakeTelegram(updates=[update])
-    anthropic = FakeAnthropic()
+    llm = FakeLLM()
 
     def _fail_complete(**kwargs):
         raise AssertionError("should not call Claude when no order was found")
 
-    anthropic.complete = _fail_complete
-    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(), anthropic=anthropic)
+    llm.complete = _fail_complete
+    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(), llm=llm)
 
     run_once(FakeSettings(), offset_store, ErrorLog())
 
@@ -127,7 +128,7 @@ def test_run_once_answers_a_resolvable_order(tmp_path, monkeypatch):
     update = {"update_id": 7, "message": {"message_id": 5, "chat": {"id": -100123}, "from": {"is_bot": False}, "text": "62260935105 какой статус?"}}
     telegram = FakeTelegram(updates=[update])
     order = {"name": "0001234", "state": {"name": "Отгружен"}, "description": "Роза x3"}
-    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(order=order), anthropic=FakeAnthropic(reply="Статус: отгружен."))
+    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(order=order), llm=FakeLLM(reply="Статус: отгружен."))
 
     run_once(FakeSettings(), offset_store, ErrorLog())
 
@@ -142,7 +143,7 @@ def test_run_once_ignores_messages_from_other_chats(tmp_path, monkeypatch):
     update = {"update_id": 2, "message": {"message_id": 1, "chat": {"id": -999}, "from": {"is_bot": False}, "text": "62260935105"}}
     telegram = FakeTelegram(updates=[update])
     order = {"name": "0001234", "state": {"name": "Отгружен"}, "description": "Роза x3"}
-    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(order=order), anthropic=FakeAnthropic())
+    _install_fakes(monkeypatch, telegram=telegram, moysklad=FakeMoySklad(order=order), llm=FakeLLM())
 
     run_once(FakeSettings(), offset_store, ErrorLog())
 
@@ -150,7 +151,7 @@ def test_run_once_ignores_messages_from_other_chats(tmp_path, monkeypatch):
     assert offset_store.get() == 2
 
 
-def test_run_once_does_nothing_without_an_anthropic_key(tmp_path, monkeypatch):
+def test_run_once_does_nothing_without_a_yandexgpt_key(tmp_path, monkeypatch):
     offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
     telegram = FakeTelegram(updates=[{"update_id": 1, "message": {}}])
 
@@ -160,10 +161,10 @@ def test_run_once_does_nothing_without_an_anthropic_key(tmp_path, monkeypatch):
     import sync_service.telegram_qa_worker as mod
     monkeypatch.setattr(mod, "TelegramClient", _fail_if_constructed)
     monkeypatch.setattr(mod, "MoySkladClient", _fail_if_constructed)
-    monkeypatch.setattr(mod, "AnthropicClient", _fail_if_constructed)
+    monkeypatch.setattr(mod, "YandexGPTClient", _fail_if_constructed)
 
     class NoKeySettings(FakeSettings):
-        anthropic_api_key = ""
+        yandexgpt_api_key = ""
 
     run_once(NoKeySettings(), offset_store, ErrorLog())
 

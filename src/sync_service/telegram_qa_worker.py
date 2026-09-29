@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .anthropic_client import AnthropicClient
 from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
@@ -20,6 +19,7 @@ from .order_assistant import (
 )
 from .ozon_client import OzonClient
 from .telegram_client import TelegramClient
+from .yandex_gpt_client import YandexGPTClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
 
@@ -64,15 +64,16 @@ def _is_relevant(message: dict[str, Any], settings: Settings) -> bool:
     return bool(settings.telegram_label_chat_id) and chat_id == str(settings.telegram_label_chat_id)
 
 
-def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient) -> tuple[str | None, str | None, dict | None]:
+def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, llm: YandexGPTClient, telegram: TelegramClient) -> tuple[str | None, str | None, dict | None]:
     """Tries, in order: (1) the message is a reply to a label this service
     sent — exact match by message_id; (2) an order number appears in the
     message's own text/caption, or in the text/caption of whatever it's
-    replying to; (3) the message carries a photo (receipt/label screenshot)
-    and Claude can read an order number off of it. Each step only costs
-    something (a MoySklad lookup, a vision call) once the previous one came
-    up empty. Returns (marketplace, external_id, moysklad_order) so the
-    caller can also pull the live marketplace order/posting."""
+    replying to; (3) if the LLM supports image input, the message carries a
+    photo (receipt/label screenshot) it can read an order number off of.
+    Each step only costs something (a MoySklad lookup, a vision call) once
+    the previous one came up empty. Returns (marketplace, external_id,
+    moysklad_order) so the caller can also pull the live marketplace
+    order/posting."""
     reply_to = message.get("reply_to_message")
     if isinstance(reply_to, dict) and reply_to.get("message_id"):
         match = find_order_by_label_message(reply_to_message_id=reply_to["message_id"], yandex_log=yandex_log, ozon_log=ozon_log)
@@ -90,11 +91,11 @@ def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog
         return resolved
 
     photos = message.get("photo")
-    if isinstance(photos, list) and photos:
+    if getattr(llm, "supports_images", False) and isinstance(photos, list) and photos:
         file_id = photos[-1].get("file_id")  # Telegram orders photo sizes smallest -> largest
         if file_id:
             image_bytes = telegram.download_file(file_id)
-            candidate = read_order_number_from_image(client=anthropic, image_bytes=image_bytes)
+            candidate = read_order_number_from_image(client=llm, image_bytes=image_bytes)
             if candidate:
                 resolved = resolve_order_by_number(candidate=candidate, moysklad=moysklad)
                 if resolved is not None:
@@ -103,23 +104,23 @@ def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog
     return None, None, None
 
 
-def _answer_message(message: dict[str, Any], *, settings: Settings, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient, yandex: YandexMarketClient | None, ozon: OzonClient | None) -> None:
-    marketplace, external_id, order = _resolve_order_for_message(message, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram)
+def _answer_message(message: dict[str, Any], *, settings: Settings, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, llm: YandexGPTClient, telegram: TelegramClient, yandex: YandexMarketClient | None, ozon: OzonClient | None) -> None:
+    marketplace, external_id, order = _resolve_order_for_message(message, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, llm=llm, telegram=telegram)
     if order is None:
         return  # nothing about an order in this message — silently drop it
     marketplace_details = fetch_marketplace_details(marketplace=marketplace, external_id=external_id, yandex=yandex, ozon=ozon) if marketplace and external_id else None
     question = str(message.get("text") or message.get("caption") or "").strip() or DEFAULT_QUESTION
-    answer = answer_question(client=anthropic, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details)
+    answer = answer_question(client=llm, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details)
     telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
 
 
 def run_once(settings: Settings, offset_store: UpdateOffset, errors: ErrorLog) -> None:
-    if not settings.anthropic_api_key:
+    if not settings.yandexgpt_api_key or not settings.yandexgpt_folder_id:
         return
     yandex_log = YandexMarketSyncLog()
     ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
-    anthropic = AnthropicClient(api_key=settings.anthropic_api_key, model=settings.anthropic_model)
+    llm = YandexGPTClient(api_key=settings.yandexgpt_api_key, folder_id=settings.yandexgpt_folder_id, model=settings.yandexgpt_model)
     telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url)
     yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id) if settings.yandex_market_api_key else None
     ozon = OzonClient(client_id=settings.ozon_client_id, api_key=settings.ozon_api_key) if settings.ozon_api_key else None
@@ -130,14 +131,14 @@ def run_once(settings: Settings, offset_store: UpdateOffset, errors: ErrorLog) -
             message = update.get("message")
             try:
                 if _is_relevant(message, settings):
-                    _answer_message(message, settings=settings, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram, yandex=yandex, ozon=ozon)
+                    _answer_message(message, settings=settings, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, llm=llm, telegram=telegram, yandex=yandex, ozon=ozon)
             except Exception as error:
                 errors.log_exception("telegram_qa_worker", error, context=f"Ошибка ответа на сообщение Telegram update_id={update.get('update_id')}")
             finally:
                 offset_store.set(update["update_id"])
     finally:
         moysklad.close()
-        anthropic.close()
+        llm.close()
         telegram.close()
         if yandex is not None:
             yandex.close()

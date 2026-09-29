@@ -15,6 +15,8 @@ class AnthropicClient:
     drafts) are single-turn "here's the context, write the reply" calls, not
     a back-and-forth conversation the model itself needs to track."""
 
+    supports_images = True
+
     def __init__(self, *, api_key: str, model: str = DEFAULT_MODEL, base_url: str = "https://api.anthropic.com") -> None:
         self._client = JsonClient(
             base_url=base_url,

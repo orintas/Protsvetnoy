@@ -48,9 +48,11 @@ jobs:
             grep -q '^TELEGRAM_REVIEWS_BOT_TOKEN=' .env || echo 'TELEGRAM_REVIEWS_BOT_TOKEN=' >> .env
             sed -i "s#^TELEGRAM_REVIEWS_BOT_TOKEN=.*#TELEGRAM_REVIEWS_BOT_TOKEN=${{ secrets.TELEGRAM_REVIEWS_BOT_TOKEN }}#" .env
             grep -q '^TELEGRAM_REVIEWS_CHAT_ID=' .env || echo 'TELEGRAM_REVIEWS_CHAT_ID=' >> .env
-            grep -q '^ANTHROPIC_API_KEY=' .env || echo 'ANTHROPIC_API_KEY=' >> .env
-            sed -i "s#^ANTHROPIC_API_KEY=.*#ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}#" .env
-            grep -q '^ANTHROPIC_MODEL=' .env || echo 'ANTHROPIC_MODEL=claude-sonnet-5' >> .env
+            grep -q '^YANDEXGPT_API_KEY=' .env || echo 'YANDEXGPT_API_KEY=' >> .env
+            sed -i "s#^YANDEXGPT_API_KEY=.*#YANDEXGPT_API_KEY=${{ secrets.YANDEXGPT_API_KEY }}#" .env
+            grep -q '^YANDEXGPT_FOLDER_ID=' .env || echo 'YANDEXGPT_FOLDER_ID=' >> .env
+            sed -i "s#^YANDEXGPT_FOLDER_ID=.*#YANDEXGPT_FOLDER_ID=${{ secrets.YANDEXGPT_FOLDER_ID }}#" .env
+            grep -q '^YANDEXGPT_MODEL=' .env || echo 'YANDEXGPT_MODEL=yandexgpt/latest' >> .env
             grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env
             grep -q '^VLESS_HOST=' .env || echo 'VLESS_HOST=' >> .env
             grep -q '^VLESS_PORT=' .env || echo 'VLESS_PORT=' >> .env

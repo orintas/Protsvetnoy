@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Protocol
 
-from .anthropic_client import AnthropicClient
 from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
+
+
+class LLMClient(Protocol):
+    """Structural type for whichever LLM client is active (AnthropicClient,
+    YandexGPTClient, ...) — this module only ever needs .complete()."""
+
+    def complete(self, *, system: str, user_message: str, max_tokens: int = 1024, image_bytes: bytes | None = None, image_media_type: str = "image/jpeg") -> str: ...
 
 MARKETPLACE_NAMES = {"yandex_market": "Яндекс.Маркет", "ozon": "OZON"}
 
@@ -92,7 +98,7 @@ def resolve_order_from_text(*, text: str, moysklad: MoySkladClient) -> tuple[str
     return None
 
 
-def read_order_number_from_image(*, client: AnthropicClient, image_bytes: bytes, image_media_type: str = "image/jpeg") -> str | None:
+def read_order_number_from_image(*, client: LLMClient, image_bytes: bytes, image_media_type: str = "image/jpeg") -> str | None:
     text = client.complete(system=IMAGE_ORDER_NUMBER_PROMPT, user_message="Какой номер заказа на этом фото?", image_bytes=image_bytes, image_media_type=image_media_type, max_tokens=32)
     value = text.strip()
     if not value or value.upper() == "НЕТ":
@@ -159,6 +165,6 @@ def _order_context_text(*, order: dict, marketplace: str | None, marketplace_det
     return "\n".join(lines)
 
 
-def answer_question(*, client: AnthropicClient, order: dict, marketplace: str | None, question: str, marketplace_details: dict[str, Any] | None = None) -> str:
+def answer_question(*, client: LLMClient, order: dict, marketplace: str | None, question: str, marketplace_details: dict[str, Any] | None = None) -> str:
     context = _order_context_text(order=order, marketplace=marketplace, marketplace_details=marketplace_details)
     return client.complete(system=SYSTEM_PROMPT, user_message=f"Данные о заказе:\n{context}\n\nВопрос от сотрудника склада:\n{question}")

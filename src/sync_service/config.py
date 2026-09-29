@@ -31,8 +31,9 @@ class Settings:
     telegram_proxy_url: str
     telegram_reviews_bot_token: str
     telegram_reviews_chat_id: str
-    anthropic_api_key: str
-    anthropic_model: str
+    yandexgpt_api_key: str
+    yandexgpt_folder_id: str
+    yandexgpt_model: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -71,8 +72,9 @@ class Settings:
             telegram_proxy_url=os.getenv("TELEGRAM_PROXY_URL", ""),
             telegram_reviews_bot_token=os.getenv("TELEGRAM_REVIEWS_BOT_TOKEN", ""),
             telegram_reviews_chat_id=os.getenv("TELEGRAM_REVIEWS_CHAT_ID", ""),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-            anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5"),
+            yandexgpt_api_key=os.getenv("YANDEXGPT_API_KEY", ""),
+            yandexgpt_folder_id=os.getenv("YANDEXGPT_FOLDER_ID", ""),
+            yandexgpt_model=os.getenv("YANDEXGPT_MODEL", "yandexgpt/latest"),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )
