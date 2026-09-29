@@ -101,10 +101,11 @@ def _patched(monkeypatch, ozon, telegram=None, moysklad=None):
     monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad or FakeMoySklad())
 
 
-def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None, substatus=None):
+def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None, substatus=None, provider_status=""):
     return {
         "status": status,
         "substatus": substatus,
+        "provider_status": provider_status,
         "delivery_method": {"warehouse": warehouse},
         "products": products or [{"offer_id": "LE148", "sku": 1536499166, "quantity": 1}],
         "available_actions": available_actions or [],
@@ -215,7 +216,7 @@ def test_run_once_notifies_courier_arrival_and_replies_to_the_label_message(tmp_
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     log.add("label_sent", "success", "sent earlier", "X-1", {"message_id": 4242})
-    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", warehouse="ТЦ Ривьера", substatus="posting_in_pickup_point")})
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver", warehouse="ТЦ Ривьера", provider_status="Курьер у продавца")})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
@@ -236,7 +237,7 @@ def test_run_once_still_notifies_courier_after_the_label_was_already_sent_on_an_
     posting was marked done as soon as its label sent, which stopped it
     being polled at all — so the courier-arrival check (only reachable for
     still-pending postings) never got a later chance to see the courier
-    substatus and this notification silently never fired. This drives that
+    signal and this notification silently never fired. This drives that
     exact two-tick sequence."""
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
@@ -248,9 +249,9 @@ def test_run_once_still_notifies_courier_after_the_label_was_already_sent_on_an_
 
     run_once(FakeSettings(), queue, log, errors)  # tick 1: label becomes ready and is sent
     assert ozon.label_calls == [["X-1"]]
-    assert telegram.messages == []  # no courier notice yet — not in pickup_point yet
+    assert telegram.messages == []  # no courier notice yet — provider_status not there yet
 
-    ozon.details_by_posting["X-1"] = _posting("delivering", substatus="posting_in_pickup_point")
+    ozon.details_by_posting["X-1"] = _posting("awaiting_deliver", provider_status="Курьер у продавца")
     run_once(FakeSettings(), queue, log, errors)  # tick 2: courier shows up
 
     assert len(telegram.messages) == 1
@@ -263,7 +264,7 @@ def test_run_once_does_not_repeat_courier_notification_on_later_ticks(tmp_path, 
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
-    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", substatus="posting_in_pickup_point", available_actions=[])})
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver", provider_status="Курьер у продавца", available_actions=[])})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
@@ -273,12 +274,12 @@ def test_run_once_does_not_repeat_courier_notification_on_later_ticks(tmp_path, 
     assert len(telegram.messages) == 1  # not sent again on the second tick
 
 
-def test_run_once_does_not_notify_for_other_substatuses(tmp_path, monkeypatch):
+def test_run_once_does_not_notify_when_provider_status_does_not_mention_the_seller(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
-    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", substatus="posting_on_way_to_city")})
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", substatus="posting_in_pickup_point", provider_status="Курьер передал в ПВЗ")})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 

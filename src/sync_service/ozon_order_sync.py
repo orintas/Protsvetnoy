@@ -39,16 +39,26 @@ SHIP_FROM_STATUS = "awaiting_packaging"
 TERMINAL_STATUSES = {"cancelled", "not_accepted"}
 DELIVERED_STATUS = "delivered"
 
-# The courier physically at the store to collect the package — confirmed
-# against real posting history: "posting_in_pickup_point" is a brief substatus
-# that precedes "posting_on_way_to_city" (the far more common one once the
-# courier has actually left with the package), for the same "delivering"
-# status. Only checked while the posting is still being polled (before it's
-# marked done), so a posting whose label became downloadable earlier — before
-# status ever reaches "delivering" — can be marked done first and this never
-# fires for it.
-COURIER_ARRIVED_STATUS = "delivering"
-COURIER_ARRIVED_SUBSTATUS = "posting_in_pickup_point"
+# The courier physically at the store to collect the package.
+#
+# WRONG GUESS, corrected live 2026-09-30: status "delivering" / substatus
+# "posting_in_pickup_point" was originally used for this, but a real
+# posting (87792534-0050-1) proved that combination actually means the
+# package already reached the CUSTOMER's pickup point — provider_status
+# "Курьер передал в ПВЗ" ("courier handed off to the pickup point"),
+# fact_delivery_date already set — the opposite end of the journey, and it
+# produced a live false "courier arrived" notice sent 3 days after the
+# order had in fact already been delivered.
+#
+# provider_status — OZON's own human-readable Russian tracking text from
+# the delivery partner — is the actual reliable signal: a different real
+# posting (0113798402-0282-1) showed provider_status "Курьер у продавца"
+# ("courier at the seller") while still in status "awaiting_deliver" /
+# substatus "posting_registered", well before "delivering". So this
+# doesn't gate on status/substatus at all anymore, only on provider_status
+# containing this phrase (a substring check, not exact-match, in case
+# different delivery partners phrase it slightly differently).
+COURIER_AT_SELLER_PHRASE = "у продавца"
 
 MAX_ATTEMPTS = 40  # ~20 minutes at the worker's 30s tick — well past OZON's documented 45-60s label delay
 WORKER_TICK_SECONDS = 30
@@ -298,7 +308,7 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
         queue.mark_done(posting_number)
         return
 
-    if not row["courier_notified"] and status == COURIER_ARRIVED_STATUS and details.get("substatus") == COURIER_ARRIVED_SUBSTATUS:
+    if not row["courier_notified"] and COURIER_AT_SELLER_PHRASE in (details.get("provider_status") or ""):
         try:
             _notify_courier_arrived(posting_number, details, queue, telegram, telegram_chat_id, log)
         except Exception as error:
