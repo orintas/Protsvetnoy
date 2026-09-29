@@ -46,6 +46,42 @@ def test_send_document_posts_multipart_with_caption():
     assert entries[0]["entity_id"] == "-100123"
 
 
+def test_send_message_posts_text_with_reply_to():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})
+
+    client = _client_with_handler(handler)
+    result = client.send_message(chat_id="-100123", text="hello", reply_to_message_id=42)
+    assert requests[0].url.path == "/bottest-token/sendMessage"
+    body = requests[0].content.decode()
+    assert "-100123" in body and "hello" in body and "42" in body
+    assert result["result"]["message_id"] == 77
+
+
+def test_send_message_omits_reply_to_when_not_given():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    client = _client_with_handler(handler)
+    client.send_message(chat_id="-100123", text="hello")
+    assert "reply_to_message_id" not in requests[0].content.decode()
+
+
+def test_send_message_raises_on_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "description": "chat not found"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(RuntimeError, match="chat not found"):
+        client.send_message(chat_id="-100123", text="hello")
+
+
 def test_send_document_raises_on_ok_false():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ok": False, "description": "chat not found"})

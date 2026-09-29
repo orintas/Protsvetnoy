@@ -50,5 +50,30 @@ class TelegramClient:
         record(service="telegram", entity_type="document", entity_id=chat_id, action="send", after={"filename": filename, "caption": caption})
         return payload
 
+    def send_message(self, *, chat_id: str, text: str, reply_to_message_id: int | None = None, parse_mode: str | None = None) -> dict[str, Any]:
+        data: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            data["parse_mode"] = parse_mode
+        if reply_to_message_id:
+            data["reply_to_message_id"] = reply_to_message_id
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = self._client.post("/sendMessage", data=data)
+            except httpx.TransportError:
+                if attempt <= MAX_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                raise
+            break
+        if response.is_error:
+            raise RuntimeError(f"Telegram sendMessage failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram sendMessage returned ok=false: {payload}")
+        record(service="telegram", entity_type="message", entity_id=chat_id, action="send", after={"text": text})
+        return payload
+
     def close(self) -> None:
         self._client.close()

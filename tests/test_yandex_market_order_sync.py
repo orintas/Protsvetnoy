@@ -1,8 +1,10 @@
 from sync_service.yandex_market_order_sync import (
     CAMPAIGN_STORES,
+    CANCELLED_STATE_ID,
     COMPLETED_STATE_ID,
     DELIVERING_STATE_ID,
     MAX_LABEL_RETRIES,
+    handle_order_cancelled,
     process_new_order,
     retry_label_if_missing,
     sync_order_delivery_state,
@@ -57,9 +59,17 @@ class FakeYandex:
 class FakeTelegram:
     def __init__(self):
         self.sent = []
+        self.messages = []
+        self.next_message_id = 5000
 
     def send_document(self, *, chat_id, document, filename, caption, parse_mode=None):
         self.sent.append((chat_id, document, filename, caption, parse_mode))
+        self.next_message_id += 1
+        return {"ok": True, "result": {"message_id": self.next_message_id}}
+
+    def send_message(self, *, chat_id, text, reply_to_message_id=None, parse_mode=None):
+        self.messages.append((chat_id, text, reply_to_message_id, parse_mode))
+        return {"ok": True, "result": {"message_id": self.next_message_id + 1}}
 
 
 def _order(offer_id="RGL02", count=1, price=361300.0, order_id=999, campaign_id="149179260"):
@@ -233,6 +243,78 @@ def test_delivery_status_for_unknown_order_logs_error_without_crashing(tmp_path)
     sync_order_delivery_state(order_id=999, status="DELIVERED", substatus=None, moysklad=moysklad, log=log)
     assert moysklad.state_updates == []
     assert log.recent()[0]["kind"] == "order_state_error"
+
+
+def test_handle_order_cancelled_moves_moysklad_state_and_notifies_telegram(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+    log.add("label_sent", "success", "sent earlier", "999", {"message_id": 4242})
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.state_updates == [("order-1", CANCELLED_STATE_ID)]
+    assert len(telegram.messages) == 1
+    chat_id, text, reply_to, _ = telegram.messages[0]
+    assert chat_id == "-100123"
+    assert reply_to == 4242  # replies to the original label message
+    assert "покупатель передумал" in text
+    assert "999" in text
+    kinds = [e["kind"] for e in log.recent()]
+    assert "order_cancelled" in kinds
+    assert "cancel_notified" in kinds
+
+
+def test_handle_order_cancelled_falls_back_to_raw_code_for_unknown_reason(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SOME_NEW_CODE", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert "SOME_NEW_CODE" in telegram.messages[0][1]
+
+
+def test_handle_order_cancelled_uses_placeholder_when_no_reason_given(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus=None, moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert "причина не указана" in telegram.messages[0][1]
+
+
+def test_handle_order_cancelled_without_prior_label_replies_to_nothing(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert telegram.messages[0][2] is None  # no reply_to_message_id on record
+
+
+def test_handle_order_cancelled_still_notifies_telegram_when_order_missing_from_moysklad(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order=None)
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.state_updates == []
+    assert len(telegram.messages) == 1  # still worth knowing about, even if MoySklad wasn't updated
+    kinds = [e["kind"] for e in log.recent()]
+    assert "order_cancel_error" in kinds
+
+
+def test_handle_order_cancelled_skips_telegram_when_not_configured(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=None, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.state_updates == [("order-1", CANCELLED_STATE_ID)]  # MoySklad side still happens
 
 
 def test_retry_label_sends_it_when_order_exists_but_label_never_confirmed(tmp_path):

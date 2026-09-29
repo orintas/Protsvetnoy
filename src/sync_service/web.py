@@ -22,7 +22,7 @@ from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import process_new_order, retry_label_if_missing, sync_order_delivery_state
+from .yandex_market_order_sync import handle_order_cancelled, process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -121,25 +121,41 @@ def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
 
 
 def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) -> None:
-    """Mirror DELIVERY/DELIVERED status pushes onto the MoySklad order's
-    state, and use the opportunity to notice — and retry — a label that
-    never got confirmed sent (see retry_label_if_missing)."""
+    """CANCELLED moves the MoySklad order to "Отменен" (releasing its
+    reserve) and notifies Telegram (see handle_order_cancelled). Every other
+    status mirrors DELIVERY/DELIVERED onto the MoySklad order's state, and
+    uses the opportunity to notice — and retry — a label that never got
+    confirmed sent (see retry_label_if_missing); that retry is skipped for a
+    cancelled order, since sending a label for it would make no sense."""
     settings = Settings.from_env()
     order_id = int(notification["orderId"])
+    campaign_id = int(notification["campaignId"])
+    status = notification.get("status")
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id)
     telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url) if settings.telegram_bot_token else None
     try:
+        if status == "CANCELLED":
+            handle_order_cancelled(
+                order_id=order_id,
+                campaign_id=campaign_id,
+                substatus=notification.get("substatus"),
+                moysklad=moysklad,
+                telegram=telegram,
+                telegram_chat_id=settings.telegram_label_chat_id,
+                log=log,
+            )
+            return
         sync_order_delivery_state(
             order_id=order_id,
-            status=notification.get("status"),
+            status=status,
             substatus=notification.get("substatus"),
             moysklad=moysklad,
             log=log,
         )
         retry_label_if_missing(
             order_id=order_id,
-            campaign_id=int(notification["campaignId"]),
+            campaign_id=campaign_id,
             moysklad=moysklad,
             yandex=yandex,
             telegram=telegram,

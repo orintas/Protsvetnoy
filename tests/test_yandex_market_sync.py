@@ -46,3 +46,14 @@ def test_count_matching_counts_by_external_id_prefix(tmp_path):
     log.add("label_retry_error", "error", "attempt 2", "999:2")
     log.add("label_retry_error", "error", "unrelated order", "1000:1")
     assert log.count_matching("label_retry_error", "999:") == 2
+
+
+def test_get_payload_returns_the_stored_payload(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    log.add("label_sent", "success", "sent", "999", {"message_id": 4242})
+    assert log.get_payload("label_sent", "999") == {"message_id": 4242}
+
+
+def test_get_payload_returns_none_when_missing(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    assert log.get_payload("label_sent", "999") is None

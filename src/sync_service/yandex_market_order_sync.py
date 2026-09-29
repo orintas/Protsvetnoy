@@ -21,9 +21,34 @@ SALES_CHANNEL_ID = "5a2f722a-549c-11ef-0a80-0493000bcbe7"  # "Яндекс Ма�
 # to Yandex Market's own order status/substatus pushed via ORDER_STATUS_UPDATED.
 DELIVERING_STATE_ID = "ea763d96-9bb8-11ed-0a80-0076000cbaed"  # "Доставляется"
 COMPLETED_STATE_ID = "8e499530-ac67-11e4-7a40-e89700075e01"  # "Выполнен"
+CANCELLED_STATE_ID = "ad2312d4-a7f7-11e2-fb80-001b21d91495"  # "Отменен" — stateType "Unsuccessful", releases the reserve automatically
 
 LABEL_RETRY_KIND = "label_retry_error"
 MAX_LABEL_RETRIES = 3
+
+# Yandex Market's CANCELLED substatus codes -> a human-readable reason, for
+# the Telegram notice. Falls back to the raw code for anything not listed
+# here rather than hiding it.
+CANCEL_REASON_LABELS: dict[str, str] = {
+    "USER_CHANGED_MIND": "покупатель передумал",
+    "USER_UNREACHABLE": "не удалось связаться с покупателем",
+    "USER_REFUSED_DELIVERY": "покупатель отказался от способа доставки",
+    "USER_REFUSED_QUALITY": "покупатель отказался — претензии к качеству",
+    "USER_REFUSED_PRODUCT": "покупатель отказался от товара",
+    "USER_REFUSED_ADDRESS_CHANGE": "не согласован новый адрес доставки",
+    "USER_NOT_PAID": "заказ не был оплачен",
+    "USER_BOUGHT_CHEAPER": "покупатель нашёл дешевле",
+    "RESERVATION_EXPIRED": "истёк срок резервирования",
+    "PROCESSING_EXPIRED": "истёк срок обработки заказа",
+    "SHOP_FAILED": "магазин не смог выполнить заказ",
+    "REPLACING_ORDER": "заказ заменён другим",
+}
+
+
+def _cancel_reason_text(substatus: str | None) -> str:
+    if not substatus:
+        return "причина не указана"
+    return CANCEL_REASON_LABELS.get(substatus, substatus)
 
 # campaignId -> MoySklad store id, one per physical shop.
 CAMPAIGN_STORES: dict[str, str] = {
@@ -102,14 +127,17 @@ def _send_label(
     if telegram is not None and telegram_chat_id:
         store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
         caption_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
-        telegram.send_document(
+        result = telegram.send_document(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{order_id}.pdf",
             caption=build_caption(marketplace="Яндекс.Маркет", store_name=store_name, order_label=f"Заказ №{order_id}", items=caption_items),
             parse_mode="HTML",
         )
-        log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code)
+        # Kept so a later cancellation can reply to this exact message instead
+        # of posting an unrelated standalone notice — see handle_order_cancelled.
+        message_id = (result.get("result") or {}).get("message_id")
+        log.add("label_sent", "success", f"Заказ {order_id}: этикетка отправлена в Telegram", external_code, {"message_id": message_id})
         return True
     log.add("label_sent", "error", f"Заказ {order_id}: Telegram не настроен, этикетка не отправлена", external_code)
     return False
@@ -251,7 +279,45 @@ def sync_order_delivery_state(
         log.add("order_state_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «{label}» не проставлен", external_code)
         return
 
-    previous_state_href = ((order.get("state") or {}).get("meta") or {}).get("href", "")
-    previous_state_id = previous_state_href.rsplit("/", 1)[-1] or None
+    previous_state_id = _previous_state_id(order)
     moysklad.update_customer_order_state(str(order["id"]), state_id, previous_state_id=previous_state_id)
     log.add("order_state_updated", "success", f"Заказ {order_id}: статус в МойСклад изменён на «{label}»", external_code)
+
+
+def _previous_state_id(order: dict[str, Any]) -> str | None:
+    href = ((order.get("state") or {}).get("meta") or {}).get("href", "")
+    return href.rsplit("/", 1)[-1] or None
+
+
+def handle_order_cancelled(
+    *,
+    order_id: int,
+    campaign_id: int,
+    substatus: str | None,
+    moysklad: MoySkladClient,
+    telegram: TelegramClient | None,
+    telegram_chat_id: str,
+    log: YandexMarketSyncLog,
+) -> None:
+    """A Market cancellation: move the MoySklad order to "Отменен" (its
+    "Unsuccessful" stateType releases the reserve automatically — no
+    separate reservation call), then notify Telegram, replying to the
+    original label message when we still have its message_id on record.
+    """
+    external_code = str(order_id)
+    reason = _cancel_reason_text(substatus)
+    order = moysklad.customer_order_by_external_code(external_code)
+    if order is None:
+        log.add("order_cancel_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «Отменен» не проставлен", external_code)
+    else:
+        previous_state_id = _previous_state_id(order)
+        moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID, previous_state_id=previous_state_id)
+        log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code)
+
+    if telegram is not None and telegram_chat_id:
+        store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+        text = f"❌ Заказ №{order_id} ({store_name}) отменён.\nПричина: {reason}"
+        label_payload = log.get_payload("label_sent", external_code)
+        reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+        telegram.send_message(chat_id=telegram_chat_id, text=text, reply_to_message_id=reply_to)
+        log.add("cancel_notified", "success", f"Заказ {order_id}: уведомление об отмене отправлено в Telegram", external_code)

@@ -49,6 +49,19 @@ class YandexMarketSyncLog:
             ).fetchone()
             return row is not None
 
+    def get_payload(self, kind: str, external_id: str) -> Any | None:
+        """The stored payload for one (kind, external_id) row — e.g. recovering
+        the Telegram message_id a label was sent under, so a later
+        notification about the same order can reply to it."""
+        with sqlite3.connect(self.path) as db:
+            row = db.execute("SELECT payload FROM sync_log WHERE kind=? AND external_id=? LIMIT 1", (kind, external_id)).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            return None
+
     def count_matching(self, kind: str, external_id_prefix: str) -> int:
         """Count rows for a kind whose external_id starts with a given prefix —
         used to cap numbered retry attempts (external_id "<order>:1", "<order>:2", ...)
