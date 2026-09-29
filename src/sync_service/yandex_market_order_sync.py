@@ -291,6 +291,14 @@ def _previous_state_id(order: dict[str, Any]) -> str | None:
 
 COURIER_NOTIFIED_KIND = "courier_notified"
 
+# Confirmed against a real completed order's full status history
+# (PROCESSING/STARTED -> READY_TO_SHIP -> COURIER_SEARCH -> COURIER_FOUND ->
+# COURIER_ARRIVED_TO_SENDER -> DELIVERY/COURIER_RECEIVED ->
+# DELIVERED/DELIVERY_SERVICE_DELIVERED): the courier showing up at our store
+# is its own substatus, still under PROCESSING — a full status/substatus
+# step before the order ever reaches DELIVERY.
+COURIER_ARRIVED_SUBSTATUS = "COURIER_ARRIVED_TO_SENDER"
+
 
 def notify_courier_arrived(
     *,
@@ -302,14 +310,10 @@ def notify_courier_arrived(
     telegram_chat_id: str,
     log: YandexMarketSyncLog,
 ) -> None:
-    """Best-effort notice for the courier taking the order off our hands —
-    Market has no distinct "courier is here" event, so this uses the same
-    DELIVERY/DELIVERY_SERVICE_RECEIVED transition sync_order_delivery_state
-    treats as "Доставляется" (the closest available signal). Fires once per
-    order; replies to the original label message when we still have its
-    message_id on record.
-    """
-    if not (status == "DELIVERY" or substatus == "DELIVERY_SERVICE_RECEIVED"):
+    """Notice for the courier physically arriving at our store to collect
+    the order. Fires once per order; replies to the original label message
+    when we still have its message_id on record."""
+    if substatus != COURIER_ARRIVED_SUBSTATUS:
         return
     if telegram is None or not telegram_chat_id:
         return

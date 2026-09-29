@@ -216,12 +216,12 @@ def test_delivery_status_sets_delivering_state(tmp_path):
     assert log.recent()[0]["kind"] == "order_state_updated"
 
 
-def test_notify_courier_arrived_on_delivery_status_replies_to_label(tmp_path):
+def test_notify_courier_arrived_on_courier_arrived_to_sender_replies_to_label(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     telegram = FakeTelegram()
     log.add("label_sent", "success", "sent earlier", "999", {"message_id": 4242})
 
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=telegram, telegram_chat_id="-100123", log=log)
 
     assert len(telegram.messages) == 1
     chat_id, text, reply_to, _ = telegram.messages[0]
@@ -230,20 +230,25 @@ def test_notify_courier_arrived_on_delivery_status_replies_to_label(tmp_path):
     assert "999" in text and "ТЦ Ривьера" in text
 
 
-def test_notify_courier_arrived_on_delivery_service_received_substatus(tmp_path):
+def test_notify_courier_arrived_ignores_other_processing_substatuses(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     telegram = FakeTelegram()
 
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="DELIVERY_SERVICE_RECEIVED", telegram=telegram, telegram_chat_id="-100123", log=log)
+    for substatus in ("STARTED", "READY_TO_SHIP", "COURIER_SEARCH", "COURIER_FOUND"):
+        notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus=substatus, telegram=telegram, telegram_chat_id="-100123", log=log)
 
-    assert len(telegram.messages) == 1
+    assert telegram.messages == []
 
 
-def test_notify_courier_arrived_ignores_unrelated_status(tmp_path):
+def test_notify_courier_arrived_ignores_later_statuses_too(tmp_path):
+    # COURIER_RECEIVED (status DELIVERY) and DELIVERY_SERVICE_DELIVERED
+    # (status DELIVERED) both come strictly after the courier already
+    # arrived — must not (again) fire on those.
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     telegram = FakeTelegram()
 
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="READY_TO_SHIP", telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus="COURIER_RECEIVED", telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERED", substatus="DELIVERY_SERVICE_DELIVERED", telegram=telegram, telegram_chat_id="-100123", log=log)
 
     assert telegram.messages == []
 
@@ -252,15 +257,15 @@ def test_notify_courier_arrived_fires_once_per_order(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     telegram = FakeTelegram()
 
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=telegram, telegram_chat_id="-100123", log=log)
 
     assert len(telegram.messages) == 1
 
 
 def test_notify_courier_arrived_skips_when_telegram_not_configured(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
-    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=None, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=None, telegram_chat_id="-100123", log=log)
     assert log.recent() == []
 
 
