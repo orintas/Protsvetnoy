@@ -14,7 +14,14 @@ from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
-from .order_assistant import answer_question, find_order_by_label_message
+from .order_assistant import (
+    DEFAULT_QUESTION,
+    answer_question,
+    find_order_by_label_message,
+    read_order_number_from_image,
+    resolve_order_by_number,
+    resolve_order_from_text,
+)
 from .ozon_order_sync import PendingPostings, handle_webhook_notification
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
@@ -257,8 +264,8 @@ def _ozon_webhook(environ, start_response):
 
 
 def _telegram_webhook(environ, start_response):
-    """Receives inbound Telegram updates (staff replying to a label message
-    with a question). Authenticity is checked via the secret token Telegram
+    """Receives inbound Telegram updates (staff asking about an order — see
+    _resolve_order_for_message for the ways that can arrive). Authenticity is checked via the secret token Telegram
     echoes back on every delivery (set at registration time, see
     TelegramClient.set_webhook) — Telegram has no signature scheme and
     doesn't publish stable source IPs, so this is the only verification
@@ -286,12 +293,54 @@ def _telegram_webhook(environ, start_response):
     return [b"ok"]
 
 
+def _resolve_order_for_message(message: dict, *, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog, moysklad: MoySkladClient, anthropic: AnthropicClient, telegram: TelegramClient) -> tuple[str | None, dict | None]:
+    """Tries, in order: (1) the message is a reply to a label this service
+    sent — exact match by message_id; (2) an order number appears in the
+    message's own text/caption, or in the text/caption of whatever it's
+    replying to; (3) the message carries a photo (receipt/label screenshot)
+    and Claude can read an order number off of it. Each step only costs
+    something (a MoySklad lookup, a vision call) once the previous one came
+    up empty."""
+    reply_to = message.get("reply_to_message")
+    if isinstance(reply_to, dict) and reply_to.get("message_id"):
+        match = find_order_by_label_message(reply_to_message_id=reply_to["message_id"], yandex_log=yandex_log, ozon_log=ozon_log)
+        if match is not None:
+            marketplace, external_id = match
+            order = moysklad.customer_order_by_external_code(external_id) if marketplace == "yandex_market" else moysklad.customer_order_by_name(external_id)
+            if order is not None:
+                return marketplace, order
+
+    search_text = str(message.get("text") or message.get("caption") or "")
+    if isinstance(reply_to, dict):
+        search_text = f"{search_text} {reply_to.get('text') or reply_to.get('caption') or ''}"
+    resolved = resolve_order_from_text(text=search_text, moysklad=moysklad)
+    if resolved is not None:
+        return resolved
+
+    photos = message.get("photo")
+    if isinstance(photos, list) and photos:
+        file_id = photos[-1].get("file_id")  # Telegram orders photo sizes smallest -> largest
+        if file_id:
+            image_bytes = telegram.download_file(file_id)
+            candidate = read_order_number_from_image(client=anthropic, image_bytes=image_bytes)
+            if candidate:
+                resolved = resolve_order_by_number(candidate=candidate, moysklad=moysklad)
+                if resolved is not None:
+                    return resolved
+
+    return None, None
+
+
 def _handle_telegram_update(update: dict, settings: Settings) -> None:
-    """Answers a staff question replied onto a label message, using Claude
-    plus that order's MoySklad data. Silently does nothing for anything that
-    isn't exactly that: a text reply, in the label chat, to a message this
-    service itself sent as a label — random chat traffic or messages in an
-    unrelated chat never reach the model. Requires ANTHROPIC_API_KEY to be
+    """Answers a staff question about an order, using Claude plus that
+    order's MoySklad data. The question can arrive as a reply to a label
+    message, as plain text/a photo containing an order number, or as a reply
+    to any other message that itself mentions the order — see
+    _resolve_order_for_message. Silently does nothing for a message in the
+    right chat that doesn't resolve to any real order, so ordinary chat
+    traffic never reaches the model; ignores messages from other bots
+    (including this one's own sent messages, which Telegram doesn't loop
+    back anyway) to rule out reply loops. Requires ANTHROPIC_API_KEY to be
     set; otherwise this is a no-op, same as every other optional integration
     here."""
     if not settings.anthropic_api_key:
@@ -299,31 +348,24 @@ def _handle_telegram_update(update: dict, settings: Settings) -> None:
     message = update.get("message")
     if not isinstance(message, dict):
         return
+    if bool((message.get("from") or {}).get("is_bot")):
+        return
     chat_id = str((message.get("chat") or {}).get("id", ""))
     if not settings.telegram_label_chat_id or chat_id != str(settings.telegram_label_chat_id):
-        return
-    reply_to = message.get("reply_to_message")
-    if not isinstance(reply_to, dict):
-        return
-    reply_to_message_id = reply_to.get("message_id")
-    question = str(message.get("text") or "").strip()
-    if not reply_to_message_id or not question:
         return
 
     yandex_log = YandexMarketSyncLog()
     ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
-    match = find_order_by_label_message(reply_to_message_id=reply_to_message_id, yandex_log=yandex_log, ozon_log=ozon_log)
-    if match is None:
-        return
-    marketplace, external_id = match
-
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     anthropic = AnthropicClient(api_key=settings.anthropic_api_key, model=settings.anthropic_model)
     telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url)
     try:
-        answer = answer_question(client=anthropic, marketplace=marketplace, external_id=external_id, moysklad=moysklad, question=question)
-        if answer:
-            telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
+        marketplace, order = _resolve_order_for_message(message, yandex_log=yandex_log, ozon_log=ozon_log, moysklad=moysklad, anthropic=anthropic, telegram=telegram)
+        if order is None:
+            return
+        question = str(message.get("text") or message.get("caption") or "").strip() or DEFAULT_QUESTION
+        answer = answer_question(client=anthropic, order=order, marketplace=marketplace, question=question)
+        telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
     finally:
         moysklad.close()
         anthropic.close()

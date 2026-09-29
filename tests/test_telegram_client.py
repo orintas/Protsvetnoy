@@ -150,3 +150,29 @@ def test_set_webhook_raises_on_ok_false():
     client = _client_with_handler(handler)
     with pytest.raises(RuntimeError, match="invalid url"):
         client.set_webhook(url="not-a-url", secret_token="s3cr3t")
+
+
+def test_download_file_resolves_path_then_downloads_bytes():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/bottest-token/getFile":
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": "photos/file_1.jpg"}})
+        return httpx.Response(200, content=b"%JPEGDATA")
+
+    client = _client_with_handler(handler)
+    content = client.download_file("abc123")
+
+    assert content == b"%JPEGDATA"
+    assert requests[0].url.path == "/bottest-token/getFile"
+    assert str(requests[1].url) == "https://api.telegram.org/file/bottest-token/photos/file_1.jpg"
+
+
+def test_download_file_raises_on_get_file_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "description": "file not found"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(RuntimeError, match="file not found"):
+        client.download_file("abc123")

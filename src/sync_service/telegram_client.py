@@ -21,6 +21,7 @@ class TelegramClient:
         Russian-hosted servers), so production always sets one. That proxy
         (a VLESS tunnel) occasionally resets mid-handshake — transient, so
         retried the same way JsonClient retries MoySklad/Novicloud."""
+        self._bot_token = bot_token
         self._client = httpx.Client(base_url=f"https://api.telegram.org/bot{bot_token}", timeout=30.0, proxy=proxy or None)
 
     def send_document(self, *, chat_id: str, document: bytes, filename: str, caption: str = "", parse_mode: str | None = None) -> dict[str, Any]:
@@ -74,6 +75,33 @@ class TelegramClient:
             raise RuntimeError(f"Telegram sendMessage returned ok=false: {payload}")
         record(service="telegram", entity_type="message", entity_id=chat_id, action="send", after={"text": text})
         return payload
+
+    def download_file(self, file_id: str) -> bytes:
+        """Fetches a file a user sent (e.g. a receipt/label photo) — two calls,
+        per the Bot API: getFile resolves file_id to a temporary file_path,
+        then the file itself is downloaded from a different URL prefix
+        (/file/bot<token>/... rather than /bot<token>/...)."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = self._client.get("/getFile", params={"file_id": file_id})
+            except httpx.TransportError:
+                if attempt <= MAX_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                raise
+            break
+        if response.is_error:
+            raise RuntimeError(f"Telegram getFile failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram getFile returned ok=false: {payload}")
+        file_path = payload["result"]["file_path"]
+        download = self._client.get(f"https://api.telegram.org/file/bot{self._bot_token}/{file_path}")
+        if download.is_error:
+            raise RuntimeError(f"Telegram file download failed with HTTP {download.status_code}")
+        return download.content
 
     def set_webhook(self, *, url: str, secret_token: str) -> dict[str, Any]:
         """One-time setup call — registers where Telegram delivers updates
