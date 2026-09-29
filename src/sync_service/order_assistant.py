@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from .anthropic_client import AnthropicClient
 from .moysklad import MoySkladClient
+from .ozon_client import OzonClient
+from .yandex_market import YandexMarketClient
 from .yandex_market_sync import YandexMarketSyncLog
 
 MARKETPLACE_NAMES = {"yandex_market": "Яндекс.Маркет", "ozon": "OZON"}
 
 DEFAULT_QUESTION = "Какой сейчас статус этого заказа?"
 
-# The assistant only ever answers from the order data it's given and never
-# claims to act — cancelling (or any other order-state change) stays a human
-# action taken directly in MoySklad/the marketplace's own cabinet, per the
-# explicit "propose but never execute on its own" constraint this feature was
-# scoped under.
+# The assistant can read anything in MoySklad/OZON/Yandex Market about the
+# order (including courier contact details) but never claims to act —
+# cancelling or any other order-state change stays a human action taken
+# directly in MoySklad/the marketplace's own cabinet, per the explicit
+# "propose but never execute on its own" constraint this feature was scoped
+# under.
 SYSTEM_PROMPT = """Ты — помощник склада цветочного магазина «Varvikas | Цветной» в рабочем чате Telegram, где сборщики читают этикетки заказов и иногда спрашивают про них — ответом на сообщение, номером заказа или фото чека/этикетки.
 
-Тебе передают данные одного конкретного заказа и вопрос сотрудника о нём. Отвечай кратко, по-русски, только на основе переданных данных о заказе. Если в данных нет ответа на вопрос — так и скажи, не придумывай.
+Тебе передают данные одного конкретного заказа (из МойСклад и, если есть, с площадки — Яндекс.Маркет или OZON, включая данные о курьере) и вопрос сотрудника о нём. Отвечай кратко, по-русски, только на основе переданных данных. Если в данных нет ответа на вопрос — так и скажи, не придумывай.
 
-Если сотрудник просит отменить заказ или явно выражает намерение его отменить — ты не можешь отменить заказ сам, у тебя нет такой возможности. Объясни это и скажи, что отмену нужно сделать вручную: в МойСклад и (если нужно, чтобы покупатель тоже узнал) в личном кабинете соответствующей площадки. Никогда не пиши, что заказ отменён или что ты его отменяешь.
+Ты не можешь ничего изменить в заказе — ни отменить, ни поменять статус, ни связаться с курьером или покупателем. Если сотрудник просит об этом — объясни, что сам ты этого сделать не можешь, и что нужно сделать вручную (в МойСклад и/или в личном кабинете площадки). Никогда не пиши, что что-то сделал или меняешь.
 
 Пиши обычным текстом, без markdown-разметки и заголовков — это сообщение в чат."""
 
@@ -57,7 +61,7 @@ def find_order_by_label_message(*, reply_to_message_id: int, yandex_log: YandexM
     return None
 
 
-def resolve_order_by_number(*, candidate: str, moysklad: MoySkladClient) -> tuple[str, dict] | None:
+def resolve_order_by_number(*, candidate: str, moysklad: MoySkladClient) -> tuple[str, str, dict] | None:
     """Tries a candidate first as a Yandex Market order id (externalCode),
     then as an OZON posting number (document name) — the two conventions
     this service's own order-creation code uses (see
@@ -66,14 +70,14 @@ def resolve_order_by_number(*, candidate: str, moysklad: MoySkladClient) -> tupl
     matching just means this candidate isn't a real order, not an error."""
     order = moysklad.customer_order_by_external_code(candidate)
     if order is not None:
-        return "yandex_market", order
+        return "yandex_market", candidate, order
     order = moysklad.customer_order_by_name(candidate)
     if order is not None:
-        return "ozon", order
+        return "ozon", candidate, order
     return None
 
 
-def resolve_order_from_text(*, text: str, moysklad: MoySkladClient) -> tuple[str, dict] | None:
+def resolve_order_from_text(*, text: str, moysklad: MoySkladClient) -> tuple[str, str, dict] | None:
     for candidate in extract_order_candidates(text):
         match = resolve_order_by_number(candidate=candidate, moysklad=moysklad)
         if match is not None:
@@ -89,17 +93,65 @@ def read_order_number_from_image(*, client: AnthropicClient, image_bytes: bytes,
     return value
 
 
-def _order_context_text(*, order: dict, marketplace: str | None) -> str:
+def fetch_marketplace_details(*, marketplace: str, external_id: str, yandex: YandexMarketClient | None, ozon: OzonClient | None) -> dict[str, Any] | None:
+    """The live order/posting from the marketplace itself — richer than what
+    MoySklad holds (delivery status, courier name/phone/vehicle). Best
+    effort: any API error (or the relevant client not being configured)
+    just means the answer falls back to MoySklad-only context instead of
+    failing the whole question."""
+    try:
+        if marketplace == "yandex_market" and yandex is not None:
+            return yandex.order_by_id(int(external_id))
+        if marketplace == "ozon" and ozon is not None:
+            return ozon.posting_details(external_id)
+    except Exception:
+        return None
+    return None
+
+
+def _courier_line(marketplace: str, details: dict[str, Any]) -> str | None:
+    if marketplace == "yandex_market":
+        courier = (((details.get("delivery") or {}).get("transfer")) or {}).get("courier") or {}
+        if not courier:
+            return None
+        vehicle = " ".join(part for part in (courier.get("vehicleDescription"), courier.get("vehicleNumber")) if part)
+        return f"Курьер: {courier.get('fullName', '?')}, тел. {courier.get('phone', '?')}" + (f", авто {vehicle}" if vehicle else "")
+    if marketplace == "ozon":
+        courier = details.get("courier") or {}
+        if not courier:
+            return None
+        vehicle = " ".join(part for part in (courier.get("car_model"), courier.get("car_number")) if part)
+        return f"Курьер: {courier.get('name', '?')}, тел. {courier.get('phone', '?')}" + (f", авто {vehicle}" if vehicle else "")
+    return None
+
+
+def _marketplace_context_lines(*, marketplace: str | None, details: dict[str, Any] | None) -> list[str]:
+    if not marketplace or not details:
+        return []
+    lines: list[str] = []
+    if marketplace == "yandex_market":
+        lines.append(f"Статус на Яндекс.Маркете: {details.get('status')}/{details.get('substatus')}")
+    elif marketplace == "ozon":
+        lines.append(f"Статус на OZON: {details.get('status')} ({details.get('provider_status') or details.get('substatus') or '?'})")
+    courier_line = _courier_line(marketplace, details)
+    if courier_line:
+        lines.append(courier_line)
+    return lines
+
+
+def _order_context_text(*, order: dict, marketplace: str | None, marketplace_details: dict[str, Any] | None = None) -> str:
     state_name = (order.get("state") or {}).get("name", "неизвестен")
     header = f"Площадка: {MARKETPLACE_NAMES.get(marketplace, marketplace)}\n" if marketplace else ""
-    return (
+    lines = [
         f"{header}"
         f"Номер документа в МойСклад: {order.get('name')}\n"
         f"Статус в МойСклад: {state_name}\n"
         f"Состав заказа:\n{order.get('description') or '(нет данных)'}"
-    )
+    ]
+    lines.extend(_marketplace_context_lines(marketplace=marketplace, details=marketplace_details))
+    return "\n".join(lines)
 
 
-def answer_question(*, client: AnthropicClient, order: dict, marketplace: str | None, question: str) -> str:
-    context = _order_context_text(order=order, marketplace=marketplace)
+def answer_question(*, client: AnthropicClient, order: dict, marketplace: str | None, question: str, marketplace_details: dict[str, Any] | None = None) -> str:
+    context = _order_context_text(order=order, marketplace=marketplace, marketplace_details=marketplace_details)
     return client.complete(system=SYSTEM_PROMPT, user_message=f"Данные о заказе:\n{context}\n\nВопрос от сотрудника склада:\n{question}")
