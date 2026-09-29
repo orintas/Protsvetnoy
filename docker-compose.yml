@@ -77,6 +77,15 @@ services:
     command: ["health-check-worker"]
     volumes:
       - sync-data:/app/data
+  telegram-qa-worker:
+    build: .
+    env_file:
+      - .env
+    command: ["telegram-qa-worker"]
+    volumes:
+      - sync-data:/app/data
+    depends_on:
+      - telegram-proxy
 volumes:
   sync-data:
   caddy-data:

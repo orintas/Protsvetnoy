@@ -25,6 +25,7 @@ def main() -> None:
     subparsers.add_parser("shopify-stock-sync-worker")
     subparsers.add_parser("moysklad-shift-close-worker")
     subparsers.add_parser("health-check-worker")
+    subparsers.add_parser("telegram-qa-worker")
     telegram_set_webhook = subparsers.add_parser("telegram-set-webhook", help="One-time setup: register where Telegram delivers incoming chat messages")
     telegram_set_webhook.add_argument("--url", required=True, help="Public HTTPS URL of /api/telegram/webhook, e.g. https://protsvetnoy.us/api/telegram/webhook")
     args = parser.parse_args()
@@ -64,6 +65,10 @@ def main() -> None:
     if args.command == "health-check-worker":
         from .health_check import worker as health_check_worker
         health_check_worker()
+        return
+    if args.command == "telegram-qa-worker":
+        from .telegram_qa_worker import worker as telegram_qa_worker
+        telegram_qa_worker()
         return
     if args.command == "telegram-set-webhook":
         from .telegram_client import TelegramClient
