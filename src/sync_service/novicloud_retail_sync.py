@@ -12,9 +12,9 @@ from .novicloud import NovicloudClient
 from .store_mapping import StoreMapping, load_store_mappings
 from .sync_log import SyncLog
 
-# Sales sync only runs during the shops' opening hours — outside 9:00-23:00
-# there's nothing new to find, so it skips hitting the Novicloud API. Returns
-# aren't restricted (only sales were called out by name).
+# Sync only runs during the shops' opening hours — outside 9:00-23:00 the
+# shops are closed, so there can be no new sales or returns to find; skips
+# hitting Novicloud/MoySklad entirely rather than checking for nothing.
 WARSAW = ZoneInfo("Europe/Warsaw")
 SALES_SYNC_START_HOUR = 9
 SALES_SYNC_END_HOUR = 23
@@ -203,6 +203,10 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
 
 
 def run_once(settings: Settings, log: SyncLog) -> None:
+    if not _within_sales_sync_window():
+        log.add("run", "success", "Проверка пропущена: магазины закрыты (вне окна 9:00–23:00 по Варшаве)")
+        return
+
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     novicloud = NovicloudClient(
         base_url=settings.novicloud_base_url,
@@ -212,20 +216,17 @@ def run_once(settings: Settings, log: SyncLog) -> None:
     )
     total_sales = 0
     total_returns = 0
-    sales_sync_active = _within_sales_sync_window()
     try:
         for store in load_store_mappings():
-            if sales_sync_active:
-                try:
-                    total_sales += sync_store_sales(moysklad, novicloud, store, log)
-                except Exception as error:
-                    log.add("sale_error", "error", f"{store.name}: ошибка синхронизации продаж: {error}", None)
+            try:
+                total_sales += sync_store_sales(moysklad, novicloud, store, log)
+            except Exception as error:
+                log.add("sale_error", "error", f"{store.name}: ошибка синхронизации продаж: {error}", None)
             try:
                 total_returns += sync_store_returns(moysklad, novicloud, store, log)
             except Exception as error:
                 log.add("return_error", "error", f"{store.name}: ошибка синхронизации возвратов: {error}", None)
-        window_note = "" if sales_sync_active else " (продажи вне окна синхронизации 9:00–23:00 по Варшаве)"
-        log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}{window_note}")
+        log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}")
     finally:
         moysklad.close()
         novicloud.close()

@@ -307,19 +307,17 @@ def test_within_sales_sync_window_false_outside_opening_hours():
     assert _within_sales_sync_window(datetime(2026, 9, 17, 8, 59, tzinfo=WARSAW)) is False
 
 
-def test_run_once_skips_sales_but_still_syncs_returns_outside_window(tmp_path, monkeypatch):
+def test_run_once_does_nothing_outside_window(tmp_path, monkeypatch):
     log = SyncLog(str(tmp_path / "sync.sqlite3"))
-    novicloud = FakeNovicloud(
-        docs=[_sale_doc()],
-        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
-        products_by_link={"https://novicloud/towary/1": _product_payload()},
-    )
-    moysklad = FakeMoySklad(open_shift={"id": "shift-1"})
 
     import sync_service.novicloud_retail_sync as mod
     monkeypatch.setattr(mod, "_within_sales_sync_window", lambda: False)
-    monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad)
-    monkeypatch.setattr(mod, "NovicloudClient", lambda **kwargs: novicloud)
+
+    def _fail_if_called(**kwargs):
+        raise AssertionError("MoySklad/Novicloud must not be touched outside the sync window")
+
+    monkeypatch.setattr(mod, "MoySkladClient", _fail_if_called)
+    monkeypatch.setattr(mod, "NovicloudClient", _fail_if_called)
 
     class FakeSettings:
         moysklad_base_url = "x"
@@ -331,11 +329,9 @@ def test_run_once_skips_sales_but_still_syncs_returns_outside_window(tmp_path, m
 
     run_once(FakeSettings(), log)
 
-    assert moysklad.created_demands == []  # sale sync skipped — outside 9:00-23:00
-    assert len(moysklad.created_returns) > 0  # returns aren't time-gated
     run_entries = [e for e in log.recent(limit=1000) if e["kind"] == "run"]
     assert len(run_entries) == 1
-    assert "вне окна синхронизации" in run_entries[0]["message"]
+    assert run_entries[0]["message"] == "Проверка пропущена: магазины закрыты (вне окна 9:00–23:00 по Варшаве)"
 
 
 def test_run_once_continues_other_stores_after_one_fails(tmp_path, monkeypatch):
