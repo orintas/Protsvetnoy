@@ -57,3 +57,23 @@ def test_get_payload_returns_the_stored_payload(tmp_path):
 def test_get_payload_returns_none_when_missing(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
     assert log.get_payload("label_sent", "999") is None
+
+
+def test_find_by_label_message_id_resolves_a_reply(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    log.add("label_sent", "success", "sent", "999", {"message_id": 4242})
+    log.add("label_sent", "success", "sent", "1000", {"message_id": 5000})
+    assert log.find_by_label_message_id(4242) == "999"
+    assert log.find_by_label_message_id(5000) == "1000"
+
+
+def test_find_by_label_message_id_returns_none_for_unknown_message(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    log.add("label_sent", "success", "sent", "999", {"message_id": 4242})
+    assert log.find_by_label_message_id(9999) is None
+
+
+def test_find_by_label_message_id_ignores_other_kinds(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
+    log.add("courier_notified", "success", "notified", "999", {"message_id": 4242})
+    assert log.find_by_label_message_id(4242) is None

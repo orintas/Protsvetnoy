@@ -62,6 +62,23 @@ class YandexMarketSyncLog:
         except (TypeError, ValueError):
             return None
 
+    def find_by_label_message_id(self, message_id: int) -> str | None:
+        """Reverse lookup: which external_id a label was sent under, given the
+        Telegram message_id it was sent as — resolves an inbound reply to the
+        order it's about. A full scan over "label_sent" rows, not an indexed
+        lookup: this table stays small enough (one row per order ever
+        labelled) that it isn't worth a schema change for."""
+        with sqlite3.connect(self.path) as db:
+            rows = db.execute("SELECT external_id, payload FROM sync_log WHERE kind='label_sent'").fetchall()
+        for external_id, payload_json in rows:
+            try:
+                payload = json.loads(payload_json)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(payload, dict) and payload.get("message_id") == message_id:
+                return external_id
+        return None
+
     def count_matching(self, kind: str, external_id_prefix: str) -> int:
         """Count rows for a kind whose external_id starts with a given prefix —
         used to cap numbered retry attempts (external_id "<order>:1", "<order>:2", ...)

@@ -75,5 +75,19 @@ class TelegramClient:
         record(service="telegram", entity_type="message", entity_id=chat_id, action="send", after={"text": text})
         return payload
 
+    def set_webhook(self, *, url: str, secret_token: str) -> dict[str, Any]:
+        """One-time setup call — registers where Telegram delivers updates
+        (incoming chat messages) for this bot. `secret_token` is echoed back
+        by Telegram on every delivery as the X-Telegram-Bot-Api-Secret-Token
+        header, which is what the inbound webhook endpoint checks instead of
+        an IP allowlist (Telegram doesn't publish stable source ranges)."""
+        response = self._client.post("/setWebhook", data={"url": url, "secret_token": secret_token, "allowed_updates": '["message"]'})
+        if response.is_error:
+            raise RuntimeError(f"Telegram setWebhook failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram setWebhook returned ok=false: {payload}")
+        return payload
+
     def close(self) -> None:
         self._client.close()

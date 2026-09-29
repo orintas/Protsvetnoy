@@ -127,3 +127,26 @@ def test_send_document_raises_after_exhausting_retries_on_transport_error(monkey
     client = _client_with_handler(handler)
     with pytest.raises(httpx.ConnectError):
         client.send_document(chat_id="-100123", document=b"%PDF-fake", filename="42.pdf")
+
+
+def test_set_webhook_posts_url_and_secret_token():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    client = _client_with_handler(handler)
+    client.set_webhook(url="https://protsvetnoy.us/api/telegram/webhook", secret_token="s3cr3t")
+    assert requests[0].url.path == "/bottest-token/setWebhook"
+    body = requests[0].content.decode()
+    assert "protsvetnoy.us" in body and "s3cr3t" in body
+
+
+def test_set_webhook_raises_on_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "description": "invalid url"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(RuntimeError, match="invalid url"):
+        client.set_webhook(url="not-a-url", secret_token="s3cr3t")

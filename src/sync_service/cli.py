@@ -25,6 +25,8 @@ def main() -> None:
     subparsers.add_parser("shopify-stock-sync-worker")
     subparsers.add_parser("moysklad-shift-close-worker")
     subparsers.add_parser("health-check-worker")
+    telegram_set_webhook = subparsers.add_parser("telegram-set-webhook", help="One-time setup: register where Telegram delivers incoming chat messages")
+    telegram_set_webhook.add_argument("--url", required=True, help="Public HTTPS URL of /api/telegram/webhook, e.g. https://protsvetnoy.us/api/telegram/webhook")
     args = parser.parse_args()
 
     if args.command == "web-server":
@@ -62,6 +64,18 @@ def main() -> None:
     if args.command == "health-check-worker":
         from .health_check import worker as health_check_worker
         health_check_worker()
+        return
+    if args.command == "telegram-set-webhook":
+        from .telegram_client import TelegramClient
+        settings = Settings.from_env()
+        if not settings.telegram_webhook_secret:
+            raise SystemExit("TELEGRAM_WEBHOOK_SECRET is not set — set it in .env before registering the webhook")
+        client = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url)
+        try:
+            result = client.set_webhook(url=args.url, secret_token=settings.telegram_webhook_secret)
+        finally:
+            client.close()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):

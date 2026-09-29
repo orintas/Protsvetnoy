@@ -6,6 +6,7 @@ from json import dumps, loads
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
+from .anthropic_client import AnthropicClient
 from .category_sync import CategorySyncConfig
 from .change_log import ChangeLog
 from .config import Settings
@@ -13,6 +14,7 @@ from .error_log import ErrorLog
 from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
+from .order_assistant import answer_question, find_order_by_label_message
 from .ozon_order_sync import PendingPostings, handle_webhook_notification
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
@@ -252,6 +254,80 @@ def _ozon_webhook(environ, start_response):
     payload = dumps(response_body, ensure_ascii=False).encode("utf-8")
     start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
     return [payload]
+
+
+def _telegram_webhook(environ, start_response):
+    """Receives inbound Telegram updates (staff replying to a label message
+    with a question). Authenticity is checked via the secret token Telegram
+    echoes back on every delivery (set at registration time, see
+    TelegramClient.set_webhook) — Telegram has no signature scheme and
+    doesn't publish stable source IPs, so this is the only verification
+    available, mirroring Shopify's HMAC / Yandex Market's IP-allowlist role
+    for their own webhooks.
+    """
+    settings = Settings.from_env()
+    secret = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
+    if not settings.telegram_webhook_secret or secret != settings.telegram_webhook_secret:
+        start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"forbidden"]
+    try:
+        update = _read_json_body(environ)
+        if not isinstance(update, dict):
+            raise ValueError("Telegram update payload is not a JSON object")
+    except Exception as error:
+        ErrorLog().log_exception("telegram_webhook", error, context="Некорректное обновление Telegram")
+        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"bad request"]
+    try:
+        _handle_telegram_update(update, settings)
+    except Exception as error:
+        ErrorLog().log_exception("telegram_webhook", error, context="Ошибка обработки сообщения Telegram")
+    start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+    return [b"ok"]
+
+
+def _handle_telegram_update(update: dict, settings: Settings) -> None:
+    """Answers a staff question replied onto a label message, using Claude
+    plus that order's MoySklad data. Silently does nothing for anything that
+    isn't exactly that: a text reply, in the label chat, to a message this
+    service itself sent as a label — random chat traffic or messages in an
+    unrelated chat never reach the model. Requires ANTHROPIC_API_KEY to be
+    set; otherwise this is a no-op, same as every other optional integration
+    here."""
+    if not settings.anthropic_api_key:
+        return
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return
+    chat_id = str((message.get("chat") or {}).get("id", ""))
+    if not settings.telegram_label_chat_id or chat_id != str(settings.telegram_label_chat_id):
+        return
+    reply_to = message.get("reply_to_message")
+    if not isinstance(reply_to, dict):
+        return
+    reply_to_message_id = reply_to.get("message_id")
+    question = str(message.get("text") or "").strip()
+    if not reply_to_message_id or not question:
+        return
+
+    yandex_log = YandexMarketSyncLog()
+    ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
+    match = find_order_by_label_message(reply_to_message_id=reply_to_message_id, yandex_log=yandex_log, ozon_log=ozon_log)
+    if match is None:
+        return
+    marketplace, external_id = match
+
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    anthropic = AnthropicClient(api_key=settings.anthropic_api_key, model=settings.anthropic_model)
+    telegram = TelegramClient(bot_token=settings.telegram_bot_token, proxy=settings.telegram_proxy_url)
+    try:
+        answer = answer_question(client=anthropic, marketplace=marketplace, external_id=external_id, moysklad=moysklad, question=question)
+        if answer:
+            telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
+    finally:
+        moysklad.close()
+        anthropic.close()
+        telegram.close()
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -769,6 +845,8 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return _shopify_order_webhook(environ, start_response)
     if path == "/api/ozon/webhook/notifications" and environ.get("REQUEST_METHOD") == "POST":
         return _ozon_webhook(environ, start_response)
+    if path == "/api/telegram/webhook" and environ.get("REQUEST_METHOD") == "POST":
+        return _telegram_webhook(environ, start_response)
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(
