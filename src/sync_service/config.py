@@ -29,6 +29,8 @@ class Settings:
     telegram_bot_token: str
     telegram_label_chat_id: str
     telegram_proxy_url: str
+    anthropic_api_key: str
+    anthropic_model: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -65,6 +67,8 @@ class Settings:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_label_chat_id=os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
             telegram_proxy_url=os.getenv("TELEGRAM_PROXY_URL", ""),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5"),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )

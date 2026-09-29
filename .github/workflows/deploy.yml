@@ -45,6 +45,9 @@ jobs:
             grep -q '^OZON_API_KEY=' .env || echo 'OZON_API_KEY=' >> .env
             grep -q '^TELEGRAM_BOT_TOKEN=' .env || echo 'TELEGRAM_BOT_TOKEN=' >> .env
             grep -q '^TELEGRAM_LABEL_CHAT_ID=' .env || echo 'TELEGRAM_LABEL_CHAT_ID=' >> .env
+            grep -q '^ANTHROPIC_API_KEY=' .env || echo 'ANTHROPIC_API_KEY=' >> .env
+            sed -i "s#^ANTHROPIC_API_KEY=.*#ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}#" .env
+            grep -q '^ANTHROPIC_MODEL=' .env || echo 'ANTHROPIC_MODEL=claude-sonnet-5' >> .env
             grep -q '^VLESS_UUID=' .env || echo 'VLESS_UUID=' >> .env
             grep -q '^VLESS_HOST=' .env || echo 'VLESS_HOST=' >> .env
             grep -q '^VLESS_PORT=' .env || echo 'VLESS_PORT=' >> .env
