@@ -136,7 +136,17 @@ class TelegramClient:
             params["offset"] = offset
         if allowed_updates is not None:
             params["allowed_updates"] = json.dumps(allowed_updates)
-        response = self._client.get("/getUpdates", params=params, timeout=timeout + 10)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = self._client.get("/getUpdates", params=params, timeout=timeout + 10)
+            except httpx.TransportError:
+                if attempt <= MAX_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                raise
+            break
         if response.is_error:
             raise RuntimeError(f"Telegram getUpdates failed with HTTP {response.status_code}: {response.text[:500]}")
         payload = response.json()

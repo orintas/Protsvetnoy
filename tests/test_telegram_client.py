@@ -188,6 +188,34 @@ def test_get_updates_raises_on_ok_false():
         client.get_updates()
 
 
+def test_get_updates_retries_on_transport_error_then_succeeds(monkeypatch):
+    import sync_service.telegram_client as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise httpx.ConnectError("Connection reset by peer", request=request)
+        return httpx.Response(200, json={"ok": True, "result": []})
+
+    client = _client_with_handler(handler)
+    client.get_updates()
+    assert attempts["count"] == 3
+
+
+def test_get_updates_raises_after_exhausting_retries_on_transport_error(monkeypatch):
+    import sync_service.telegram_client as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection reset by peer", request=request)
+
+    client = _client_with_handler(handler)
+    with pytest.raises(httpx.ConnectError):
+        client.get_updates()
+
+
 def test_download_file_resolves_path_then_downloads_bytes():
     requests: list[httpx.Request] = []
 
