@@ -50,9 +50,17 @@ class FakeOzon:
 class FakeTelegram:
     def __init__(self):
         self.sent = []
+        self.messages = []
+        self.next_message_id = 6000
 
     def send_document(self, *, chat_id, document, filename, caption, parse_mode=None):
         self.sent.append((chat_id, document, filename, caption, parse_mode))
+        self.next_message_id += 1
+        return {"ok": True, "result": {"message_id": self.next_message_id}}
+
+    def send_message(self, *, chat_id, text, reply_to_message_id=None, parse_mode=None):
+        self.messages.append((chat_id, text, reply_to_message_id, parse_mode))
+        return {"ok": True, "result": {"message_id": self.next_message_id + 1}}
 
     def close(self):
         pass
@@ -85,9 +93,10 @@ def _patched(monkeypatch, ozon, telegram=None, moysklad=None):
     monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad or FakeMoySklad())
 
 
-def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None):
+def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None, substatus=None):
     return {
         "status": status,
+        "substatus": substatus,
         "delivery_method": {"warehouse": warehouse},
         "products": products or [{"offer_id": "LE148", "sku": 1536499166, "quantity": 1}],
         "available_actions": available_actions or [],
@@ -188,6 +197,56 @@ def test_run_once_sends_label_when_status_is_unrecognized_but_ozon_says_it_is_do
     assert ozon.ship_calls == []
     assert ozon.label_calls == [["X-1"]]
     assert queue.pending() == []  # marked done
+
+
+def test_run_once_notifies_courier_arrival_and_replies_to_the_label_message(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    log.add("label_sent", "success", "sent earlier", "X-1", {"message_id": 4242})
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", warehouse="ТЦ Ривьера", substatus="posting_in_pickup_point")})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert len(telegram.messages) == 1
+    chat_id, text, reply_to, _ = telegram.messages[0]
+    assert chat_id == "-100123"
+    assert reply_to == 4242
+    assert text == "🚚 Приехал курьер в ТЦ Ривьера за заказом X-1"
+    kinds = [e["kind"] for e in log.recent()]
+    assert "courier_notified" in kinds
+
+
+def test_run_once_does_not_repeat_courier_notification_on_later_ticks(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", substatus="posting_in_pickup_point", available_actions=[])})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert len(telegram.messages) == 1  # not sent again on the second tick
+
+
+def test_run_once_does_not_notify_for_other_substatuses(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("delivering", substatus="posting_on_way_to_city")})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert telegram.messages == []
 
 
 def test_run_once_retries_when_label_not_ready_yet(tmp_path, monkeypatch):

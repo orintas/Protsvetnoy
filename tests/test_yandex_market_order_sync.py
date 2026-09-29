@@ -5,6 +5,7 @@ from sync_service.yandex_market_order_sync import (
     DELIVERING_STATE_ID,
     MAX_LABEL_RETRIES,
     handle_order_cancelled,
+    notify_courier_arrived,
     process_new_order,
     retry_label_if_missing,
     sync_order_delivery_state,
@@ -213,6 +214,54 @@ def test_delivery_status_sets_delivering_state(tmp_path):
     sync_order_delivery_state(order_id=999, status="DELIVERY", substatus=None, moysklad=moysklad, log=log)
     assert moysklad.state_updates == [("order-1", DELIVERING_STATE_ID)]
     assert log.recent()[0]["kind"] == "order_state_updated"
+
+
+def test_notify_courier_arrived_on_delivery_status_replies_to_label(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    telegram = FakeTelegram()
+    log.add("label_sent", "success", "sent earlier", "999", {"message_id": 4242})
+
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(telegram.messages) == 1
+    chat_id, text, reply_to, _ = telegram.messages[0]
+    assert chat_id == "-100123"
+    assert reply_to == 4242
+    assert "999" in text and "ТЦ Ривьера" in text
+
+
+def test_notify_courier_arrived_on_delivery_service_received_substatus(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    telegram = FakeTelegram()
+
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="DELIVERY_SERVICE_RECEIVED", telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(telegram.messages) == 1
+
+
+def test_notify_courier_arrived_ignores_unrelated_status(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    telegram = FakeTelegram()
+
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="READY_TO_SHIP", telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert telegram.messages == []
+
+
+def test_notify_courier_arrived_fires_once_per_order(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    telegram = FakeTelegram()
+
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(telegram.messages) == 1
+
+
+def test_notify_courier_arrived_skips_when_telegram_not_configured(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="DELIVERY", substatus=None, telegram=None, telegram_chat_id="-100123", log=log)
+    assert log.recent() == []
 
 
 def test_delivery_service_received_substatus_also_sets_delivering_state(tmp_path):

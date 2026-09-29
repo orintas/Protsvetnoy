@@ -22,7 +22,7 @@ from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import handle_order_cancelled, process_new_order, retry_label_if_missing, sync_order_delivery_state
+from .yandex_market_order_sync import handle_order_cancelled, notify_courier_arrived, process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -151,6 +151,15 @@ def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) ->
             status=status,
             substatus=notification.get("substatus"),
             moysklad=moysklad,
+            log=log,
+        )
+        notify_courier_arrived(
+            order_id=order_id,
+            campaign_id=campaign_id,
+            status=status,
+            substatus=notification.get("substatus"),
+            telegram=telegram,
+            telegram_chat_id=settings.telegram_label_chat_id,
             log=log,
         )
         retry_label_if_missing(

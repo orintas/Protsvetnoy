@@ -38,6 +38,17 @@ LABEL_ACTION = "label_download"
 SHIP_FROM_STATUS = "awaiting_packaging"
 TERMINAL_STATUSES = {"cancelled", "not_accepted"}
 
+# The courier physically at the store to collect the package — confirmed
+# against real posting history: "posting_in_pickup_point" is a brief substatus
+# that precedes "posting_on_way_to_city" (the far more common one once the
+# courier has actually left with the package), for the same "delivering"
+# status. Only checked while the posting is still being polled (before it's
+# marked done), so a posting whose label became downloadable earlier — before
+# status ever reaches "delivering" — can be marked done first and this never
+# fires for it.
+COURIER_ARRIVED_STATUS = "delivering"
+COURIER_ARRIVED_SUBSTATUS = "posting_in_pickup_point"
+
 MAX_ATTEMPTS = 40  # ~20 minutes at the worker's 30s tick — well past OZON's documented 45-60s label delay
 WORKER_TICK_SECONDS = 30
 
@@ -79,6 +90,8 @@ class PendingPostings:
                 )
             if "last_status" not in existing_columns:
                 db.execute("ALTER TABLE pending_postings ADD COLUMN last_status TEXT")
+            if "courier_notified" not in existing_columns:
+                db.execute("ALTER TABLE pending_postings ADD COLUMN courier_notified INTEGER NOT NULL DEFAULT 0")
 
     def add(self, posting_number: str) -> bool:
         """Returns True if this is a newly-seen posting (False if already queued/done)."""
@@ -111,6 +124,10 @@ class PendingPostings:
     def mark_done(self, posting_number: str) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE pending_postings SET done=1 WHERE posting_number=?", (posting_number,))
+
+    def mark_courier_notified(self, posting_number: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE pending_postings SET courier_notified=1 WHERE posting_number=?", (posting_number,))
 
     def update_last_status(self, posting_number: str, status: str) -> None:
         """Records what the last tick actually observed (an OZON status, or
@@ -176,14 +193,17 @@ def _send_label(
     store_name = str((details.get("delivery_method") or {}).get("warehouse") or "OZON")
     items = [{"sku": p.get("offer_id"), "count": p.get("quantity", 1)} for p in details.get("products", [])]
     if telegram is not None and telegram_chat_id:
-        telegram.send_document(
+        result = telegram.send_document(
             chat_id=telegram_chat_id,
             document=label_pdf,
             filename=f"{posting_number}.pdf",
             caption=build_caption(marketplace="OZON", store_name=store_name, order_label=f"Заказ №{posting_number}", items=items),
             parse_mode="HTML",
         )
-        log.add("label_sent", "success", f"Отправление {posting_number}: этикетка отправлена в Telegram", posting_number)
+        # Kept so a later courier-arrival notice can reply to this exact
+        # message instead of posting an unrelated standalone notice.
+        message_id = (result.get("result") or {}).get("message_id")
+        log.add("label_sent", "success", f"Отправление {posting_number}: этикетка отправлена в Telegram", posting_number, {"message_id": message_id})
         return True
     _log_error(log, errors, "label_sent", f"Отправление {posting_number}: Telegram не настроен, этикетка не отправлена", posting_number)
     return True  # nothing left to retry — the config problem won't fix itself on a re-attempt
@@ -203,6 +223,21 @@ def _update_moysklad_description(posting_number: str, details: dict[str, Any], m
     moysklad.update_customer_order_description(str(order["id"]), description, previous_description=existing or None)
     log.add("description_updated", "success", f"Отправление {posting_number}: список товаров добавлен в описание заказа МойСклад", posting_number)
     queue.mark_description_updated(posting_number)
+
+
+def _notify_courier_arrived(posting_number: str, details: dict[str, Any], queue: PendingPostings, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog) -> None:
+    if telegram is None or not telegram_chat_id:
+        return
+    store_name = str((details.get("delivery_method") or {}).get("warehouse") or "OZON")
+    label_payload = log.get_payload("label_sent", posting_number)
+    reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+    telegram.send_message(
+        chat_id=telegram_chat_id,
+        text=f"🚚 Приехал курьер в {store_name} за заказом {posting_number}",
+        reply_to_message_id=reply_to,
+    )
+    log.add("courier_notified", "success", f"Отправление {posting_number}: уведомление о курьере отправлено в Telegram", posting_number)
+    queue.mark_courier_notified(posting_number)
 
 
 def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
@@ -226,6 +261,12 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
         log.add("order_cancelled", "success", f"Отправление {posting_number}: статус «{status}», этикетка не нужна", posting_number)
         queue.mark_done(posting_number)
         return
+
+    if not row["courier_notified"] and status == COURIER_ARRIVED_STATUS and details.get("substatus") == COURIER_ARRIVED_SUBSTATUS:
+        try:
+            _notify_courier_arrived(posting_number, details, queue, telegram, telegram_chat_id, log)
+        except Exception as error:
+            _log_error(log, errors, "order_pipeline_error", f"Отправление {posting_number}: не удалось отправить уведомление о курьере: {error}", posting_number)
 
     if not row["description_updated"]:
         try:

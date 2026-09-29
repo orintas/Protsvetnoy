@@ -289,6 +289,44 @@ def _previous_state_id(order: dict[str, Any]) -> str | None:
     return href.rsplit("/", 1)[-1] or None
 
 
+COURIER_NOTIFIED_KIND = "courier_notified"
+
+
+def notify_courier_arrived(
+    *,
+    order_id: int,
+    campaign_id: int,
+    status: str | None,
+    substatus: str | None,
+    telegram: TelegramClient | None,
+    telegram_chat_id: str,
+    log: YandexMarketSyncLog,
+) -> None:
+    """Best-effort notice for the courier taking the order off our hands —
+    Market has no distinct "courier is here" event, so this uses the same
+    DELIVERY/DELIVERY_SERVICE_RECEIVED transition sync_order_delivery_state
+    treats as "Доставляется" (the closest available signal). Fires once per
+    order; replies to the original label message when we still have its
+    message_id on record.
+    """
+    if not (status == "DELIVERY" or substatus == "DELIVERY_SERVICE_RECEIVED"):
+        return
+    if telegram is None or not telegram_chat_id:
+        return
+    external_code = str(order_id)
+    if log.has_success(COURIER_NOTIFIED_KIND, external_code):
+        return
+    store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
+    label_payload = log.get_payload("label_sent", external_code)
+    reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+    telegram.send_message(
+        chat_id=telegram_chat_id,
+        text=f"🚚 Приехал курьер в {store_name} за заказом {order_id}",
+        reply_to_message_id=reply_to,
+    )
+    log.add(COURIER_NOTIFIED_KIND, "success", f"Заказ {order_id}: уведомление о курьере отправлено в Telegram", external_code)
+
+
 def handle_order_cancelled(
     *,
     order_id: int,
