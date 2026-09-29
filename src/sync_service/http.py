@@ -48,8 +48,10 @@ class JsonClient:
                     time.sleep(self._retry_backoff * attempt)
                     continue
                 raise
-            # Retry only on transient server-side errors (5xx); client errors (4xx) are final.
-            if response.status_code >= 500 and attempt <= self._max_retries:
+            # Retry transient server-side errors (5xx) and rate limiting (429,
+            # confirmed live against OZON: "request rate limit per second") —
+            # both self-heal on a short backoff. Every other 4xx is final.
+            if (response.status_code >= 500 or response.status_code == 429) and attempt <= self._max_retries:
                 time.sleep(self._retry_backoff * attempt)
                 continue
             return response

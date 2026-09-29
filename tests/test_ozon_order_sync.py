@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from sync_service.error_log import ErrorLog
 from sync_service.http import ApiError
 from sync_service.ozon_order_sync import MAX_ATTEMPTS, STUCK_BY_DESCRIPTION_UPDATED_BUG, RFBS_WAREHOUSE_IDS, PendingPostings, handle_webhook_notification, run_once
@@ -7,6 +9,12 @@ from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 RFBS_WAREHOUSE_ID = next(iter(RFBS_WAREHOUSE_IDS))
 MAIN_WAREHOUSE_ID = 23709754228000  # "Склад Цветной" — plain FBS, not rFBS; deliberately excluded
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit_sleep(monkeypatch):
+    import sync_service.ozon_order_sync as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
 
 
 class FakeSettings:

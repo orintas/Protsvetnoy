@@ -53,6 +53,15 @@ COURIER_ARRIVED_SUBSTATUS = "posting_in_pickup_point"
 MAX_ATTEMPTS = 40  # ~20 minutes at the worker's 30s tick — well past OZON's documented 45-60s label delay
 WORKER_TICK_SECONDS = 30
 
+# Confirmed live: OZON returned HTTP 429 "request rate limit per second" —
+# the postings-still-open-after-label queue got meaningfully longer once a
+# posting stays pending until delivered/terminal instead of being marked
+# done as soon as its label sends (see label_sent above), and this loop
+# calls the OZON API back-to-back for every pending row with no gap. A
+# small sleep between postings keeps each tick well under a per-second
+# burst regardless of queue size.
+RATE_LIMIT_SLEEP_SECONDS = 0.5
+
 # 3 postings abandoned by the description_updated migration bug (2026-09-17/18,
 # fixed just below) before ever shipping or getting a label sent — requeued
 # once, the first time the fixed code runs against the old table. Safe to
@@ -336,6 +345,7 @@ def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLo
                 _process_one(row, queue, ozon, moysklad, telegram, settings.telegram_label_chat_id, log, errors)
             except Exception as error:
                 _log_error(log, errors, "order_pipeline_error", f"Отправление {row['posting_number']}: ошибка обработки: {error}", row["posting_number"])
+            time.sleep(RATE_LIMIT_SLEEP_SECONDS)
     finally:
         ozon.close()
         moysklad.close()

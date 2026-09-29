@@ -97,6 +97,38 @@ def test_get_raises_after_exhausting_retries_on_transport_error():
     assert raised
 
 
+def test_get_retries_on_rate_limit_then_succeeds():
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return httpx.Response(429, json={"code": 8, "message": "You have reached request rate limit per second"})
+        return httpx.Response(200, json={"status": 200, "dane": []})
+
+    client = JsonClient(base_url="https://example.test", max_retries=3, retry_backoff=0.01)
+    client._client = httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(handler))
+
+    payload = client.get("/towary")
+    assert payload == {"status": 200, "dane": []}
+    assert attempts["count"] == 3
+
+
+def test_get_raises_after_exhausting_retries_on_rate_limit():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"code": 8, "message": "rate limited"})
+
+    client = JsonClient(base_url="https://example.test", max_retries=2, retry_backoff=0.01)
+    client._client = httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(handler))
+
+    try:
+        client.get("/towary")
+        raised = False
+    except ApiError:
+        raised = True
+    assert raised
+
+
 def test_get_does_not_retry_on_client_error():
     attempts = {"count": 0}
 
