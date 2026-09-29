@@ -29,6 +29,7 @@ def test_complete_sends_system_and_user_message_with_auth_headers():
     body = json.loads(requests[0].content)
     assert body["model"] == "claude-sonnet-5"
     assert body["system"] == "You are helpful."
+    assert body["thinking"] == {"type": "disabled"}
     assert body["messages"] == [{"role": "user", "content": "Hi there"}]
 
 

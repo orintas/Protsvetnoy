@@ -34,6 +34,13 @@ class AnthropicClient:
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": content}],
+            # Both this service's LLM tasks are single-shot lookups, not
+            # reasoning problems — extended thinking (on by default for this
+            # model) only adds latency/cost, and its tokens count against
+            # max_tokens, which can starve out the actual reply on a small
+            # budget (confirmed live: 10 max_tokens with thinking on
+            # produced no text block at all).
+            "thinking": {"type": "disabled"},
         }
         result = self._client.post("/v1/messages", payload)
         blocks = result.get("content") or []
