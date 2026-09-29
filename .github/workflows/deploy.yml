@@ -62,3 +62,6 @@ jobs:
             grep -q '^TELEGRAM_PROXY_URL=' .env || echo 'TELEGRAM_PROXY_URL=' >> .env
             docker compose up -d --build --remove-orphans
             docker image prune -f
+            if grep -q '^TELEGRAM_BOT_TOKEN=.\+' .env && grep -q '^TELEGRAM_WEBHOOK_SECRET=.\+' .env; then
+              docker compose run --rm web telegram-set-webhook --url https://protsvetnoy.us/api/telegram/webhook || true
+            fi
