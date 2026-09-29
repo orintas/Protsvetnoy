@@ -37,6 +37,7 @@ LABEL_READY_STATUSES = {"awaiting_deliver", "delivering", "driver_pickup", "deli
 LABEL_ACTION = "label_download"
 SHIP_FROM_STATUS = "awaiting_packaging"
 TERMINAL_STATUSES = {"cancelled", "not_accepted"}
+DELIVERED_STATUS = "delivered"
 
 # The courier physically at the store to collect the package — confirmed
 # against real posting history: "posting_in_pickup_point" is a brief substatus
@@ -61,10 +62,14 @@ STUCK_BY_DESCRIPTION_UPDATED_BUG = ["56444838-0115-1", "07223445-0177-1", "76135
 
 class PendingPostings:
     """Work queue for postings seen via TYPE_NEW_POSTING but not yet fully
-    handled (shipped + label sent). The webhook handler only ever inserts
-    into this — all the slow work (ship, wait for the label, send it) happens
-    in the worker loop, since OZON auto-suspends notifications if a handler
-    takes over 5 seconds."""
+    handled (shipped, label sent, courier-arrival noticed, delivered). The
+    webhook handler only ever inserts into this — all the slow work (ship,
+    wait for the label, send it, keep watching for the courier) happens in
+    the worker loop, since OZON auto-suspends notifications if a handler
+    takes over 5 seconds. A posting stays pending (kept being polled) past
+    its label being sent — mark_done only happens once it reaches a
+    terminal or delivered status — because the courier shows up later than
+    the label becomes ready, not at the same time."""
 
     def __init__(self, path: str = "data/ozon_pending_postings.sqlite3") -> None:
         self.path = Path(path)
@@ -92,6 +97,17 @@ class PendingPostings:
                 db.execute("ALTER TABLE pending_postings ADD COLUMN last_status TEXT")
             if "courier_notified" not in existing_columns:
                 db.execute("ALTER TABLE pending_postings ADD COLUMN courier_notified INTEGER NOT NULL DEFAULT 0")
+            if "label_sent" not in existing_columns:
+                db.execute("ALTER TABLE pending_postings ADD COLUMN label_sent INTEGER NOT NULL DEFAULT 0")
+                # Previously a posting was marked done as soon as its label
+                # sent — which usually happens before the courier physically
+                # shows up, so the courier-arrival check (only reachable for
+                # pending rows) never got another chance to run and this
+                # notification silently never fired for OZON. Reopen
+                # anything left in that state (label sent, no courier
+                # notice, not already marked done) so it resumes being
+                # polled under the fixed logic below.
+                db.execute("UPDATE pending_postings SET label_sent=1, done=0 WHERE done=1 AND courier_notified=0")
 
     def add(self, posting_number: str) -> bool:
         """Returns True if this is a newly-seen posting (False if already queued/done)."""
@@ -128,6 +144,10 @@ class PendingPostings:
     def mark_courier_notified(self, posting_number: str) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE pending_postings SET courier_notified=1 WHERE posting_number=?", (posting_number,))
+
+    def mark_label_sent(self, posting_number: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE pending_postings SET label_sent=1 WHERE posting_number=?", (posting_number,))
 
     def update_last_status(self, posting_number: str, status: str) -> None:
         """Records what the last tick actually observed (an OZON status, or
@@ -242,8 +262,9 @@ def _notify_courier_arrived(posting_number: str, details: dict[str, Any], queue:
 
 def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
     posting_number = row["posting_number"]
+    label_already_sent = bool(row["label_sent"])
     attempts = queue.increment_attempts(posting_number)
-    if attempts > MAX_ATTEMPTS:
+    if not label_already_sent and attempts > MAX_ATTEMPTS:
         last_status = row.get("last_status") or "неизвестен (posting_details ни разу не ответил за это время)"
         message = f"Отправление {posting_number}: этикетка не появилась за {MAX_ATTEMPTS} попыток, дальше не пробуем. Последний известный статус: {last_status}"
         _log_error(log, errors, "order_error", message, posting_number)
@@ -259,6 +280,12 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
     queue.update_last_status(posting_number, status or "(пусто)")
     if status in TERMINAL_STATUSES:
         log.add("order_cancelled", "success", f"Отправление {posting_number}: статус «{status}», этикетка не нужна", posting_number)
+        queue.mark_done(posting_number)
+        return
+    if status == DELIVERED_STATUS:
+        # Fully delivered — nothing left to learn from further polling,
+        # whether or not the courier-arrival notice happened to fire along
+        # the way (a status jump that skipped straight past it, say).
         queue.mark_done(posting_number)
         return
 
@@ -288,10 +315,15 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
                 # not marked shipped — the SHIP_FROM_STATUS branch retries it next tick
         return  # label needs ~45-60s after shipping — try it on a later tick
 
-    label_downloadable = LABEL_ACTION in (details.get("available_actions") or [])
-    if status in LABEL_READY_STATUSES or already_shipped or label_downloadable:
-        if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors):
-            queue.mark_done(posting_number)
+    if not label_already_sent:
+        label_downloadable = LABEL_ACTION in (details.get("available_actions") or [])
+        if status in LABEL_READY_STATUSES or already_shipped or label_downloadable:
+            if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors):
+                queue.mark_label_sent(posting_number)
+                # Keep polling — the courier hasn't necessarily shown up yet
+                # (label readiness and courier pickup are different points
+                # in OZON's timeline); mark_done only happens once the
+                # posting reaches a terminal/delivered status above.
 
 
 def run_once(settings: Settings, queue: PendingPostings, log: YandexMarketSyncLog, errors: ErrorLog) -> None:

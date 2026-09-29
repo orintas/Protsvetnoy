@@ -176,7 +176,8 @@ def test_run_once_sends_label_once_posting_is_ready(tmp_path, monkeypatch):
     assert telegram.sent[0][0] == "-100123"
     assert telegram.sent[0][3] == "OZON\nТЦ Саларис\nЗаказ №X-1\nLE148 × 1"
     assert telegram.sent[0][4] == "HTML"
-    assert queue.pending() == []  # marked done
+    pending = queue.pending()
+    assert len(pending) == 1 and pending[0]["label_sent"] == 1 and pending[0]["done"] == 0  # kept pending for the courier check
 
 
 def test_run_once_sends_label_when_status_is_unrecognized_but_ozon_says_it_is_downloadable(tmp_path, monkeypatch):
@@ -196,7 +197,8 @@ def test_run_once_sends_label_when_status_is_unrecognized_but_ozon_says_it_is_do
 
     assert ozon.ship_calls == []
     assert ozon.label_calls == [["X-1"]]
-    assert queue.pending() == []  # marked done
+    pending = queue.pending()
+    assert len(pending) == 1 and pending[0]["label_sent"] == 1 and pending[0]["done"] == 0  # kept pending for the courier check
 
 
 def test_run_once_notifies_courier_arrival_and_replies_to_the_label_message(tmp_path, monkeypatch):
@@ -218,6 +220,34 @@ def test_run_once_notifies_courier_arrival_and_replies_to_the_label_message(tmp_
     assert text == "🚚 Приехал курьер в ТЦ Ривьера за заказом X-1"
     kinds = [e["kind"] for e in log.recent()]
     assert "courier_notified" in kinds
+
+
+def test_run_once_still_notifies_courier_after_the_label_was_already_sent_on_an_earlier_tick(tmp_path, monkeypatch):
+    """The real bug: label readiness and courier pickup are different points
+    in OZON's timeline, with the label normally ready first. Previously a
+    posting was marked done as soon as its label sent, which stopped it
+    being polled at all — so the courier-arrival check (only reachable for
+    still-pending postings) never got a later chance to see the courier
+    substatus and this notification silently never fired. This drives that
+    exact two-tick sequence."""
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    run_once(FakeSettings(), queue, log, errors)  # tick 1: label becomes ready and is sent
+    assert ozon.label_calls == [["X-1"]]
+    assert telegram.messages == []  # no courier notice yet — not in pickup_point yet
+
+    ozon.details_by_posting["X-1"] = _posting("delivering", substatus="posting_in_pickup_point")
+    run_once(FakeSettings(), queue, log, errors)  # tick 2: courier shows up
+
+    assert len(telegram.messages) == 1
+    assert telegram.messages[0][1] == "🚚 Приехал курьер в ТЦ Саларис за заказом X-1"
+    assert ozon.label_calls == [["X-1"]]  # label not re-sent on the second tick
 
 
 def test_run_once_does_not_repeat_courier_notification_on_later_ticks(tmp_path, monkeypatch):
@@ -321,7 +351,7 @@ def test_run_once_records_lookup_failed_as_last_status_when_posting_details_retu
     assert "lookup_failed" in error_entries[0]["message"]
 
 
-def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_path, monkeypatch):
+def test_run_once_with_no_telegram_configured_logs_error_and_does_not_retry_the_label(tmp_path, monkeypatch):
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
@@ -334,7 +364,8 @@ def test_run_once_with_no_telegram_configured_logs_error_and_stops_retrying(tmp_
 
     run_once(NoTelegramSettings(), queue, log, errors)
 
-    assert queue.pending() == []
+    pending = queue.pending()
+    assert len(pending) == 1 and pending[0]["label_sent"] == 1  # nothing left to retry — the config problem won't fix itself
     entries = log.recent()
     assert any(e["kind"] == "label_sent" and e["status"] == "error" for e in entries)
     assert len(errors.recent()) == 1  # also surfaced in the shared error journal
@@ -448,27 +479,33 @@ def test_pending_postings_migrates_table_missing_description_updated_column(tmp_
     assert queue.pending()  # reading no longer raises KeyError
 
 
-def test_pending_postings_requeues_only_the_known_stuck_postings(tmp_path):
+def test_pending_postings_requeues_stuck_and_courier_unnotified_postings(tmp_path):
     path = str(tmp_path / "queue.sqlite3")
     _create_pre_migration_table(path)
 
     queue = PendingPostings(path)
 
     requeued = {row["posting_number"] for row in queue.pending()}
-    assert requeued == {*STUCK_BY_DESCRIPTION_UPDATED_BUG, "unrelated-still-pending"}  # "unrelated-still-done" left alone
+    # "unrelated-still-done" is requeued too: the label_sent migration
+    # reopens any done=1 row with courier_notified=0 (not just the
+    # hardcoded description_updated stuck list), since that's exactly the
+    # shape of the "courier notice never fires" bug it fixes.
+    assert requeued == {*STUCK_BY_DESCRIPTION_UPDATED_BUG, "unrelated-still-pending", "unrelated-still-done"}
     for row in queue.pending():
         if row["posting_number"] in STUCK_BY_DESCRIPTION_UPDATED_BUG:
             assert row["attempts"] == 0
+        if row["posting_number"] == "unrelated-still-done":
+            assert row["label_sent"] == 1  # it was done, so its label must already have been sent
 
 
 def test_pending_postings_migration_is_a_noop_on_a_second_open(tmp_path):
     path = str(tmp_path / "queue.sqlite3")
     _create_pre_migration_table(path)
     PendingPostings(path)  # first open: migrates + requeues
-    for posting_number in STUCK_BY_DESCRIPTION_UPDATED_BUG:
+    for posting_number in [*STUCK_BY_DESCRIPTION_UPDATED_BUG, "unrelated-still-done"]:
         PendingPostings(path).mark_done(posting_number)  # simulate them completing normally afterwards
 
-    queue = PendingPostings(path)  # second open: column already present
+    queue = PendingPostings(path)  # second open: columns already present
 
     pending_numbers = {row["posting_number"] for row in queue.pending()}
-    assert pending_numbers == {"unrelated-still-pending"}  # stuck postings stay done, not re-requeued forever
+    assert pending_numbers == {"unrelated-still-pending"}  # nothing re-requeued a second time
