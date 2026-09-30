@@ -42,12 +42,19 @@ IMAGE_ORDER_NUMBER_PROMPT = """На фото — чек, этикетка или
 # with prefixes from 5 to 10 digits (e.g. "0113798402-0282-1"), and a tight
 # upper bound previously made the regex match a truncated tail instead of
 # the full number (confirmed live 2026-09-30 — 13 of 14 real posting
-# numbers extracted wrong). \b word boundaries ensure a match always starts
-# at the actual beginning of a digit run rather than silently sliding into
-# the middle of a longer one when it doesn't fit the bound.
+# numbers extracted wrong). (?<!\d)/(?!\d) lookarounds ensure a match always
+# starts at the actual beginning of a digit run rather than silently
+# sliding into the middle of a longer one when it doesn't fit the bound.
+#
+# \b (word boundary) was tried first and looked right, but broke on real
+# messages like "заказу Nº62397236160": "º" (U+00BA MASCULINE ORDINAL
+# INDICATOR — how "№" often gets typed from a Latin keyboard) is a Unicode
+# letter, so \b sees no boundary between it and the digits that follow and
+# the whole match silently fails — confirmed live 2026-09-30. Digit-adjacency
+# lookarounds don't care what non-digit character comes before the number.
 _ORDER_NUMBER_PATTERNS = (
-    re.compile(r"\b\d{4,15}-\d{2,8}-\d{1,4}\b"),  # OZON posting number, e.g. 87792534-0050-1
-    re.compile(r"\b\d{8,12}\b"),  # Yandex Market order id
+    re.compile(r"(?<!\d)\d{4,15}-\d{2,8}-\d{1,4}(?!\d)"),  # OZON posting number, e.g. 87792534-0050-1
+    re.compile(r"(?<!\d)\d{8,12}(?!\d)"),  # Yandex Market order id
 )
 
 

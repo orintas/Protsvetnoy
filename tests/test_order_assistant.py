@@ -85,6 +85,15 @@ def test_extract_order_candidates_finds_yandex_market_style_number():
     assert extract_order_candidates("а можно узнать по заказу 62260935105 статус?") == ["62260935105"]
 
 
+def test_extract_order_candidates_finds_number_right_after_a_typed_numero_sign():
+    """Real reported message: "Nº62397236160" — "º" (U+00BA MASCULINE
+    ORDINAL INDICATOR, how "№" often gets typed from a Latin keyboard) is a
+    Unicode letter, so a plain \\b word boundary saw no boundary between it
+    and the digits and the match silently failed entirely. Confirmed live
+    2026-09-30."""
+    assert extract_order_candidates("Бот, дай инфу по заказу Nº62397236160") == ["62397236160"]
+
+
 def test_extract_order_candidates_finds_ozon_posting_number():
     assert extract_order_candidates("вот отправление 12345-0001-1 не пришло") == ["12345-0001-1"]
 
