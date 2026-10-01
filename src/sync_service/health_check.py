@@ -86,14 +86,24 @@ def check_novicloud_sales(log: SyncLog, now: datetime) -> CheckResult:
 
 
 def check_yandex_market_stock(log: YandexMarketSyncLog, now: datetime) -> CheckResult:
+    """Only counts successful ticks as the heartbeat — a sync that's firing
+    every 10 minutes but failing every single time (confirmed live
+    2026-10-01: Yandex's own API returned 500 for this account's offer
+    listing for hours) still produces fresh "stock_sync" log rows, so
+    counting any status here would have reported healthy the whole time."""
     now_moscow = now.astimezone(MOSCOW)
     applicable = 9 <= now_moscow.hour < 22
-    entries = [e for e in log.recent(limit=40) if e["kind"] == "stock_sync"]
+    entries = [e for e in log.recent(limit=40) if e["kind"] == "stock_sync" and e["status"] == "success"]
     return _heartbeat_check("yandex_market_stock", "Остатки Яндекс.Маркет", applicable=applicable, entries=entries, now=now, max_age_minutes=18)
 
 
 def check_shopify_catalog(log: ShopifySyncLog, now: datetime) -> CheckResult:
-    entries = [e for e in log.recent(limit=200) if e["kind"] in ("catalog_created", "catalog_update", "catalog_error")]
+    """Keys off the nightly "catalog_run" summary (always logged as success
+    once the full pass completes, see shopify_sync.sync_catalog) rather than
+    individual catalog_created/catalog_update/catalog_error rows — those can
+    legitimately be zero on a quiet night (nothing changed) or, the gap this
+    replaces, all failures, which used to still count as "it ran"."""
+    entries = [e for e in log.recent(limit=40) if e["kind"] == "catalog_run"]
     return _heartbeat_check("shopify_catalog", "Каталог Shopify", applicable=True, entries=entries, now=now, max_age_minutes=26 * 60)
 
 

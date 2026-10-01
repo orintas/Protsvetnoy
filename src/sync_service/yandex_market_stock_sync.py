@@ -159,7 +159,7 @@ def _changes_summary(changes: list[dict[str, Any]] | None) -> str:
     return f"изменилось {len(changes)}: {preview}" + (f" и ещё {extra}" if extra > 0 else "")
 
 
-def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCache) -> None:
+def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCache, errors: ErrorLog) -> None:
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     yandex = YandexMarketClient(
         base_url=settings.yandex_market_base_url,
@@ -174,7 +174,18 @@ def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCach
                 message = f"{store_name}: остатки обновлены, офферов {count}, {_changes_summary(changes)}"
                 log.add("stock_sync", "success", message, None, {"campaign_id": campaign_id, "count": count, "changes": changes})
             except Exception as error:
-                log.add("stock_sync", "error", f"{store_name}: ошибка синхронизации остатков: {error}", None, {"campaign_id": campaign_id})
+                # Also surfaced in the shared error journal, not just this
+                # campaign's own log row — a per-campaign try/except here
+                # means the outer worker loop's own log_exception (which
+                # does reach ErrorLog) never fires, so without this a sync
+                # that fails on every single tick stayed invisible outside
+                # the Яндекс.Маркет tab. Confirmed live 2026-10-01: all 4
+                # campaigns failed every ~10 minutes for hours, the shared
+                # error journal never showed it, and the health check still
+                # reported healthy (see health_check.check_yandex_market_stock).
+                message = f"{store_name}: ошибка синхронизации остатков: {error}"
+                log.add("stock_sync", "error", message, None, {"campaign_id": campaign_id})
+                errors.log_exception("yandex_market_stock_sync", error, context=f"{store_name}: ошибка синхронизации остатков")
     finally:
         moysklad.close()
         yandex.close()
@@ -189,7 +200,7 @@ def worker() -> None:
         now = datetime.now(MOSCOW)
         if STOCK_SYNC_START_HOUR <= now.hour < STOCK_SYNC_END_HOUR:
             try:
-                run_once(settings, log, cache)
+                run_once(settings, log, cache, errors)
             except Exception as error:
                 errors.log_exception("yandex_market_stock_sync_worker", error, context="Ошибка синхронизации остатков с Яндекс.Маркетом")
         time.sleep(600)

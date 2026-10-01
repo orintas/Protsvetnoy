@@ -1,4 +1,5 @@
 import sync_service.change_log as change_log_module
+from sync_service.error_log import ErrorLog
 from sync_service.yandex_market_order_sync import CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
 from sync_service.yandex_market_stock_sync import AssortmentCache, run_once, sync_campaign_stock
 from sync_service.yandex_market_sync import YandexMarketSyncLog
@@ -156,7 +157,7 @@ def test_run_once_syncs_every_known_campaign(tmp_path, monkeypatch):
     yandex = FakeYandex(offers_by_campaign={c: ["X"] for c in CAMPAIGN_STORES})
     _patched(monkeypatch, moysklad, yandex)
 
-    run_once(FakeSettings(), log, cache)
+    run_once(FakeSettings(), log, cache, ErrorLog(str(tmp_path / "errors.sqlite3")))
 
     synced_campaigns = {call[0] for call in yandex.calls}
     assert synced_campaigns == set(CAMPAIGN_STORES)
@@ -175,7 +176,8 @@ def test_run_once_logs_error_for_one_campaign_but_continues_others(tmp_path, mon
     yandex = FakeYandex(offers_by_campaign={c: ["X"] for c in CAMPAIGN_STORES})
     _patched(monkeypatch, moysklad, yandex)
 
-    run_once(FakeSettings(), log, cache)
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    run_once(FakeSettings(), log, cache, errors)
 
     synced_campaigns = {call[0] for call in yandex.calls}
     assert synced_campaigns == set(CAMPAIGN_STORES) - {"149179260"}
@@ -183,6 +185,13 @@ def test_run_once_logs_error_for_one_campaign_but_continues_others(tmp_path, mon
     error_entries = [e for e in entries if e["status"] == "error"]
     assert len(error_entries) == 1
     assert "ТЦ Ривьера" in error_entries[0]["message"]
+
+    # Also surfaced in the shared error journal — a per-campaign failure
+    # used to only ever reach this YM-specific log, invisible everywhere
+    # else, confirmed live 2026-10-01.
+    shared_errors = errors.recent()
+    assert len(shared_errors) == 1
+    assert "ТЦ Ривьера" in shared_errors[0]["message"]
 
 
 def test_run_once_message_lists_changed_skus_before_and_after(tmp_path, monkeypatch):
@@ -192,11 +201,11 @@ def test_run_once_message_lists_changed_skus_before_and_after(tmp_path, monkeypa
     yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02"]})
     moysklad_first = FakeMoySklad(rows_by_store={store_id: [{"code": "RGL02", "quantity": 3.0}]})
     _patched(monkeypatch, moysklad_first, yandex)
-    run_once(FakeSettings(), log, cache)
+    run_once(FakeSettings(), log, cache, ErrorLog(str(tmp_path / "errors.sqlite3")))
 
     moysklad_second = FakeMoySklad(rows_by_store={store_id: [{"code": "RGL02", "quantity": 0.0}]})
     _patched(monkeypatch, moysklad_second, yandex)
-    run_once(FakeSettings(), log, cache)
+    run_once(FakeSettings(), log, cache, ErrorLog(str(tmp_path / "errors.sqlite3")))
 
     riviera_entries = [e for e in log.recent() if e["message"].startswith("ТЦ Ривьера")]
     assert "RGL02: 3→0" in riviera_entries[0]["message"]
@@ -212,8 +221,8 @@ def test_run_once_logs_a_fresh_entry_every_call_without_being_deduplicated(tmp_p
     yandex = FakeYandex(offers_by_campaign={c: ["X"] for c in CAMPAIGN_STORES})
     _patched(monkeypatch, moysklad, yandex)
 
-    run_once(FakeSettings(), log, cache)
-    run_once(FakeSettings(), log, cache)
+    run_once(FakeSettings(), log, cache, ErrorLog(str(tmp_path / "errors.sqlite3")))
+    run_once(FakeSettings(), log, cache, ErrorLog(str(tmp_path / "errors.sqlite3")))
 
     assert len(log.recent(limit=1000)) == len(CAMPAIGN_STORES) * 2
     # second run reused the now-fresh cache instead of refetching the assortment

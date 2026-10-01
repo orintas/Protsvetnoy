@@ -9,6 +9,7 @@ from sync_service.health_check import (
     check_novicloud_sales,
     check_ozon_webhook,
     check_shift_closer,
+    check_shopify_catalog,
     check_shopify_webhook,
     check_yandex_market_stock,
     run_once,
@@ -69,6 +70,33 @@ def test_check_yandex_market_stock_fails_when_stale_during_hours(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
     result = check_yandex_market_stock(log, NOW)  # no entries at all
     assert result.applicable is True
+    assert result.ok is False
+
+
+def test_check_yandex_market_stock_fails_when_every_recent_attempt_errored(tmp_path):
+    """The real incident this fixes: Yandex's own API returned 500 for this
+    account's offer listing for hours, so every ~10-minute tick produced a
+    fresh "stock_sync" row — just all status=error. The old check counted
+    any status as a heartbeat and reported healthy the whole time."""
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    log.add("stock_sync", "error", "ТМ Авиапарк: ошибка синхронизации остатков: HTTP 500", None)
+    result = check_yandex_market_stock(log, datetime.now(timezone.utc))
+    assert result.ok is False
+
+
+def test_check_shopify_catalog_ok_on_a_recent_run_with_no_changes(tmp_path):
+    """A quiet night (nothing changed) legitimately produces zero
+    catalog_created/catalog_update/catalog_error rows — only the unconditional
+    per-run "catalog_run" summary, which this check now keys off instead."""
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    log.add("catalog_run", "success", "Синхронизация каталога завершена: проверено 50, изменилось 0")
+    result = check_shopify_catalog(log, datetime.now(timezone.utc))
+    assert result.ok is True
+
+
+def test_check_shopify_catalog_fails_when_stale(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    result = check_shopify_catalog(log, NOW)  # no entries at all
     assert result.ok is False
 
 
