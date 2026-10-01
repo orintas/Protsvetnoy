@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -68,8 +69,10 @@ class ShopifySyncLog:
 class ShopifyProductMap:
     """sku -> Shopify product/variant/inventory item, populated by the catalog
     sync and read by the stock sync (avoids a GraphQL SKU search every 30
-    minutes). Also remembers the last pushed stock level so the stock sync
-    only calls the API for skus that actually changed."""
+    minutes). Also remembers the last pushed stock level and catalog fields
+    (price/category/weight/barcode/image) so the stock sync and catalog sync
+    each only call the API for skus that actually changed, instead of
+    rewriting every product every night regardless."""
 
     def __init__(self, path: str = "data/shopify_products.sqlite3") -> None:
         self.path = Path(path)
@@ -80,6 +83,19 @@ class ShopifyProductMap:
                 sku TEXT PRIMARY KEY, product_id INTEGER NOT NULL, variant_id INTEGER NOT NULL,
                 inventory_item_id INTEGER NOT NULL, last_available INTEGER, updated_at TEXT NOT NULL)"""
             )
+            # CREATE TABLE IF NOT EXISTS is a no-op against a table that
+            # already exists from an earlier deploy — columns added after
+            # the table's first release need an explicit migration here.
+            existing_columns = {row[1] for row in db.execute("PRAGMA table_info(product_map)")}
+            for column, column_type in (
+                ("last_price", "REAL"),
+                ("last_category", "TEXT"),
+                ("last_weight", "REAL"),
+                ("last_barcode", "TEXT"),
+                ("last_image_hash", "TEXT"),
+            ):
+                if column not in existing_columns:
+                    db.execute(f"ALTER TABLE product_map ADD COLUMN {column} {column_type}")
 
     def get(self, sku: str) -> dict[str, Any] | None:
         with sqlite3.connect(self.path) as db:
@@ -99,6 +115,13 @@ class ShopifyProductMap:
     def set_last_available(self, sku: str, available: int) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE product_map SET last_available=? WHERE sku=?", (available, sku))
+
+    def set_catalog_fields(self, sku: str, *, price: float, category: str, weight: float | None, barcode: str | None, image_hash: str | None) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute(
+                "UPDATE product_map SET last_price=?, last_category=?, last_weight=?, last_barcode=?, last_image_hash=? WHERE sku=?",
+                (price, category, weight, barcode, image_hash, sku),
+            )
 
     def all_skus(self) -> list[str]:
         with sqlite3.connect(self.path) as db:
@@ -139,6 +162,8 @@ def _update_shopify_product(shopify: ShopifyClient, cached: dict[str, Any], *, s
 
 
 def sync_catalog(moysklad: MoySkladClient, shopify: ShopifyClient, categories: list[str], product_map: ShopifyProductMap, log: ShopifySyncLog) -> None:
+    checked = 0
+    changed = 0
     for category in categories:
         try:
             products = moysklad.products_by_category(category)
@@ -149,19 +174,38 @@ def sync_catalog(moysklad: MoySkladClient, shopify: ShopifyClient, categories: l
             sku = product.get("code")
             if not sku:
                 continue
+            checked += 1
             try:
-                _sync_one_product(moysklad, shopify, product, product_map, log)
+                if _sync_one_product(moysklad, shopify, product, product_map, log):
+                    changed += 1
             except Exception as error:
                 log.add("catalog_error", "error", f"{sku}: ошибка синхронизации в Shopify: {error}", sku, product)
             time.sleep(RATE_LIMIT_SLEEP_SECONDS)
+    log.add("catalog_run", "success", f"Синхронизация каталога завершена: проверено {checked}, изменилось {changed}")
 
 
-def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product: dict[str, Any], product_map: ShopifyProductMap, log: ShopifySyncLog) -> None:
+def _image_hash(image_bytes: bytes | None) -> str | None:
+    return hashlib.sha256(image_bytes).hexdigest() if image_bytes else None
+
+
+def _catalog_fields_unchanged(cached: dict[str, Any], *, price: float, category: str, weight: float | None, barcode: str | None, image_hash: str | None) -> bool:
+    return (
+        cached.get("last_price") == price
+        and cached.get("last_category") == category
+        and cached.get("last_weight") == weight
+        and cached.get("last_barcode") == barcode
+        and cached.get("last_image_hash") == image_hash
+    )
+
+
+def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product: dict[str, Any], product_map: ShopifyProductMap, log: ShopifySyncLog) -> bool:
+    """Returns whether anything was actually created/changed in Shopify —
+    sync_catalog uses this for its "проверено X, изменилось Y" summary."""
     sku = str(product["code"])
     price = _retail_price(product)
     if price is None:
         log.add("catalog_error", "error", f"{sku}: у товара нет цены «{RETAIL_PRICE_TYPE_NAME}» в МойСклад", sku, product)
-        return
+        return False
 
     title = f"{sku} - {product.get('name') or ''}"
     weight = product.get("weight")
@@ -171,20 +215,24 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
         image_bytes = moysklad.product_image_bytes(product)
     except Exception:
         image_bytes = None
+    image_hash = _image_hash(image_bytes)
 
     cached = product_map.get(sku)
     if cached is None:
         cached = _resolve_variant(shopify, product_map, sku, barcode)
 
     if cached is not None:
+        if _catalog_fields_unchanged(cached, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash):
+            return False
         # Title and vendor are deliberately left untouched here — both are
         # only ever set on create_product below. A human may edit either by
         # hand afterwards in Shopify, and a nightly catalog sync must not
         # stomp on that.
         try:
             _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
+            product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
             log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})
-            return
+            return True
         except ApiError as error:
             if "404" not in str(error):
                 raise
@@ -195,8 +243,9 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
             cached = _resolve_variant(shopify, product_map, sku, barcode)
             if cached is not None:
                 _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
+                product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
                 log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify (карточка была пересоздана)", sku, {"price": price})
-                return
+                return True
 
     created = shopify.create_product(
         title=title, sku=sku, price=price, vendor=VENDOR, product_type=category,
@@ -204,7 +253,9 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
     )
     variant = created["variants"][0]
     product_map.set(sku, product_id=created["id"], variant_id=variant["id"], inventory_item_id=variant["inventory_item_id"])
+    product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
     log.add("catalog_created", "success", f"{sku}: товар создан в Shopify ({title})", sku, {"title": title, "price": price})
+    return True
 
 
 def sync_stock(moysklad: MoySkladClient, shopify: ShopifyClient, warehouse_ids: list[str], location_id: int, product_map: ShopifyProductMap, log: ShopifySyncLog) -> None:

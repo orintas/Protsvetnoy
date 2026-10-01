@@ -92,7 +92,7 @@ def test_sync_catalog_creates_new_product_and_caches_mapping(tmp_path):
     assert cached["inventory_item_id"] == 301
 
     kinds = [e["kind"] for e in log.recent()]
-    assert kinds == ["catalog_created"]
+    assert kinds == ["catalog_run", "catalog_created"]
 
 
 def test_sync_catalog_updates_when_shopify_already_has_the_sku(tmp_path):
@@ -109,6 +109,47 @@ def test_sync_catalog_updates_when_shopify_already_has_the_sku(tmp_path):
     assert "title" not in shopify.updated[0][2]  # never touch an existing product's title
     assert "vendor" not in shopify.updated[0][2]  # never touch an existing product's vendor
     assert product_map.get("ABC")["inventory_item_id"] == 7
+
+
+def test_sync_catalog_skips_update_when_nothing_changed(tmp_path):
+    """The actual bug report this feature fixes: the nightly catalog sync
+    used to call update_product for every matched SKU unconditionally, even
+    when price/category/weight/barcode/image were all identical to what was
+    already sent — a silent no-op write and a misleading "товар обновлён"
+    log line every single night."""
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify(existing_variants={"ABC": {"product_id": 5, "variant_id": 6, "inventory_item_id": 7}})
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)  # first run: real update
+    assert len(shopify.updated) == 1
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)  # second run: nothing changed
+
+    assert len(shopify.updated) == 1  # not called again
+    run_entries = [e for e in log.recent(limit=1000) if e["kind"] == "catalog_run"]
+    assert "проверено 1, изменилось 0" in run_entries[0]["message"]
+    update_entries = [e for e in log.recent(limit=1000) if e["kind"] == "catalog_update"]
+    assert len(update_entries) == 1  # only the first run's update is logged, not a second no-op one
+
+
+def test_sync_catalog_updates_again_when_price_actually_changes(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product(retail_price=1250.0)]})
+    shopify = FakeShopify(existing_variants={"ABC": {"product_id": 5, "variant_id": 6, "inventory_item_id": 7}})
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+    assert len(shopify.updated) == 1
+
+    moysklad.products_by_category_["Accessories"] = [_product(retail_price=1500.0)]
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert len(shopify.updated) == 2
+    assert shopify.updated[1][2]["price"] == 15.0
+    run_entries = [e for e in log.recent(limit=1000) if e["kind"] == "catalog_run"]
+    assert "проверено 1, изменилось 1" in run_entries[0]["message"]
 
 
 def test_sync_catalog_falls_back_to_barcode_when_sku_search_misses(tmp_path):
@@ -165,7 +206,7 @@ def test_sync_catalog_heals_stale_cache_when_cached_product_was_deleted(tmp_path
     assert shopify.updated == [(42, 43, {"sku": "ABC", "price": 12.5, "product_type": "Accessories", "weight_kg": 0.5, "barcode": "1234567890123", "image_bytes": None})]
     assert product_map.get("ABC")["product_id"] == 42  # cache repaired, not left pointing at the deleted product
     kinds = [e["kind"] for e in log.recent()]
-    assert kinds == ["catalog_update"]  # healed silently — no error logged
+    assert kinds == ["catalog_run", "catalog_update"]  # healed silently — no error logged
 
 
 def test_sync_catalog_creates_new_product_when_stale_cache_points_to_a_fully_deleted_sku(tmp_path):
