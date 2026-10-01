@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,10 +40,11 @@ class ErrorLog:
         message = f"{context}: {error}" if context else str(error)
         self.add(source, message, details)
 
-    def recent(self, limit: int = 200) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM error_log ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(row) for row in db.execute("SELECT * FROM error_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
 
     def unread_count(self) -> int:
         with sqlite3.connect(self.path) as db:

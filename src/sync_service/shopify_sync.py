@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -47,10 +47,11 @@ class ShopifySyncLog:
                 (datetime.now(timezone.utc).isoformat(), kind, external_id, status, message, json.dumps(payload, ensure_ascii=False, default=str)),
             )
 
-    def recent(self, limit: int = 100) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(row) for row in db.execute("SELECT * FROM sync_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
 
     def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
         like = f"%{query}%"

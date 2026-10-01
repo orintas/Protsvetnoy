@@ -47,10 +47,11 @@ class ShiftCloseLog:
                 (datetime.now(timezone.utc).isoformat(), kind, status, message, json.dumps(payload, ensure_ascii=False, default=str)),
             )
 
-    def recent(self, limit: int = 200) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM shift_close_log ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(row) for row in db.execute("SELECT * FROM shift_close_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
 
     def clear(self) -> None:
         with sqlite3.connect(self.path) as db:

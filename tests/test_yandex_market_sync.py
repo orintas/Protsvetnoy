@@ -1,3 +1,6 @@
+import sqlite3
+from datetime import datetime, timedelta, timezone
+
 from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 
@@ -19,10 +22,12 @@ def test_yandex_market_sync_log_allows_multiple_kinds(tmp_path):
 def test_search_finds_an_order_outside_the_recent_window(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "ym_sync.sqlite3"))
     log.add("order_created", "success", "Старый заказ создан", "61703852544")
-    for i in range(150):
-        log.add("order_created", "success", f"Заказ {i} создан", str(1000 + i))
+    old_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    with sqlite3.connect(log.path) as db:
+        db.execute("UPDATE sync_log SET created_at=? WHERE external_id='61703852544'", (old_date,))
+    log.add("order_created", "success", "Свежий заказ создан", "1000")
 
-    assert "61703852544" not in {e["external_id"] for e in log.recent()}
+    assert "61703852544" not in {e["external_id"] for e in log.recent()}  # outside the default 3-day window
 
     found = log.search("61703852544")
     assert len(found) == 1

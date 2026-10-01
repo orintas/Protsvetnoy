@@ -64,5 +64,9 @@ def test_purges_entries_older_than_retention_on_open(tmp_path):
 
     log = ChangeLog(path)  # purge runs on open
 
-    entity_ids = {e["entity_id"] for e in log.recent()}
+    # days=30 here: this test is about the 6-month retention purge, not
+    # recent()'s own 3-day default display window — the "recent" row here
+    # is 10 days old on purpose, to sit well inside retention but outside
+    # that default window.
+    entity_ids = {e["entity_id"] for e in log.recent(days=30)}
     assert entity_ids == {"recent"}

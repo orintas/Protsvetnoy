@@ -66,10 +66,11 @@ class ChangeLog:
                 ),
             )
 
-    def recent(self, limit: int = 200) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM changes ORDER BY id DESC LIMIT ?", (limit,))]
+            return [dict(row) for row in db.execute("SELECT * FROM changes WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
 
     def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
         like = f"%{query}%"
