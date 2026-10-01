@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import time
@@ -70,9 +69,10 @@ class ShopifyProductMap:
     """sku -> Shopify product/variant/inventory item, populated by the catalog
     sync and read by the stock sync (avoids a GraphQL SKU search every 30
     minutes). Also remembers the last pushed stock level and catalog fields
-    (price/category/weight/barcode/image) so the stock sync and catalog sync
-    each only call the API for skus that actually changed, instead of
-    rewriting every product every night regardless."""
+    (price/category/weight/barcode) so the stock sync and catalog sync each
+    only call the API for skus that actually changed, instead of rewriting
+    every product every night regardless. The image is excluded on purpose —
+    it's create-only, same as title/vendor, never compared or re-sent."""
 
     def __init__(self, path: str = "data/shopify_products.sqlite3") -> None:
         self.path = Path(path)
@@ -92,7 +92,6 @@ class ShopifyProductMap:
                 ("last_category", "TEXT"),
                 ("last_weight", "REAL"),
                 ("last_barcode", "TEXT"),
-                ("last_image_hash", "TEXT"),
             ):
                 if column not in existing_columns:
                     db.execute(f"ALTER TABLE product_map ADD COLUMN {column} {column_type}")
@@ -116,11 +115,11 @@ class ShopifyProductMap:
         with sqlite3.connect(self.path) as db:
             db.execute("UPDATE product_map SET last_available=? WHERE sku=?", (available, sku))
 
-    def set_catalog_fields(self, sku: str, *, price: float, category: str, weight: float | None, barcode: str | None, image_hash: str | None) -> None:
+    def set_catalog_fields(self, sku: str, *, price: float, category: str, weight: float | None, barcode: str | None) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute(
-                "UPDATE product_map SET last_price=?, last_category=?, last_weight=?, last_barcode=?, last_image_hash=? WHERE sku=?",
-                (price, category, weight, barcode, image_hash, sku),
+                "UPDATE product_map SET last_price=?, last_category=?, last_weight=?, last_barcode=? WHERE sku=?",
+                (price, category, weight, barcode, sku),
             )
 
     def all_skus(self) -> list[str]:
@@ -153,11 +152,14 @@ def _resolve_variant(shopify: ShopifyClient, product_map: ShopifyProductMap, sku
     return product_map.get(sku)
 
 
-def _update_shopify_product(shopify: ShopifyClient, cached: dict[str, Any], *, sku: str, price: float, category: str, weight: float | None, barcode: str | None, image_bytes: bytes | None) -> None:
+def _update_shopify_product(shopify: ShopifyClient, cached: dict[str, Any], *, sku: str, price: float, category: str, weight: float | None, barcode: str | None) -> None:
+    # No image_bytes: the image is only ever set on create_product (see
+    # _sync_one_product) — a human may replace it by hand in Shopify
+    # afterwards, and a nightly catalog sync must not stomp on that.
     shopify.update_product(
         cached["product_id"], cached["variant_id"],
         sku=sku, price=price, product_type=category,
-        weight_kg=weight, barcode=barcode, image_bytes=image_bytes,
+        weight_kg=weight, barcode=barcode,
     )
 
 
@@ -184,17 +186,12 @@ def sync_catalog(moysklad: MoySkladClient, shopify: ShopifyClient, categories: l
     log.add("catalog_run", "success", f"Синхронизация каталога завершена: проверено {checked}, изменилось {changed}")
 
 
-def _image_hash(image_bytes: bytes | None) -> str | None:
-    return hashlib.sha256(image_bytes).hexdigest() if image_bytes else None
-
-
-def _catalog_fields_unchanged(cached: dict[str, Any], *, price: float, category: str, weight: float | None, barcode: str | None, image_hash: str | None) -> bool:
+def _catalog_fields_unchanged(cached: dict[str, Any], *, price: float, category: str, weight: float | None, barcode: str | None) -> bool:
     return (
         cached.get("last_price") == price
         and cached.get("last_category") == category
         and cached.get("last_weight") == weight
         and cached.get("last_barcode") == barcode
-        and cached.get("last_image_hash") == image_hash
     )
 
 
@@ -211,26 +208,21 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
     weight = product.get("weight")
     barcode = ((product.get("barcodes") or [{}])[0]).get("ean13")
     category = str(product.get("pathName") or "")
-    try:
-        image_bytes = moysklad.product_image_bytes(product)
-    except Exception:
-        image_bytes = None
-    image_hash = _image_hash(image_bytes)
 
     cached = product_map.get(sku)
     if cached is None:
         cached = _resolve_variant(shopify, product_map, sku, barcode)
 
     if cached is not None:
-        if _catalog_fields_unchanged(cached, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash):
+        if _catalog_fields_unchanged(cached, price=price, category=category, weight=weight, barcode=barcode):
             return False
-        # Title and vendor are deliberately left untouched here — both are
-        # only ever set on create_product below. A human may edit either by
-        # hand afterwards in Shopify, and a nightly catalog sync must not
-        # stomp on that.
+        # Title, vendor and image are deliberately left untouched here —
+        # all three are only ever set on create_product below. A human may
+        # edit any of them by hand afterwards in Shopify, and a nightly
+        # catalog sync must not stomp on that.
         try:
-            _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
-            product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
+            _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode)
+            product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode)
             log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify", sku, {"price": price})
             return True
         except ApiError as error:
@@ -242,10 +234,18 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
             product_map.delete(sku)
             cached = _resolve_variant(shopify, product_map, sku, barcode)
             if cached is not None:
-                _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode, image_bytes=image_bytes)
-                product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
+                _update_shopify_product(shopify, cached, sku=sku, price=price, category=category, weight=weight, barcode=barcode)
+                product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode)
                 log.add("catalog_update", "success", f"{sku}: товар обновлён в Shopify (карточка была пересоздана)", sku, {"price": price})
                 return True
+
+    # Only fetched for a genuinely new product — update_product never takes
+    # an image (see above), so there's no reason to pull it from MoySklad
+    # for every already-existing SKU every single night.
+    try:
+        image_bytes = moysklad.product_image_bytes(product)
+    except Exception:
+        image_bytes = None
 
     created = shopify.create_product(
         title=title, sku=sku, price=price, vendor=VENDOR, product_type=category,
@@ -253,7 +253,7 @@ def _sync_one_product(moysklad: MoySkladClient, shopify: ShopifyClient, product:
     )
     variant = created["variants"][0]
     product_map.set(sku, product_id=created["id"], variant_id=variant["id"], inventory_item_id=variant["inventory_item_id"])
-    product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode, image_hash=image_hash)
+    product_map.set_catalog_fields(sku, price=price, category=category, weight=weight, barcode=barcode)
     log.add("catalog_created", "success", f"{sku}: товар создан в Shopify ({title})", sku, {"title": title, "price": price})
     return True
 

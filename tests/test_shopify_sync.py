@@ -14,12 +14,14 @@ class FakeMoySklad:
     def __init__(self, products_by_category=None, stock_by_store=None):
         self.products_by_category_ = products_by_category or {}
         self.stock_by_store_ = stock_by_store or {}
+        self.image_bytes_calls = []
 
     def products_by_category(self, category):
         return self.products_by_category_.get(category, [])
 
     def product_image_bytes(self, product):
-        return None
+        self.image_bytes_calls.append(product.get("code"))
+        return b"%PNG-fake"
 
     def stock_by_store(self, warehouse_id):
         return self.stock_by_store_.get(warehouse_id, [])
@@ -109,6 +111,34 @@ def test_sync_catalog_updates_when_shopify_already_has_the_sku(tmp_path):
     assert "title" not in shopify.updated[0][2]  # never touch an existing product's title
     assert "vendor" not in shopify.updated[0][2]  # never touch an existing product's vendor
     assert product_map.get("ABC")["inventory_item_id"] == 7
+
+
+def test_sync_catalog_never_sends_or_fetches_image_for_an_existing_product(tmp_path):
+    """Explicit requirement: the image is create-only, same as title/vendor
+    — update_product must never receive image_bytes, and (since fetching an
+    image is its own MoySklad call) that fetch shouldn't even happen for a
+    product that already exists in Shopify."""
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify(existing_variants={"ABC": {"product_id": 5, "variant_id": 6, "inventory_item_id": 7}})
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert "image_bytes" not in shopify.updated[0][2]
+    assert moysklad.image_bytes_calls == []  # never fetched — not needed for an update
+
+
+def test_sync_catalog_fetches_image_only_for_a_new_product(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "log.sqlite3"))
+    product_map = ShopifyProductMap(str(tmp_path / "map.sqlite3"))
+    moysklad = FakeMoySklad(products_by_category={"Accessories": [_product()]})
+    shopify = FakeShopify()
+
+    sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
+
+    assert moysklad.image_bytes_calls == ["ABC"]
+    assert shopify.created[0]["image_bytes"] == b"%PNG-fake"
 
 
 def test_sync_catalog_skips_update_when_nothing_changed(tmp_path):
@@ -203,7 +233,7 @@ def test_sync_catalog_heals_stale_cache_when_cached_product_was_deleted(tmp_path
 
     sync_catalog(moysklad, shopify, ["Accessories"], product_map, log)
 
-    assert shopify.updated == [(42, 43, {"sku": "ABC", "price": 12.5, "product_type": "Accessories", "weight_kg": 0.5, "barcode": "1234567890123", "image_bytes": None})]
+    assert shopify.updated == [(42, 43, {"sku": "ABC", "price": 12.5, "product_type": "Accessories", "weight_kg": 0.5, "barcode": "1234567890123"})]
     assert product_map.get("ABC")["product_id"] == 42  # cache repaired, not left pointing at the deleted product
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["catalog_run", "catalog_update"]  # healed silently — no error logged
