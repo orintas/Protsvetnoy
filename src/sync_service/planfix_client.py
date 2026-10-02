@@ -51,11 +51,13 @@ class PlanFixClient:
         on get_contact. Cached per client instance — the field list doesn't
         change within one webhook handling."""
         if self._contact_field_ids is None:
-            payload = self._client.get("/customfield/contact")
-            # Confirmed live 2026-10-02: the response key is "customfields",
-            # all lowercase — "customFields" (what the docs' own schema
-            # viewer implies) silently returns nothing here, which is why
-            # this returned None for every field on every contact until now.
+            # Like /contact/{id}, this endpoint only returns the bare id for
+            # each field unless "fields" is passed explicitly — confirmed
+            # live 2026-10-02: without it every entry was just {"id": N},
+            # which is why every field name (and the MoySkladID lookup)
+            # resolved to nothing even after fixing the "customfields"
+            # (lowercase) response-key bug.
+            payload = self._client.get("/customfield/contact", params={"fields": "id,name"})
             fields = payload.get("customfields", [])
             self._contact_field_ids = {f["name"]: str(f["id"]) for f in fields if isinstance(f, dict) and "name" in f and "id" in f}
         return self._contact_field_ids.get(field_name)

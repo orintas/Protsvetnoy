@@ -57,6 +57,20 @@ def test_contact_custom_field_id_resolves_by_name_and_caches():
     assert client.contact_custom_field_id("Отдел") == "5"
     assert client.contact_custom_field_id("Unknown") is None
     assert len(requests) == 1  # cached after the first call
+    assert requests[0].url.params["fields"] == "id,name"
+
+
+def test_contact_custom_field_id_ignores_entries_missing_a_name():
+    """Without fields=id,name, PlanFix returns bare {"id": N} entries with
+    no "name" at all — confirmed live 2026-10-02, the second bug behind the
+    MoySkladID lookup always resolving to None even after the lowercase-key
+    fix. Entries missing "name" must be skipped, not raise a KeyError."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": "success", "customfields": [{"id": 75712}, {"id": 99, "name": "MoySkladID"}]})
+
+    client = _client_with_handler(handler)
+
+    assert client.contact_custom_field_id("MoySkladID") == "99"
 
 
 def test_contact_custom_field_id_returns_none_for_camelcase_key():
