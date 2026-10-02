@@ -52,7 +52,11 @@ class PlanFixClient:
         change within one webhook handling."""
         if self._contact_field_ids is None:
             payload = self._client.get("/customfield/contact")
-            fields = payload.get("customFields", payload.get("fields", []))
+            # Confirmed live 2026-10-02: the response key is "customfields",
+            # all lowercase — "customFields" (what the docs' own schema
+            # viewer implies) silently returns nothing here, which is why
+            # this returned None for every field on every contact until now.
+            fields = payload.get("customfields", [])
             self._contact_field_ids = {f["name"]: str(f["id"]) for f in fields if isinstance(f, dict) and "name" in f and "id" in f}
         return self._contact_field_ids.get(field_name)
 

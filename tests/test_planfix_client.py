@@ -44,7 +44,12 @@ def test_contact_custom_field_id_resolves_by_name_and_caches():
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={"customFields": [{"id": 99, "name": "MoySkladID"}, {"id": 5, "name": "Отдел"}]})
+        # Real PlanFix response key is lowercase "customfields" — confirmed
+        # live 2026-10-02 against the actual account. A previous version of
+        # this test used "customFields" (camelCase), matching a bug in the
+        # implementation rather than the real API, so it passed while the
+        # live code silently resolved every field id to None.
+        return httpx.Response(200, json={"result": "success", "customfields": [{"id": 99, "name": "MoySkladID"}, {"id": 5, "name": "Отдел"}]})
 
     client = _client_with_handler(handler)
 
@@ -52,3 +57,14 @@ def test_contact_custom_field_id_resolves_by_name_and_caches():
     assert client.contact_custom_field_id("Отдел") == "5"
     assert client.contact_custom_field_id("Unknown") is None
     assert len(requests) == 1  # cached after the first call
+
+
+def test_contact_custom_field_id_returns_none_for_camelcase_key():
+    """Locks in the lowercase "customfields" key: a response using the
+    wrong case for the key must not silently resolve anything."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"result": "success", "customFields": [{"id": 99, "name": "MoySkladID"}]})
+
+    client = _client_with_handler(handler)
+
+    assert client.contact_custom_field_id("MoySkladID") is None
