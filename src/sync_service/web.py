@@ -875,9 +875,10 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         settings = Settings.from_env()
         planfix = PlanFixClient(base_url=settings.planfix_base_url, api_key=settings.planfix_api_key)
         try:
+            raw_fields = planfix.get("/customfield/contact")
             field_id = planfix.contact_custom_field_id("MoySkladID")
             contact = planfix.get_contact(contact_id, extra_field_ids=[field_id] if field_id else [])
-            debug_payload = {"resolved_moysklad_id_field_id": field_id, "contact": contact}
+            debug_payload = {"raw_customfield_contact": raw_fields, "resolved_moysklad_id_field_id": field_id, "contact": contact}
         except Exception as error:
             start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
             return [dumps({"error": str(error)}, ensure_ascii=False).encode("utf-8")]
