@@ -15,6 +15,9 @@ from .import_file import compare_catalogs, csv_bytes, rows_for_codes, xlsx_bytes
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
 from .ozon_order_sync import PendingPostings, handle_webhook_notification
+from .planfix_client import PlanFixClient
+from .planfix_contact_sync import NotACompany, sync_contact
+from .planfix_log import PlanFixSyncLog
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
 from .shopify_order_sync import verify_webhook_signature as verify_shopify_webhook_signature
@@ -35,6 +38,16 @@ def _read_json_body(environ) -> dict:
         length = 0
     raw = environ["wsgi.input"].read(length) if length else b""
     return loads(raw.decode("utf-8")) if raw else {}
+
+
+def _read_form_body(environ) -> dict[str, str]:
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        length = 0
+    raw = environ["wsgi.input"].read(length) if length else b""
+    parsed = parse_qs(raw.decode("utf-8"))
+    return {key: values[0] for key, values in parsed.items() if values}
 
 
 def _yandex_market_notification_response() -> bytes:
@@ -255,6 +268,51 @@ def _ozon_webhook(environ, start_response):
     return [payload]
 
 
+def _planfix_webhook(environ, start_response):
+    """Receives the PlanFix "Отправить в МойСклад" task button's HTTP
+    request — a company contact gets created or updated as a МойСклад
+    контрагент, keyed on a MoySkladID PlanFix already stores on the contact
+    (that write-back is configured on the button itself in PlanFix, not
+    here — it parses this response's JSON into its own fields, so the
+    response field names below are fixed by that existing configuration).
+
+    Posted as application/x-www-form-urlencoded (not JSON) with two fields:
+    ContactID and Отдел (department) — see sync_contact for the rest of the
+    logic. Not signature-verified: the button itself is configured with
+    "Без авторизации" and the URL isn't meant to be public knowledge; add a
+    shared-secret check here later if that stops being good enough.
+    """
+    log = PlanFixSyncLog()
+    form = _read_form_body(environ)
+    contact_id = form.get("ContactID", "")
+    department_raw = form.get("Отдел", "")
+    if not contact_id:
+        ErrorLog().log_exception("planfix_webhook", ValueError("missing ContactID"), context="Запрос PlanFix без ContactID")
+        start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": "missing ContactID"}, ensure_ascii=False).encode("utf-8")]
+
+    settings = Settings.from_env()
+    planfix = PlanFixClient(base_url=settings.planfix_base_url, api_key=settings.planfix_api_key)
+    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+    try:
+        result = sync_contact(planfix, moysklad, contact_id=contact_id, department_raw=department_raw)
+    except NotACompany:
+        log.add("contact_sync", "error", "Контакт не компания — пропущен", contact_id, {"department": department_raw})
+        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8"), ("error", "Это не компания")])
+        return [b""]
+    except Exception as error:
+        ErrorLog().log_exception("planfix_webhook", error, context=f"Ошибка переноса контакта {contact_id} в МойСклад")
+        log.add("contact_sync", "error", f"Не удалось перенести контакт в МойСклад: {error}", contact_id, {"department": department_raw})
+        start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": "internal error"}, ensure_ascii=False).encode("utf-8")]
+    finally:
+        planfix.close()
+        moysklad.close()
+    log.add("contact_sync", "success", f"Контакт перенесён в МойСклад: {result.get('MoySkladID')}", contact_id, result)
+    start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+    return [dumps(result, ensure_ascii=False, default=str).encode("utf-8")]
+
+
 def _ndjson_line(payload: dict) -> bytes:
     return dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -349,6 +407,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
+<button class="tab-btn" data-tab="planfix" type="button">PlanFix</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
 <button class="tab-btn" data-tab="changes" type="button">Изменения</button>
 </nav>
@@ -428,6 +487,11 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Заказы обрабатываются по вебхуку в боевом режиме: заказ создаётся в МойСклад, сборка подтверждается на Яндекс.Маркете, этикетка отправляется в Telegram. Остатки синхронизируются каждые 10 минут.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="ym-log-kind" class="field"><option value="">Все типы</option></select><input id="ym-log-search" class="field" placeholder="Поиск по номеру заказа" style="min-width:220px"></div>
 <div id="ym-sync-log" class="log"></div></section>
+</section>
+<section id="tab-planfix" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">PlanFix — журнал</h2><p style="margin:0">Кнопка «Отправить в МойСклад» на карточке компании в PlanFix создаёт или обновляет контрагента в МойСклад (поиск по сохранённому MoySkladID, затем по email).</p></div><button class="button secondary" id="refresh-planfix-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="planfix-log-kind" class="field"><option value="">Все типы</option></select><input id="planfix-log-search" class="field" placeholder="Поиск" style="min-width:220px"></div>
+<div id="planfix-sync-log" class="log"></div></section>
 </section>
 <section id="tab-errors" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
@@ -601,6 +665,26 @@ catch(error){document.getElementById('ym-sync-log').innerHTML='<p class="error">
 document.getElementById('ym-log-kind').onchange=renderYmLog;
 document.getElementById('ym-log-search').oninput=()=>{clearTimeout(ymSearchTimer);ymSearchTimer=setTimeout(searchYmLog,300);};
 document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
+let allPlanfixLogEntries=[];
+let planfixSearchResults=null;
+let planfixSearchTimer=null;
+const planfixKindLabels={webhook:'Входящий вебхук',contact_sync:'Перенос контакта'};
+async function loadPlanfixLog(){const target=document.getElementById('planfix-sync-log');try{const response=await fetch('/api/planfix-sync-log');allPlanfixLogEntries=await response.json();
+const select=document.getElementById('planfix-log-kind'), current=select.value, kinds=[...new Set(allPlanfixLogEntries.map(e=>e.kind))].sort();
+select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(planfixKindLabels[k]||k)+'</option>').join('');
+planfixSearchResults=null;renderPlanfixLog();}catch(error){allPlanfixLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+function renderPlanfixLog(){const target=document.getElementById('planfix-sync-log'), kind=document.getElementById('planfix-log-kind')?.value||'', query=(document.getElementById('planfix-log-search')?.value||'').trim();
+const source=planfixSearchResults!==null?planfixSearchResults:allPlanfixLogEntries;
+const filtered=source.filter(e=>!kind||e.kind===kind);
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
+target.querySelectorAll('[data-planfix-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.planfixLogIndex)]));}
+async function searchPlanfixLog(){const query=(document.getElementById('planfix-log-search')?.value||'').trim();
+if(!query){planfixSearchResults=null;renderPlanfixLog();return;}
+try{const response=await fetch('/api/planfix-sync-log?q='+encodeURIComponent(query));planfixSearchResults=await response.json();renderPlanfixLog();}
+catch(error){document.getElementById('planfix-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+document.getElementById('planfix-log-kind').onchange=renderPlanfixLog;
+document.getElementById('planfix-log-search').oninput=()=>{clearTimeout(planfixSearchTimer);planfixSearchTimer=setTimeout(searchPlanfixLog,300);};
+document.getElementById('refresh-planfix-log').onclick=loadPlanfixLog;loadPlanfixLog();
 async function loadShopifyWarehouses(){const target=document.getElementById('shopify-warehouses');
 try{const response=await fetch('/api/shopify-warehouses');const data=await response.json();const available=data.available||[], selected=new Set(data.selection||[]);
 const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
@@ -770,6 +854,14 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         return _shopify_order_webhook(environ, start_response)
     if path == "/api/ozon/webhook/notifications" and environ.get("REQUEST_METHOD") == "POST":
         return _ozon_webhook(environ, start_response)
+    if path == "/api/planfix/webhook" and environ.get("REQUEST_METHOD") == "POST":
+        return _planfix_webhook(environ, start_response)
+    if path == "/api/planfix-sync-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        entries = PlanFixSyncLog().search(query) if query else PlanFixSyncLog().recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(

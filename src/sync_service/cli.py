@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime
 
 from .config import Settings
 from .moysklad import MoySkladClient
 from .novicloud import NovicloudClient
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def _resolve_order_id(client: MoySkladClient, order_number: str) -> str:
+    order = client.customer_order_by_name(order_number)
+    if order is None:
+        raise SystemExit(f"Заказ покупателя «{order_number}» не найден")
+    return order["id"]
 
 
 def main() -> None:
@@ -26,6 +36,11 @@ def main() -> None:
     subparsers.add_parser("moysklad-shift-close-worker")
     subparsers.add_parser("health-check-worker")
     subparsers.add_parser("telegram-qa-worker")
+    assign_slots = subparsers.add_parser(
+        "moysklad-assign-slots",
+        description="Create an Отгрузка from each given Заказ покупателя and assign a ячейка to every line.",
+    )
+    assign_slots.add_argument("--order", dest="orders", action="append", required=True, help="Order id (UUID) or order number; can be repeated")
     args = parser.parse_args()
 
     if args.command == "web-server":
@@ -67,6 +82,20 @@ def main() -> None:
     if args.command == "telegram-qa-worker":
         from .telegram_qa_worker import worker as telegram_qa_worker
         telegram_qa_worker()
+        return
+    if args.command == "moysklad-assign-slots":
+        from .slot_assignment import create_demands_with_slots
+        settings = Settings.from_env()
+        client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+        try:
+            order_ids = [o if _UUID_RE.match(o) else _resolve_order_id(client, o) for o in args.orders]
+            results = create_demands_with_slots(client, order_ids)
+        finally:
+            client.close()
+        for result in results:
+            print(f"Отгрузка {result.demand_number} (заказ {result.order_id}): назначено ячеек {len(result.assigned)}")
+            for unresolved in result.unresolved:
+                print(f"  ! не хватает остатка в ячейках для {unresolved.assortment_id}: нужно {unresolved.needed}, доступно {unresolved.available} — проставьте вручную")
         return
     settings = Settings.from_env()
     if args.command.startswith("novicloud-"):

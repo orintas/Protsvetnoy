@@ -10,6 +10,14 @@ from .http import JsonClient
 # categories live under this group; Russia-side categories are excluded.
 PROTSVETNOY_GROUP_ID = "62a11082-1b25-11ea-0a80-030300038a2c"
 
+# Contact-sync (PlanFix) destination groups, keyed by which PlanFix
+# "Отдел" (department) a contact belongs to — ported as-is from the Make
+# scenario it replaces.
+PLANFIX_DEPARTMENT_GROUPS = {
+    "Varvikas": PROTSVETNOY_GROUP_ID,
+    "Цветной": "08e6b024-d269-11e4-90a2-8ecb0004d9d2",
+}
+
 
 class MoySkladClient:
     def __init__(self, *, base_url: str, token: str) -> None:
@@ -376,6 +384,62 @@ class MoySkladClient:
         self._client.put(f"/entity/retailshift/{shift_id}", body)
         record(service="moysklad", entity_type="retailshift.closeDate", entity_id=shift_id, action="update",
                before=None, after=close_date)
+
+    def counterparty_by_email(self, email: str) -> dict[str, Any] | None:
+        """Safety net for the PlanFix contact sync: a match here means a
+        counterparty for this email already exists even if PlanFix's own
+        stored MoySkladID is missing or stale — avoids creating a duplicate."""
+        if not email:
+            return None
+        payload = self._client.get("/entity/counterparty", params={"filter": f"email={email}", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def create_counterparty(self, *, name: str, email: str, phone: str, group_id: str) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name, "email": email, "phone": phone, "group": self._meta("group", group_id)}
+        result = self._client.post("/entity/counterparty", body)
+        record(service="moysklad", entity_type="counterparty", entity_id=str(result.get("id")), action="create",
+               after={"name": name, "email": email, "phone": phone})
+        return result
+
+    def update_counterparty(self, counterparty_id: str, *, name: str, email: str, phone: str, group_id: str) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name, "email": email, "phone": phone, "group": self._meta("group", group_id)}
+        result = self._client.put(f"/entity/counterparty/{counterparty_id}", body)
+        record(service="moysklad", entity_type="counterparty", entity_id=counterparty_id, action="update",
+               after={"name": name, "email": email, "phone": phone})
+        return result
+
+    def counterparty_report(self, counterparty_id: str) -> dict[str, Any] | None:
+        """Sales stats (firstDemandDate, lastDemandDate, demandsCount,
+        demandsSum) — also doubles as "does this id still exist" (None on a
+        404, e.g. the counterparty was deleted after PlanFix cached its id)."""
+        return self._client.get_optional(f"/report/counterparty/{counterparty_id}")
+
+    def demand_template_from_customer_order(self, order_id: str) -> dict[str, Any]:
+        """Pre-filled Отгрузка draft copied from a Заказ покупателя (same as
+        clicking "Создать документ → Отгрузка" on the order in the web UI) —
+        organization, agent, store and positions all come from the order."""
+        return self._client.put("/entity/demand/new", {"customerOrder": self._meta("customerorder", order_id)})
+
+    def create_demand(self, template: dict[str, Any]) -> dict[str, Any]:
+        return self._client.post("/entity/demand", template)
+
+    def demand_positions(self, demand_id: str) -> list[dict[str, Any]]:
+        payload = self._client.get(f"/entity/demand/{demand_id}/positions", params={"limit": 1000})
+        rows = payload.get("rows", [])
+        return [row for row in rows if isinstance(row, dict)]
+
+    def stock_by_slot(self, assortment_ids: list[str], *, store_id: str) -> list[dict[str, Any]]:
+        """Current stock per ячейка for the given products at one warehouse:
+        [{"assortmentId", "storeId", "slotId", "stock"}, ...]. Products with
+        no address-storage stock at all (service items, non-stored goods)
+        simply don't appear in the result."""
+        filter_value = ";".join([f"assortmentId={aid}" for aid in assortment_ids] + [f"storeId={store_id}"])
+        return self._client.get_array("/report/stock/byslot/current", params={"filter": filter_value})
+
+    def set_position_slot(self, demand_id: str, position_id: str, *, store_id: str, slot_id: str) -> dict[str, Any]:
+        body = {"slot": {"meta": {"href": f"{self._client.base_url}/entity/store/{store_id}/slots/{slot_id}", "type": "slot", "mediaType": "application/json"}}}
+        return self._client.put(f"/entity/demand/{demand_id}/positions/{position_id}", body)
 
     def close(self) -> None:
         self._client.close()

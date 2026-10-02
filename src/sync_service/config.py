@@ -34,6 +34,9 @@ class Settings:
     yandexgpt_api_key: str
     yandexgpt_folder_id: str
     yandexgpt_model: str
+    planfix_api_key: str
+    planfix_base_url: str
+    planfix_webhook_secret: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -75,6 +78,9 @@ class Settings:
             yandexgpt_api_key=os.getenv("YANDEXGPT_API_KEY", ""),
             yandexgpt_folder_id=os.getenv("YANDEXGPT_FOLDER_ID", ""),
             yandexgpt_model=os.getenv("YANDEXGPT_MODEL", "yandexgpt/latest"),
+            planfix_api_key=os.getenv("PLANFIX_API_KEY", ""),
+            planfix_base_url=os.getenv("PLANFIX_BASE_URL", "").rstrip("/"),
+            planfix_webhook_secret=os.getenv("PLANFIX_WEBHOOK_SECRET", ""),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )

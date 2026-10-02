@@ -96,6 +96,40 @@ class JsonClient:
             raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
         return response.content
 
+    def get_optional(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | list[tuple[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        """Like get(), but a 404 means "doesn't exist" rather than an error —
+        returns None instead of raising. Every other error status still raises."""
+        response = self._request_with_retry("GET", path, params=params)
+        if response.status_code == 404:
+            return None
+        if response.is_error:
+            raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ApiError(f"GET {response.url} returned a non-object JSON response")
+        return payload
+
+    def get_array(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | list[tuple[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """For endpoints whose JSON body is a bare array rather than an
+        object with a `rows` field (e.g. MoySklad's stock-by-slot report)."""
+        response = self._request_with_retry("GET", path, params=params)
+        if response.is_error:
+            raise ApiError(f"GET {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise ApiError(f"GET {response.url} returned a non-array JSON response")
+        return payload
+
     def get_url(self, url: str) -> dict[str, Any]:
         response = self._request_with_retry("GET", url)
         if response.is_error:

@@ -60,5 +60,11 @@ jobs:
             grep -q '^VLESS_PBK=' .env || echo 'VLESS_PBK=' >> .env
             grep -q '^VLESS_SID=' .env || echo 'VLESS_SID=' >> .env
             grep -q '^TELEGRAM_PROXY_URL=' .env || echo 'TELEGRAM_PROXY_URL=' >> .env
+            grep -q '^PLANFIX_API_KEY=' .env || echo 'PLANFIX_API_KEY=' >> .env
+            sed -i "s#^PLANFIX_API_KEY=.*#PLANFIX_API_KEY=${{ secrets.PLANFIX_API_KEY }}#" .env
+            grep -q '^PLANFIX_BASE_URL=' .env || echo 'PLANFIX_BASE_URL=' >> .env
+            sed -i "s#^PLANFIX_BASE_URL=.*#PLANFIX_BASE_URL=${{ secrets.PLANFIX_BASE_URL }}#" .env
+            grep -q '^PLANFIX_WEBHOOK_SECRET=' .env || echo 'PLANFIX_WEBHOOK_SECRET=' >> .env
+            sed -i "s#^PLANFIX_WEBHOOK_SECRET=.*#PLANFIX_WEBHOOK_SECRET=${{ secrets.PLANFIX_WEBHOOK_SECRET }}#" .env
             docker compose up -d --build --remove-orphans
             docker image prune -f
