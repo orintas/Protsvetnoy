@@ -862,6 +862,30 @@ document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.c
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    if path == "/api/planfix/debug-contact":
+        # Temporary, read-only: inspect exactly what PlanFix returns for a
+        # contact (including its raw customFieldData) without touching
+        # MoySklad at all — for tracking down why contact_custom_field_id /
+        # _custom_field_value aren't finding an already-stored MoySkladID.
+        # Remove once that's confirmed fixed.
+        contact_id = parse_qs(environ.get("QUERY_STRING", "")).get("id", [""])[0].strip()
+        if not contact_id:
+            start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+            return [b'{"error": "missing id"}']
+        settings = Settings.from_env()
+        planfix = PlanFixClient(base_url=settings.planfix_base_url, api_key=settings.planfix_api_key)
+        try:
+            field_id = planfix.contact_custom_field_id("MoySkladID")
+            contact = planfix.get_contact(contact_id, extra_field_ids=[field_id] if field_id else [])
+            debug_payload = {"resolved_moysklad_id_field_id": field_id, "contact": contact}
+        except Exception as error:
+            start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
+            return [dumps({"error": str(error)}, ensure_ascii=False).encode("utf-8")]
+        finally:
+            planfix.close()
+        payload = dumps(debug_payload, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
     if path == "/api/shift-close-log":
         settings = Settings.from_env()
         payload = dumps(
