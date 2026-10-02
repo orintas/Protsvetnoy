@@ -31,9 +31,18 @@ class PlanFixClient:
     def get_contact(self, contact_id: str, *, extra_field_ids: list[str] = ()) -> dict[str, Any]:
         """A contact/company by id, with its customFieldData for whichever
         custom field ids were asked for (resolve names to ids first via
-        contact_custom_field_id)."""
+        contact_custom_field_id).
+
+        The id is sent with an explicit "contact:" prefix — PlanFix's docs
+        say a bare number works too ("contact:12 OR 12"), but a bare number
+        came back "Contact not found" live against this account (confirmed
+        2026-10-02) for an id that was in fact a real contact, presumably
+        because PlanFix's object ids aren't unique per entity type without
+        the prefix to disambiguate.
+        """
+        prefixed_id = contact_id if contact_id.startswith("contact:") else f"contact:{contact_id}"
         fields = ",".join((*_CONTACT_SYSTEM_FIELDS, *extra_field_ids))
-        payload = self._client.get(f"/contact/{contact_id}", params={"fields": fields})
+        payload = self._client.get(f"/contact/{prefixed_id}", params={"fields": fields})
         return payload["contact"]
 
     def contact_custom_field_id(self, field_name: str) -> str | None:

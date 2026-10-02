@@ -19,11 +19,24 @@ def test_get_contact_requests_system_and_extra_fields():
     client = _client_with_handler(handler)
     contact = client.get_contact("1", extra_field_ids=["99"])
 
-    assert requests[0].url.path.endswith("/contact/1")
+    assert requests[0].url.path.endswith("/contact/contact:1")
     fields = requests[0].url.params["fields"]
     assert "isCompany" in fields
     assert "99" in fields
     assert contact == {"id": 1, "isCompany": True}
+
+
+def test_get_contact_does_not_double_prefix_an_already_prefixed_id():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"result": "success", "contact": {"id": 1}})
+
+    client = _client_with_handler(handler)
+    client.get_contact("contact:1")
+
+    assert requests[0].url.path.endswith("/contact/contact:1")
 
 
 def test_contact_custom_field_id_resolves_by_name_and_caches():
