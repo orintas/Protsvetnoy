@@ -36,6 +36,9 @@ class ChangeLog:
             )
             db.execute("CREATE INDEX IF NOT EXISTS idx_changes_created_at ON changes(created_at)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_changes_entity_id ON changes(entity_id)")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(changes)")}
+            if "link" not in columns:
+                db.execute("ALTER TABLE changes ADD COLUMN link TEXT")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).isoformat()
             db.execute("DELETE FROM changes WHERE created_at < ?", (cutoff,))
 
@@ -49,11 +52,12 @@ class ChangeLog:
         before: Any = None,
         after: Any = None,
         summary: str | None = None,
+        link: str | None = None,
     ) -> None:
         with sqlite3.connect(self.path) as db:
             db.execute(
-                """INSERT INTO changes(created_at, service, entity_type, entity_id, action, before, after, summary)
-                VALUES (?,?,?,?,?,?,?,?)""",
+                """INSERT INTO changes(created_at, service, entity_type, entity_id, action, before, after, summary, link)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     service,
@@ -63,6 +67,7 @@ class ChangeLog:
                     json.dumps(before, ensure_ascii=False, default=str) if before is not None else None,
                     json.dumps(after, ensure_ascii=False, default=str) if after is not None else None,
                     summary,
+                    link,
                 ),
             )
 
@@ -105,10 +110,11 @@ def record(
     before: Any = None,
     after: Any = None,
     summary: str | None = None,
+    link: str | None = None,
 ) -> None:
     """Best-effort: a logging failure must never break the actual API write
     it's recording, so this swallows its own errors."""
     try:
-        _get().add(service=service, entity_type=entity_type, entity_id=entity_id, action=action, before=before, after=after, summary=summary)
+        _get().add(service=service, entity_type=entity_type, entity_id=entity_id, action=action, before=before, after=after, summary=summary, link=link)
     except Exception:
         pass

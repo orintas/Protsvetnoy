@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .label_caption import build_caption, format_items_plain
 from .moysklad import MoySkladClient
+from .moysklad_links import moysklad_link_fields
 from .order_lock import yandex_market_order_pipeline
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
@@ -208,7 +209,7 @@ def process_new_order(
 
             description_items = [{"sku": item.get("offerId"), "count": item.get("count", 1)} for item in items]
             description = format_items_plain(description_items)
-            moysklad.create_customer_order(
+            created_order = moysklad.create_customer_order(
                 name=str(order_id),
                 moment=_moysklad_moment(order.get("creationDate")),
                 organization_id=ORGANIZATION_ID,
@@ -221,7 +222,7 @@ def process_new_order(
                 owner_id=OWNER_EMPLOYEE_ID,
                 group_id=GROUP_ID,
             )
-            log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+            log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, {**order, **moysklad_link_fields(created_order, f"Заказ {order_id}")})
 
             yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
             log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
@@ -304,7 +305,7 @@ def sync_order_delivery_state(
 
     previous_state_id = _previous_state_id(order)
     moysklad.update_customer_order_state(str(order["id"]), state_id, previous_state_id=previous_state_id)
-    log.add("order_state_updated", "success", f"Заказ {order_id}: статус в МойСклад изменён на «{label}»", external_code)
+    log.add("order_state_updated", "success", f"Заказ {order_id}: статус в МойСклад изменён на «{label}»", external_code, moysklad_link_fields(order, f"Заказ {order_id}"))
 
 
 def _previous_state_id(order: dict[str, Any]) -> str | None:
@@ -390,7 +391,7 @@ def handle_order_cancelled(
         else:
             previous_state_id = _previous_state_id(order)
             moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID, previous_state_id=previous_state_id)
-            log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code)
+            log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code, moysklad_link_fields(order, f"Заказ {order_id}"))
 
         if telegram is not None and telegram_chat_id:
             store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))

@@ -74,7 +74,13 @@ def test_creates_a_new_counterparty_when_nothing_is_known(tmp_path):
 
     result = sync_contact(planfix, moysklad, contact_id="1", department_raw="Varvikas")
 
-    assert result == {"MoySkladID": "new-id", "MoySkladUrl": "https://example/new-id"}
+    assert result == {
+        "MoySkladID": "new-id",
+        "MoySkladUrl": "https://example/new-id",
+        "CompanyName": "ООО Ромашка",
+        "moysklad_url": "https://example/new-id",
+        "moysklad_label": "ООО Ромашка",
+    }
     assert moysklad.created == [{"name": "ООО Ромашка", "email": "romashka@example.com", "phone": "+70000000000", "group_id": PLANFIX_DEPARTMENT_GROUPS["Varvikas"]}]
 
 
@@ -100,6 +106,9 @@ def test_updates_and_returns_stats_when_moyskladid_already_stored():
         "LastDemandDate": "2026-02-01",
         "DemandsCount": 3,
         "DemandsSum": 1500.0,
+        "CompanyName": "ООО Ромашка",
+        "moysklad_url": "https://example/existing-id",
+        "moysklad_label": "ООО Ромашка",
     }
     assert moysklad.updated == [{"id": "existing-id", "name": "ООО Ромашка", "email": "romashka@example.com", "phone": "+70000000000", "group_id": PLANFIX_DEPARTMENT_GROUPS["Цветной"]}]
 
@@ -111,7 +120,13 @@ def test_recreates_when_stored_moyskladid_no_longer_exists():
 
     result = sync_contact(planfix, moysklad, contact_id="1", department_raw="Varvikas")
 
-    assert result == {"MoySkladID": "new-id", "MoySkladUrl": "https://example/new-id"}
+    assert result == {
+        "MoySkladID": "new-id",
+        "MoySkladUrl": "https://example/new-id",
+        "CompanyName": "ООО Ромашка",
+        "moysklad_url": "https://example/new-id",
+        "moysklad_label": "ООО Ромашка",
+    }
     assert len(moysklad.created) == 1
 
 

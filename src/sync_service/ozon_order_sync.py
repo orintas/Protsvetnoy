@@ -11,6 +11,7 @@ from .error_log import ErrorLog
 from .http import ApiError
 from .label_caption import build_caption, format_items_plain
 from .moysklad import MoySkladClient
+from .moysklad_links import moysklad_link_fields
 from .ozon_client import OzonClient
 from .telegram_client import TelegramClient
 from .yandex_market_sync import YandexMarketSyncLog
@@ -260,7 +261,7 @@ def _update_moysklad_description(posting_number: str, details: dict[str, Any], m
     existing = order.get("description") or ""
     description = f"{format_items_plain(items)}\n{existing}" if existing else format_items_plain(items)
     moysklad.update_customer_order_description(str(order["id"]), description, previous_description=existing or None)
-    log.add("description_updated", "success", f"Отправление {posting_number}: список товаров добавлен в описание заказа МойСклад", posting_number)
+    log.add("description_updated", "success", f"Отправление {posting_number}: список товаров добавлен в описание заказа МойСклад", posting_number, moysklad_link_fields(order, f"Заказ {posting_number}"))
     queue.mark_description_updated(posting_number)
 
 

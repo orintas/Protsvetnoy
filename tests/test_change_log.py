@@ -20,6 +20,38 @@ def test_add_and_recent_round_trips_before_after(tmp_path):
     assert entries[0]["summary"] == "title changed"
 
 
+def test_add_stores_and_returns_link(tmp_path):
+    log = ChangeLog(str(tmp_path / "changes.sqlite3"))
+    log.add(service="moysklad", entity_type="counterparty", entity_id="ООО Ромашка", action="create",
+            after={"name": "ООО Ромашка"}, link="https://online.moysklad.ru/app/#company/edit?id=cp-1")
+
+    entries = log.recent()
+    assert entries[0]["link"] == "https://online.moysklad.ru/app/#company/edit?id=cp-1"
+
+
+def test_add_defaults_link_to_none(tmp_path):
+    log = ChangeLog(str(tmp_path / "changes.sqlite3"))
+    log.add(service="ozon", entity_type="posting", entity_id="1", action="ship")
+
+    assert log.recent()[0]["link"] is None
+
+
+def test_migrates_an_existing_table_missing_the_link_column(tmp_path):
+    path = str(tmp_path / "changes.sqlite3")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE changes (
+            id INTEGER PRIMARY KEY, created_at TEXT NOT NULL,
+            service TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT,
+            action TEXT NOT NULL, before TEXT, after TEXT, summary TEXT)"""
+        )
+
+    log = ChangeLog(path)  # migration runs on open
+    log.add(service="moysklad", entity_type="counterparty", entity_id="x", action="create", link="https://example/x")
+
+    assert log.recent()[0]["link"] == "https://example/x"
+
+
 def test_add_allows_missing_before_for_create_actions(tmp_path):
     log = ChangeLog(str(tmp_path / "changes.sqlite3"))
     log.add(service="moysklad", entity_type="customerorder", entity_id="123", action="create", after={"id": "abc"})

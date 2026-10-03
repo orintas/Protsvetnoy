@@ -308,7 +308,7 @@ def _planfix_webhook(environ, start_response):
     finally:
         planfix.close()
         moysklad.close()
-    log.add("contact_sync", "success", f"Контакт перенесён в МойСклад: {result.get('MoySkladID')}", contact_id, result)
+    log.add("contact_sync", "success", f"Контакт перенесён в МойСклад: {result.get('CompanyName') or result.get('MoySkladID')}", contact_id, result)
     start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
     return [dumps(result, ensure_ascii=False, default=str).encode("utf-8")]
 
@@ -603,7 +603,7 @@ downloadCsvBtn.onclick=()=>download('csv');
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog(allLogEntries);}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
 function renderLog(entries){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim();
-target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(docNumber(e)?' · '+docNumber(e):'')+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(docNumber(e)?' · '+docNumber(e):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
 target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.logIndex)]));}
 let allLogEntries=[];
 let logSearchTimer=null;
@@ -656,7 +656,7 @@ ymSearchResults=null;renderYmLog();}catch(error){allYmLogEntries=[];target.inner
 function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim();
 const source=ymSearchResults!==null?ymSearchResults:allYmLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
 target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));}
 async function searchYmLog(){const query=(document.getElementById('ym-log-search')?.value||'').trim();
 if(!query){ymSearchResults=null;renderYmLog();return;}
@@ -676,7 +676,7 @@ planfixSearchResults=null;renderPlanfixLog();}catch(error){allPlanfixLogEntries=
 function renderPlanfixLog(){const target=document.getElementById('planfix-sync-log'), kind=document.getElementById('planfix-log-kind')?.value||'', query=(document.getElementById('planfix-log-search')?.value||'').trim();
 const source=planfixSearchResults!==null?planfixSearchResults:allPlanfixLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
 target.querySelectorAll('[data-planfix-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.planfixLogIndex)]));}
 async function searchPlanfixLog(){const query=(document.getElementById('planfix-log-search')?.value||'').trim();
 if(!query){planfixSearchResults=null;renderPlanfixLog();return;}
@@ -701,7 +701,7 @@ shopifySearchResults=null;renderShopifyLog();}catch(error){allShopifyLogEntries=
 function renderShopifyLog(){const target=document.getElementById('shopify-sync-log'), kind=document.getElementById('shopify-log-kind')?.value||'', query=(document.getElementById('shopify-log-search')?.value||'').trim();
 const source=shopifySearchResults!==null?shopifySearchResults:allShopifyLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
 target.querySelectorAll('[data-shopify-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.shopifyLogIndex)]));}
 async function searchShopifyLog(){const query=(document.getElementById('shopify-log-search')?.value||'').trim();
 if(!query){shopifySearchResults=null;renderShopifyLog();return;}
@@ -721,7 +721,7 @@ ozonSearchResults=null;renderOzonLog();}catch(error){allOzonLogEntries=[];target
 function renderOzonLog(){const target=document.getElementById('ozon-sync-log'), kind=document.getElementById('ozon-log-kind')?.value||'', query=(document.getElementById('ozon-log-search')?.value||'').trim();
 const source=ozonSearchResults!==null?ozonSearchResults:allOzonLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
 target.querySelectorAll('[data-ozon-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ozonLogIndex)]));}
 async function searchOzonLog(){const query=(document.getElementById('ozon-log-search')?.value||'').trim();
 if(!query){ozonSearchResults=null;renderOzonLog();return;}
@@ -742,7 +742,8 @@ changesSearchResults=null;renderChangesLog();}catch(error){allChangesLogEntries=
 function renderChangesLog(){const target=document.getElementById('changes-log'), service=document.getElementById('changes-log-service')?.value||'', query=(document.getElementById('changes-log-search')?.value||'').trim();
 const source=changesSearchResults!==null?changesSearchResults:allChangesLogEntries;
 const filtered=source.filter(e=>!service||e.service===service);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge success">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(e.entity_id?' · '+escapeHtml(e.entity_id):'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>').join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
+target.innerHTML=filtered.length?filtered.map((e,i)=>{const entityRef=e.entity_id?(e.link?'<a href="'+escapeHtml(e.link)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(e.entity_id)+'</a>':escapeHtml(e.entity_id)):'';
+return '<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge success">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(entityRef?' · '+entityRef:'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>';}).join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
 target.querySelectorAll('[data-changes-log-index]').forEach(row=>row.onclick=()=>showChangeDetail(filtered[Number(row.dataset.changesLogIndex)]));}
 async function searchChangesLog(){const query=(document.getElementById('changes-log-search')?.value||'').trim();
 if(!query){changesSearchResults=null;renderChangesLog();return;}
@@ -750,7 +751,8 @@ try{const response=await fetch('/api/change-log?q='+encodeURIComponent(query));c
 catch(error){document.getElementById('changes-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
 function showChangeDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
 title.textContent=(changeServiceLabels[entry.service]||entry.service)+' · '+entry.entity_type;
-body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Сущность</dt><dd>'+escapeHtml(entry.entity_id||'—')+'</dd><dt>Действие</dt><dd>'+(changeActionLabels[entry.action]||entry.action)+'</dd>'+(entry.summary?'<dt>Комментарий</dt><dd>'+escapeHtml(entry.summary)+'</dd>':'')+'<dt>Было</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.before||'—')+'</pre></dd><dt>Стало</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.after||'—')+'</pre></dd>';
+const entityRef=entry.entity_id?(entry.link?'<a href="'+escapeHtml(entry.link)+'" target="_blank" rel="noopener">'+escapeHtml(entry.entity_id)+'</a>':escapeHtml(entry.entity_id)):'—';
+body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Сущность</dt><dd>'+entityRef+'</dd><dt>Действие</dt><dd>'+(changeActionLabels[entry.action]||entry.action)+'</dd>'+(entry.summary?'<dt>Комментарий</dt><dd>'+escapeHtml(entry.summary)+'</dd>':'')+'<dt>Было</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.before||'—')+'</pre></dd><dt>Стало</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:200px;overflow:auto">'+escapeHtml(entry.after||'—')+'</pre></dd>';
 modal.classList.add('open');}
 document.getElementById('changes-log-service').onchange=renderChangesLog;
 document.getElementById('changes-log-search').oninput=()=>{clearTimeout(changesSearchTimer);changesSearchTimer=setTimeout(searchChangesLog,300);};
@@ -758,7 +760,7 @@ document.getElementById('refresh-changes-log').onclick=loadChangesLog;loadChange
 loadShopifyWarehouses();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
-target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
 target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));}
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 async function loadOpenShifts(){const target=document.getElementById('shift-open-list');
@@ -800,6 +802,7 @@ document.getElementById('categories-close').onclick=closeCategoriesModal;
 document.getElementById('categories-close-x').onclick=closeCategoriesModal;
 categoriesModal.onclick=e=>{if(e.target===categoriesModal)closeCategoriesModal();};
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function entityLink(payloadRaw){try{const p=typeof payloadRaw==='string'?JSON.parse(payloadRaw):payloadRaw;if(p&&p.moysklad_url)return ' · <a href="'+escapeHtml(p.moysklad_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(p.moysklad_label||p.moysklad_url)+'</a>';}catch(error){}return '';}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
 target.innerHTML=lastErrors.length?lastErrors.map((e,i)=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge error">'+escapeHtml(e.source)+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>';

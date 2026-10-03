@@ -156,8 +156,8 @@ class MoySkladClient:
 
     def update_customer_order_description(self, order_id: str, description: str, *, previous_description: str | None = None) -> dict[str, Any]:
         result = self._client.put(f"/entity/customerorder/{order_id}", {"description": description})
-        record(service="moysklad", entity_type="customerorder.description", entity_id=order_id, action="update",
-               before=previous_description, after=description)
+        record(service="moysklad", entity_type="customerorder.description", entity_id=result.get("name") or order_id, action="update",
+               before=previous_description, after=description, link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def _state_meta(self, state_id: str) -> dict[str, Any]:
@@ -211,8 +211,9 @@ class MoySkladClient:
         if group_id:
             body["group"] = self._meta("group", group_id)
         result = self._client.post("/entity/customerorder", body)
-        record(service="moysklad", entity_type="customerorder", entity_id=external_code, action="create",
-               after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id})
+        record(service="moysklad", entity_type="customerorder", entity_id=result.get("name") or external_code, action="create",
+               after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id},
+               link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def update_customer_order_state(self, order_id: str, state_id: str, *, previous_state_id: str | None = None) -> dict[str, Any]:
@@ -224,8 +225,8 @@ class MoySkladClient:
         /entity/customerorder/metadata; not reusable across MoySklad accounts.
         """
         result = self._client.put(f"/entity/customerorder/{order_id}", {"state": self._state_meta(state_id)})
-        record(service="moysklad", entity_type="customerorder.state", entity_id=order_id, action="update",
-               before=previous_state_id, after=state_id)
+        record(service="moysklad", entity_type="customerorder.state", entity_id=result.get("name") or order_id, action="update",
+               before=previous_state_id, after=state_id, link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def last_document_moment(self, entity: str, retail_store_id: str) -> str | None:
@@ -255,8 +256,8 @@ class MoySkladClient:
             "owner": self._meta("employee", owner_id),
         }
         result = self._client.post("/entity/retailshift", body)
-        record(service="moysklad", entity_type="retailshift", entity_id=str(result.get("id")), action="create",
-               after={"retail_store_id": retail_store_id, "store_id": store_id})
+        record(service="moysklad", entity_type="retailshift", entity_id=result.get("name") or str(result.get("id")), action="create",
+               after={"retail_store_id": retail_store_id, "store_id": store_id}, link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def create_retail_demand(
@@ -299,7 +300,8 @@ class MoySkladClient:
             body["checkNumber"] = check_number
         result = self._client.post("/entity/retaildemand", body)
         record(service="moysklad", entity_type="retaildemand", entity_id=name, action="create",
-               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id})
+               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id},
+               link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def create_retail_return(
@@ -337,7 +339,8 @@ class MoySkladClient:
         }
         result = self._client.post("/entity/retailsalesreturn", body)
         record(service="moysklad", entity_type="retailsalesreturn", entity_id=name, action="create",
-               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id})
+               after={"cash_sum": cash_sum, "non_cash_sum": non_cash_sum, "positions": len(positions), "retail_shift_id": retail_shift_id},
+               link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def open_retail_shifts(self, organization_id: str, since: datetime) -> list[dict[str, Any]]:
@@ -381,9 +384,9 @@ class MoySkladClient:
         body: dict[str, Any] = {"closeDate": close_date}
         if name is not None:
             body["name"] = name
-        self._client.put(f"/entity/retailshift/{shift_id}", body)
-        record(service="moysklad", entity_type="retailshift.closeDate", entity_id=shift_id, action="update",
-               before=None, after=close_date)
+        result = self._client.put(f"/entity/retailshift/{shift_id}", body)
+        record(service="moysklad", entity_type="retailshift.closeDate", entity_id=result.get("name") or name or shift_id, action="update",
+               before=None, after=close_date, link=result.get("meta", {}).get("uuidHref"))
 
     def counterparty_by_email(self, email: str) -> dict[str, Any] | None:
         """Safety net for the PlanFix contact sync: a match here means a
@@ -398,15 +401,15 @@ class MoySkladClient:
     def create_counterparty(self, *, name: str, email: str, phone: str, group_id: str) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "email": email, "phone": phone, "group": self._meta("group", group_id)}
         result = self._client.post("/entity/counterparty", body)
-        record(service="moysklad", entity_type="counterparty", entity_id=str(result.get("id")), action="create",
-               after={"name": name, "email": email, "phone": phone})
+        record(service="moysklad", entity_type="counterparty", entity_id=name, action="create",
+               after={"name": name, "email": email, "phone": phone}, link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def update_counterparty(self, counterparty_id: str, *, name: str, email: str, phone: str, group_id: str) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "email": email, "phone": phone, "group": self._meta("group", group_id)}
         result = self._client.put(f"/entity/counterparty/{counterparty_id}", body)
-        record(service="moysklad", entity_type="counterparty", entity_id=counterparty_id, action="update",
-               after={"name": name, "email": email, "phone": phone})
+        record(service="moysklad", entity_type="counterparty", entity_id=name, action="update",
+               after={"name": name, "email": email, "phone": phone}, link=result.get("meta", {}).get("uuidHref"))
         return result
 
     def counterparty_report(self, counterparty_id: str) -> dict[str, Any] | None:

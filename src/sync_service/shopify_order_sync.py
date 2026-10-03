@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .moysklad import MoySkladClient
+from .moysklad_links import moysklad_link_fields
 from .order_lock import shopify_order_creation
 from .shopify_sync import ShopifySyncLog
 
@@ -204,7 +205,7 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
 
         address = _format_address(order)
         description = f"{order_name}\nАдрес доставки: {address}" if address else order_name
-        moysklad.create_customer_order(
+        created_order = moysklad.create_customer_order(
             moment=_moysklad_moment(order.get("created_at")),
             organization_id=ORGANIZATION_ID,
             agent_id=agent_id,
@@ -218,4 +219,4 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
             owner_id=OWNER_EMPLOYEE_ID,
             group_id=GROUP_ID,
         )
-        log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, order)
+        log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, {**order, **moysklad_link_fields(created_order, f"Заказ {order_name}")})

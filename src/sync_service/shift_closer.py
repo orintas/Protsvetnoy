@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
+from .moysklad_links import moysklad_link_fields
 
 # MoySklad organization id -> country name. Only these four are ever touched;
 # everything else (Russia included) is left alone by construction.
@@ -159,6 +160,7 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                 "name": shift.get("name"),
                 "opened": shift.get("moment"),
                 "store": store,
+                **moysklad_link_fields(shift, f"Смена №{shift.get('name')}"),
             }
             if dry_run:
                 log.add(

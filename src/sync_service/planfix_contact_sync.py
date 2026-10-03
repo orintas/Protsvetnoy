@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .moysklad import PLANFIX_DEPARTMENT_GROUPS, MoySkladClient
+from .moysklad_links import moysklad_link_fields
 from .planfix_client import PlanFixClient
 
 MOYSKLAD_ID_FIELD_NAME = "MoySkladID"
@@ -104,7 +105,14 @@ def sync_contact(planfix: PlanFixClient, moysklad: MoySkladClient, *, contact_id
                 "LastDemandDate": stats.get("lastDemandDate"),
                 "DemandsCount": stats.get("demandsCount"),
                 "DemandsSum": (stats.get("demandsSum") or 0) / 100,
+                "CompanyName": name,
+                **moysklad_link_fields(stats, name),
             }
 
     created = moysklad.create_counterparty(name=name, email=email, phone=phone, group_id=group_id)
-    return {"MoySkladID": created["id"], "MoySkladUrl": created.get("meta", {}).get("uuidHref", "")}
+    return {
+        "MoySkladID": created["id"],
+        "MoySkladUrl": created.get("meta", {}).get("uuidHref", ""),
+        "CompanyName": name,
+        **moysklad_link_fields(created, name),
+    }
