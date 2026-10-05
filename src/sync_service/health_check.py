@@ -168,7 +168,7 @@ def _record(state: HealthState, errors: ErrorLog, result: CheckResult) -> None:
     if not result.ok and was_ok is not False:
         errors.add("health_check", result.detail or f"{result.label}: не работает")
     elif result.ok and was_ok is False:
-        errors.add("health_check", f"{result.label}: снова работает")
+        errors.add("health_check", f"{result.label}: снова работает", level="info")
     state.set_ok(result.name, result.ok)
 
 

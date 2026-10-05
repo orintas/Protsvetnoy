@@ -302,7 +302,7 @@ def _planfix_webhook(environ, start_response):
         return [b""]
     except Exception as error:
         ErrorLog().log_exception("planfix_webhook", error, context=f"Ошибка переноса контакта {contact_id} в МойСклад")
-        log.add("contact_sync", "error", f"Не удалось перенести контакт в МойСклад: {error}", contact_id, {"department": department_raw})
+        log.add("contact_sync", "error", "Не удалось перенести контакт в МойСклад — подробности в журнале «Ошибки»", contact_id, {"department": department_raw, "error_detail": str(error)})
         start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
         return [dumps({"error": "internal error"}, ensure_ascii=False).encode("utf-8")]
     finally:
@@ -381,8 +381,8 @@ def _dispatch(path, environ, start_response):
 .wrap{max-width:980px;margin:0 auto;padding:42px 22px 60px}.top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:22px}
 .brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.2px;cursor:pointer;background:none;border:0;color:inherit;font:inherit;padding:0}.mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#fff;box-shadow:0 8px 24px #8b7cff44;object-fit:contain;padding:6px}
 .status{color:var(--accent2);font-size:13px;background:none;border:0;font-family:inherit;cursor:pointer;padding:0}.status:before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 0;border-radius:50%;background:var(--accent2);box-shadow:0 0 12px var(--accent2)}.status.has-errors{color:#f87171}.status.has-errors:before{background:#f87171;box-shadow:0 0 12px #f87171}
-.tab-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:#dc2626;color:#fff;font-size:11px;font-weight:700}.log-row.unread{background:#dc262614}.log-row.unread .log-time{color:#f87171}
-.hero{max-width:710px;transition:.2s max-height,.2s opacity,.2s margin}.eyebrow{color:var(--accent2);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}.hero h1{font-size:clamp(34px,6vw,64px);line-height:1.02;letter-spacing:-.05em;margin:14px 0 20px}.hero p{color:var(--muted);font-size:18px;max-width:610px;margin:0}
+.tab-badge{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;line-height:1}.log-row.unread{background:#dc262614}.log-row.unread .log-time{color:#f87171}
+.hero{max-width:640px;transition:.2s max-height,.2s opacity,.2s margin}.hero h1{font-size:clamp(18px,2.2vw,22px);font-weight:600;line-height:1.3;letter-spacing:-.01em;margin:0 0 6px}.hero p{color:var(--muted);font-size:14px;max-width:560px;margin:0}
 .hero.compact{max-height:0;opacity:0;margin:0;overflow:hidden;pointer-events:none}
 .card{background:#121622cc;border:1px solid var(--line);border-radius:18px;padding:22px;backdrop-filter:blur(12px)}.card h2{font-size:17px;margin:0 0 6px}.card p{color:var(--muted);margin:0}
 .accordion+.accordion{margin-top:16px}.accordion-header{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap;cursor:pointer}.accordion-header>div{flex-wrap:wrap}.accordion-chevron{color:var(--muted);font-size:14px;flex-shrink:0;transition:.2s transform}.accordion.open .accordion-chevron{transform:rotate(90deg)}.accordion-body{margin-top:18px}.accordion-body[hidden]{display:none}
@@ -395,12 +395,12 @@ def _dispatch(path, environ, start_response):
 select.field{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239aa3b8'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:28px}
 .note{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:13px}.note strong{color:var(--text)}.toolbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:24px 0 14px;color:var(--muted);font-size:13px}.toolbar .field{min-width:190px}.toolbar input.field{flex:1}.table{overflow:auto;border:1px solid var(--line);border-radius:12px}.table table{border-collapse:collapse;width:100%;min-width:720px}.table th,.table td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line)}.table th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}.table td:first-child,.table th:first-child{width:55px;color:var(--muted);text-align:right}.table td span{color:var(--muted);font-size:13px}.badge{display:inline-block!important;padding:4px 8px;border-radius:7px;font-size:12px!important;color:#fff!important;background:#334155}.badge.missing{background:#2563eb}.badge.archive{background:#b45309}.badge.price{background:#7c3aed}.badge.no_price{background:#dc2626}.badge.success,.badge.sale{background:#16a34a}.badge.error{background:#dc2626}.badge.return{background:#d97706}.badge.dry-run{background:#475569}.table tr.blocked{opacity:.55}
 .progress-wrap{display:flex;align-items:center;gap:10px;font-size:13px;margin-top:14px}.progress-wrap[hidden]{display:none}.progress-bar{width:170px;height:8px;border-radius:6px;background:#1b2130;overflow:hidden;position:relative;flex-shrink:0}.progress-fill{position:absolute;top:0;left:-40%;width:40%;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--accent),var(--accent2));animation:progress-slide 1.1s ease-in-out infinite}@keyframes progress-slide{0%{left:-40%}50%{left:60%}100%{left:100%}}.export{margin-top:18px}.log{margin-top:20px;max-height:360px;overflow:auto;border-top:1px solid var(--line)}.log-row{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13px}.log-time{color:var(--muted);min-width:150px}.muted{color:var(--muted)}.error{color:#fca5a5;margin-top:20px}
-.tabs{display:flex;gap:8px;margin:18px 0 26px;border-bottom:1px solid var(--line);flex-wrap:wrap}.tab-btn,.modal-tab-btn{background:none;border:0;color:var(--muted);font:600 14px inherit;padding:12px 6px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s color,.15s border-color}.tab-btn.active,.modal-tab-btn.active{color:var(--text);border-bottom-color:var(--accent)}.tab-btn:hover,.modal-tab-btn:hover{color:var(--text)}.tab-panel{display:none}.tab-panel.active{display:block}
+.tabs{display:flex;gap:8px;margin:18px 0 26px;border-bottom:1px solid var(--line);flex-wrap:wrap}.tab-btn,.modal-tab-btn{flex-shrink:0;display:inline-flex;align-items:center;background:none;border:0;color:var(--muted);font:600 14px inherit;padding:12px 6px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s color,.15s border-color}.tab-btn.active,.modal-tab-btn.active{color:var(--text);border-bottom-color:var(--accent)}.tab-btn:hover,.modal-tab-btn:hover{color:var(--text)}.tab-panel{display:none}.tab-panel.active{display:block}
 @media(max-width:650px){.wrap{padding-top:24px}.top{margin-bottom:18px}.grid{grid-template-columns:1fr}.actions{flex-direction:column}.button{width:100%}.log-row{align-items:flex-start;flex-wrap:wrap}.log-time{min-width:130px}}
 </style></head>
 <body><main class="wrap">
 <header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><div style="display:flex;align-items:center;gap:14px"><button class="status" id="status-indicator" type="button">Система готова</button><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></div></header>
-<section class="hero" id="hero"><div class="eyebrow">Ассортимент · синхронизация</div><h1>Единый центр<br>управления интеграциями.</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
+<section class="hero" id="hero"><h1>Управление интеграциями</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
@@ -569,6 +569,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="shopify-warehouses" class="log"></div>
 </div>
 <div class="actions" style="margin-top:18px"><button class="button compact" id="save-settings" type="button">Сохранить</button><button class="button secondary compact" id="categories-close" type="button">Закрыть</button></div>
+<div id="settings-diff-summary" class="muted" style="margin-top:10px;font-size:13px"></div>
 </div></div>
 </main><script>
 const result=document.getElementById('result'), compare=document.getElementById('compare');
@@ -603,8 +604,8 @@ downloadCsvBtn.onclick=()=>download('csv');
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog(allLogEntries);}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
 function renderLog(entries){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim();
-target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+(docNumber(e)?' · '+docNumber(e):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
-target.querySelectorAll('[data-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.logIndex)]));}
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+escapeHtml(e.message)+(docNumber(e)?' · '+escapeHtml(docNumber(e)):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
+const rows=target.querySelectorAll('[data-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.logIndex)]));makeRowsKeyboardAccessible(rows);}
 let allLogEntries=[];
 let logSearchTimer=null;
 async function searchLog(){const query=(document.getElementById('log-search')?.value||'').trim();
@@ -612,16 +613,16 @@ if(!query){renderLog(allLogEntries);return;}
 try{const response=await fetch('/api/sync-log?q='+encodeURIComponent(query));renderLog(await response.json());}
 catch(error){document.getElementById('sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
 document.getElementById('log-search').oninput=()=>{clearTimeout(logSearchTimer);logSearchTimer=setTimeout(searchLog,300);};
-function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж',store:'Магазин',campaign_id:'Кампания',count:'Офферов',changes:'Изменения остатков (было → стало)'};}
+function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж',store:'Магазин',campaign_id:'Кампания',count:'Офферов',changes:'Изменения остатков (было → стало)',department:'Отдел',error_detail:'Техническая причина'};}
 function formatValue(key,value){if(value===null||value===undefined)return '—';
 if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??'');if(key==='sklep')return 'магазин #'+(value.id??'');if(key==='kasa')return 'касса #'+(value.id??'');if(key==='kasjer')return 'кассир #'+(value.id??'');if(Array.isArray(value)){if(key==='items')return value.map(it=>(it.offerId||it.offer_id||'?')+' × '+(it.count??it.quantity??'?')).join(', ');if(key==='platnosci')return value.map(p=>(p.wplata_waluta??'?')+' '+(p.kod_waluty??'')).join(', ');if(key==='changes')return value.length?('<div class="log">'+value.map(c=>'<div class="log-row"><span><b>'+c.sku+'</b></span><span>'+(c.before??'—')+' → '+c.after+'</span></div>').join('')+'</div>'):'нет изменений';return value.length+' элемент(ов)';}return JSON.stringify(value);}
-return String(value);}
+return escapeHtml(String(value));}
 function showLogDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
 const doc=docNumber(entry);
 title.textContent=(entry.kind==='sale'?'Продажа':entry.kind==='return'?'Возврат':entry.kind==='sale_error'?'Ошибка продажи':entry.kind==='return_error'?'Ошибка возврата':entry.kind==='order'?'Заказ':'Событие')+(doc?' · '+doc:'');
 let payload={};try{payload=JSON.parse(entry.payload);}catch(e){payload={};}
 const labels=fieldLabels();
-let rowsHtml='<dt>Сообщение</dt><dd>'+entry.message+'</dd><dt>Время проверки</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd>';
+let rowsHtml='<dt>Сообщение</dt><dd>'+escapeHtml(entry.message)+'</dd><dt>Время проверки</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd>';
 if(payload&&typeof payload==='object'&&!Array.isArray(payload)){
 rowsHtml+=Object.keys(payload).filter(k=>k!=='platnosci'||true).map(k=>'<dt>'+(labels[k]||k)+'</dt><dd>'+formatValue(k,payload[k])+'</dd>').join('');
 }
@@ -656,8 +657,8 @@ ymSearchResults=null;renderYmLog();}catch(error){allYmLogEntries=[];target.inner
 function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim();
 const source=ymSearchResults!==null?ymSearchResults:allYmLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · заказ '+e.external_id:'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-target.querySelectorAll('[data-ym-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));}
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+(e.external_id?' · заказ '+escapeHtml(e.external_id):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+const rows=target.querySelectorAll('[data-ym-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchYmLog(){const query=(document.getElementById('ym-log-search')?.value||'').trim();
 if(!query){ymSearchResults=null;renderYmLog();return;}
 try{const response=await fetch('/api/yandex-market-sync-log?q='+encodeURIComponent(query));ymSearchResults=await response.json();renderYmLog();}
@@ -676,8 +677,8 @@ planfixSearchResults=null;renderPlanfixLog();}catch(error){allPlanfixLogEntries=
 function renderPlanfixLog(){const target=document.getElementById('planfix-sync-log'), kind=document.getElementById('planfix-log-kind')?.value||'', query=(document.getElementById('planfix-log-search')?.value||'').trim();
 const source=planfixSearchResults!==null?planfixSearchResults:allPlanfixLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+(e.external_id?' · '+e.external_id:'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
-target.querySelectorAll('[data-planfix-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.planfixLogIndex)]));}
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+(e.status==='error'?' · ошибка':'')+'</b><span>'+escapeHtml(e.message)+(e.external_id?' · '+escapeHtml(e.external_id):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
+const rows=target.querySelectorAll('[data-planfix-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.planfixLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchPlanfixLog(){const query=(document.getElementById('planfix-log-search')?.value||'').trim();
 if(!query){planfixSearchResults=null;renderPlanfixLog();return;}
 try{const response=await fetch('/api/planfix-sync-log?q='+encodeURIComponent(query));planfixSearchResults=await response.json();renderPlanfixLog();}
@@ -687,6 +688,7 @@ document.getElementById('planfix-log-search').oninput=()=>{clearTimeout(planfixS
 document.getElementById('refresh-planfix-log').onclick=loadPlanfixLog;loadPlanfixLog();
 async function loadShopifyWarehouses(){const target=document.getElementById('shopify-warehouses');
 try{const response=await fetch('/api/shopify-warehouses');const data=await response.json();const available=data.available||[], selected=new Set(data.selection||[]);
+settingsBaseline.warehouses=data.selection||[];
 const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
 target.innerHTML=Object.keys(groups).length?Object.entries(groups).map(([country,items])=>'<div style="margin-bottom:14px"><div class="muted" style="margin-bottom:6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em">'+escapeHtml(country)+'</div>'+items.map(w=>'<label style="display:flex;align-items:center;gap:8px;padding:6px 0"><input type="checkbox" class="shopify-wh" value="'+encodeURIComponent(w.id)+'" '+(selected.has(w.id)?'checked':'')+'> '+escapeHtml(w.name)+'</label>').join('')+'</div>').join(''):'<p class="muted">Склады не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Не удалось загрузить склады: '+error.message+'</p>';}}
@@ -701,8 +703,8 @@ shopifySearchResults=null;renderShopifyLog();}catch(error){allShopifyLogEntries=
 function renderShopifyLog(){const target=document.getElementById('shopify-sync-log'), kind=document.getElementById('shopify-log-kind')?.value||'', query=(document.getElementById('shopify-log-search')?.value||'').trim();
 const source=shopifySearchResults!==null?shopifySearchResults:allShopifyLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-target.querySelectorAll('[data-shopify-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.shopifyLogIndex)]));}
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+const rows=target.querySelectorAll('[data-shopify-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.shopifyLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchShopifyLog(){const query=(document.getElementById('shopify-log-search')?.value||'').trim();
 if(!query){shopifySearchResults=null;renderShopifyLog();return;}
 try{const response=await fetch('/api/shopify-sync-log?q='+encodeURIComponent(query));shopifySearchResults=await response.json();renderShopifyLog();}
@@ -721,8 +723,8 @@ ozonSearchResults=null;renderOzonLog();}catch(error){allOzonLogEntries=[];target
 function renderOzonLog(){const target=document.getElementById('ozon-sync-log'), kind=document.getElementById('ozon-log-kind')?.value||'', query=(document.getElementById('ozon-log-search')?.value||'').trim();
 const source=ozonSearchResults!==null?ozonSearchResults:allOzonLogEntries;
 const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-target.querySelectorAll('[data-ozon-log-index]').forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ozonLogIndex)]));}
+target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
+const rows=target.querySelectorAll('[data-ozon-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ozonLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchOzonLog(){const query=(document.getElementById('ozon-log-search')?.value||'').trim();
 if(!query){ozonSearchResults=null;renderOzonLog();return;}
 try{const response=await fetch('/api/ozon-sync-log?q='+encodeURIComponent(query));ozonSearchResults=await response.json();renderOzonLog();}
@@ -744,7 +746,7 @@ const source=changesSearchResults!==null?changesSearchResults:allChangesLogEntri
 const filtered=source.filter(e=>!service||e.service===service);
 target.innerHTML=filtered.length?filtered.map((e,i)=>{const entityRef=e.entity_id?(e.link?'<a href="'+escapeHtml(e.link)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(e.entity_id)+'</a>':escapeHtml(e.entity_id)):'';
 return '<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge success">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(entityRef?' · '+entityRef:'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>';}).join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
-target.querySelectorAll('[data-changes-log-index]').forEach(row=>row.onclick=()=>showChangeDetail(filtered[Number(row.dataset.changesLogIndex)]));}
+const rows=target.querySelectorAll('[data-changes-log-index]');rows.forEach(row=>row.onclick=()=>showChangeDetail(filtered[Number(row.dataset.changesLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchChangesLog(){const query=(document.getElementById('changes-log-search')?.value||'').trim();
 if(!query){changesSearchResults=null;renderChangesLog();return;}
 try{const response=await fetch('/api/change-log?q='+encodeURIComponent(query));changesSearchResults=await response.json();renderChangesLog();}
@@ -760,27 +762,40 @@ document.getElementById('refresh-changes-log').onclick=loadChangesLog;loadChange
 loadShopifyWarehouses();
 async function loadShiftCloseLog(){const target=document.getElementById('shift-close-log');
 try{const response=await fetch('/api/shift-close-log');const data=await response.json();const entries=data.entries||[];
-target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+e.message+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
-target.querySelectorAll('[data-shift-log-index]').forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));}
+target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-shift-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+escapeHtml(e.kind)+(e.status==='error'?' · ошибка':'')+'</b><span>'+escapeHtml(e.message)+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">Проверок пока не было.</p>';
+const rows=target.querySelectorAll('[data-shift-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.shiftLogIndex)]));makeRowsKeyboardAccessible(rows);}
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 async function loadOpenShifts(){const target=document.getElementById('shift-open-list');
 try{const response=await fetch('/api/shift-open');const data=await response.json();const shifts=data.shifts||[];
 target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
 catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
 loadOpenShifts();loadShiftCloseLog();
+let settingsBaseline={novicloud:[],shopify:[],warehouses:[]};
+let settingsConfirmedDiff='';
+function arrayDiffCounts(before,after){const b=new Set(before),a=new Set(after);let added=0,removed=0;a.forEach(x=>{if(!b.has(x))added++;});b.forEach(x=>{if(!a.has(x))removed++;});return {added,removed};}
 async function loadCategories(){const target=document.getElementById('categories-list');
 try{const response=await fetch('/api/categories');const data=await response.json();const cats=data.categories||[], sel=data.selection||{novicloud:[],shopify:[]};
+settingsBaseline.novicloud=sel.novicloud;settingsBaseline.shopify=sel.shopify;
 target.innerHTML=cats.length?cats.map(c=>'<div class="log-row"><span style="flex:1"><strong>'+escapeHtml(c)+'</strong></span><label style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input type="checkbox" class="cat-novicloud" value="'+encodeURIComponent(c)+'" '+(sel.novicloud.includes(c)?'checked':'')+'> Novicloud</label><label style="display:flex;align-items:center;gap:6px;white-space:nowrap;margin-left:18px"><input type="checkbox" class="cat-shopify" value="'+encodeURIComponent(c)+'" '+(sel.shopify.includes(c)?'checked':'')+'> Shopify</label></div>').join(''):'<p class="muted">Категории не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Список категорий недоступен: '+escapeHtml(error.message)+'</p>';}}
-document.getElementById('save-settings').onclick=async()=>{const btn=document.getElementById('save-settings');btn.disabled=true;btn.textContent='Сохраняем…';
+document.getElementById('save-settings').onclick=async()=>{const btn=document.getElementById('save-settings'), summaryEl=document.getElementById('settings-diff-summary');
 const novicloud=[...document.querySelectorAll('.cat-novicloud:checked')].map(x=>decodeURIComponent(x.value));
 const shopify=[...document.querySelectorAll('.cat-shopify:checked')].map(x=>decodeURIComponent(x.value));
 const warehouseIds=[...document.querySelectorAll('.shopify-wh:checked')].map(x=>decodeURIComponent(x.value));
+const dn=arrayDiffCounts(settingsBaseline.novicloud,novicloud), ds=arrayDiffCounts(settingsBaseline.shopify,shopify), dw=arrayDiffCounts(settingsBaseline.warehouses,warehouseIds);
+const parts=[];
+if(dn.added||dn.removed)parts.push('Novicloud: +'+dn.added+' / −'+dn.removed);
+if(ds.added||ds.removed)parts.push('Shopify: +'+ds.added+' / −'+ds.removed);
+if(dw.added||dw.removed)parts.push('Склады: +'+dw.added+' / −'+dw.removed);
+const diffKey=parts.join('|');
+if(diffKey&&diffKey!==settingsConfirmedDiff){settingsConfirmedDiff=diffKey;summaryEl.textContent='Изменится — '+parts.join(', ')+'. Нажмите «Подтвердить сохранение», чтобы применить.';btn.textContent='Подтвердить сохранение';return;}
+settingsConfirmedDiff='';summaryEl.textContent='';btn.disabled=true;btn.textContent='Сохраняем…';
 try{
 await Promise.all([
 fetch('/api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({novicloud,shopify})}),
 fetch('/api/shopify-warehouses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(warehouseIds)}),
 ]);
+settingsBaseline={novicloud,shopify,warehouses:warehouseIds};
 btn.textContent='Сохранено ✓';
 setTimeout(()=>{btn.disabled=false;btn.textContent='Сохранить';},1500);
 }catch(error){
@@ -796,6 +811,7 @@ document.querySelectorAll('#modal-tabs .modal-tab-btn').forEach(btn=>btn.onclick
 function openCategoriesModal(tab){categoriesModal.classList.add('open');
 document.getElementById('categories-list').innerHTML='<p class="muted">Загрузка…</p>';
 document.getElementById('shopify-warehouses').innerHTML='<p class="muted">Загрузка…</p>';
+settingsConfirmedDiff='';document.getElementById('settings-diff-summary').textContent='';document.getElementById('save-settings').textContent='Сохранить';
 loadCategories();loadShopifyWarehouses();switchModalTab(tab);}
 document.querySelectorAll('.open-categories').forEach(btn=>btn.onclick=()=>openCategoriesModal(btn.dataset.modalTab));
 document.getElementById('categories-close').onclick=closeCategoriesModal;
@@ -803,19 +819,20 @@ document.getElementById('categories-close-x').onclick=closeCategoriesModal;
 categoriesModal.onclick=e=>{if(e.target===categoriesModal)closeCategoriesModal();};
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function entityLink(payloadRaw){try{const p=typeof payloadRaw==='string'?JSON.parse(payloadRaw):payloadRaw;if(p&&p.moysklad_url)return ' · <a href="'+escapeHtml(p.moysklad_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(p.moysklad_label||p.moysklad_url)+'</a>';}catch(error){}return '';}
+function makeRowsKeyboardAccessible(rows){rows.forEach(row=>{row.setAttribute('tabindex','0');row.setAttribute('role','button');row.onkeydown=e=>{if(e.target.closest('a'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();row.onclick&&row.onclick();}};});}
 let lastErrors=[];
 function renderErrors(){const target=document.getElementById('error-log');
-target.innerHTML=lastErrors.length?lastErrors.map((e,i)=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge error">'+escapeHtml(e.source)+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>';
-target.querySelectorAll('[data-error-index]').forEach(row=>row.onclick=()=>showErrorDetail(lastErrors[Number(row.dataset.errorIndex)]));}
+target.innerHTML=lastErrors.length?lastErrors.map((e,i)=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+(e.level==='info'?'success':'error')+'">'+escapeHtml(e.source)+(e.level==='info'?' · восстановлено':'')+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>';
+const rows=target.querySelectorAll('[data-error-index]');rows.forEach(row=>row.onclick=()=>showErrorDetail(lastErrors[Number(row.dataset.errorIndex)]));makeRowsKeyboardAccessible(rows);}
 function showErrorDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
-title.textContent='Ошибка · '+entry.source;
+title.textContent=(entry.level==='info'?'Восстановлено · ':'Ошибка · ')+entry.source;
 body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Источник</dt><dd>'+escapeHtml(entry.source)+'</dd><dt>Сообщение</dt><dd>'+escapeHtml(entry.message)+'</dd><dt>Подробности</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:320px;overflow:auto">'+escapeHtml(entry.details||'')+'</pre></dd>';
 modal.classList.add('open');}
 function updateErrorStatus(count){const indicator=document.getElementById('status-indicator'), badge=document.getElementById('errors-tab-badge');
 if(count>0){indicator.textContent='Есть ошибки ('+count+')';indicator.classList.add('has-errors');badge.textContent=String(count);badge.hidden=false;}
 else{indicator.textContent='Система готова';indicator.classList.remove('has-errors');badge.hidden=true;}}
 async function refreshErrorStatus(){try{const response=await fetch('/api/errors');const data=await response.json();updateErrorStatus(data.unread_count);}catch(error){}}
-async function openErrorsTab(){activateTab('errors');hero.classList.add('compact');
+async function openErrorsTab(){activateTab('errors');hero.classList.add('compact');updateHash('errors');
 try{const response=await fetch('/api/errors');const data=await response.json();lastErrors=data.errors||[];renderErrors();
 fetch('/api/errors/read',{method:'POST'}).then(()=>updateErrorStatus(0));}
 catch(error){document.getElementById('error-log').innerHTML='<p class="error">Журнал ошибок недоступен: '+escapeHtml(error.message)+'</p>';}}
@@ -824,15 +841,35 @@ document.getElementById('status-indicator').onclick=openErrorsTab;
 refreshErrorStatus();setInterval(refreshErrorStatus,60000);
 const hero=document.getElementById('hero');
 function activateTab(name){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='tab-'+name));}
+function currentTab(){return document.querySelector('.tab-btn.active')?.dataset.tab||'catalog';}
+function updateHash(tab,sectionId){history.replaceState(null,'',sectionId?('#tab='+tab+'&section='+sectionId):('#tab='+tab));}
 function closeAccordions(){document.querySelectorAll('.accordion').forEach(s=>{s.classList.remove('open');s.querySelector('.accordion-body').hidden=true;});}
-function openAccordion(id){closeAccordions();const section=document.getElementById(id);section.classList.add('open');section.querySelector('.accordion-body').hidden=false;hero.classList.add('compact');}
-function toggleAccordion(section){if(section.classList.contains('open')){closeAccordions();}else{openAccordion(section.id);}}
+function openAccordion(id){closeAccordions();const section=document.getElementById(id);section.classList.add('open');section.querySelector('.accordion-body').hidden=false;hero.classList.add('compact');updateHash(currentTab(),id);}
+function toggleAccordion(section){if(section.classList.contains('open')){closeAccordions();updateHash(currentTab());}else{openAccordion(section.id);}}
 document.querySelectorAll('.accordion-header').forEach(header=>{
 header.onclick=e=>{if(e.target.closest('button'))return;toggleAccordion(header.closest('.accordion'));};
 header.onkeydown=e=>{if(e.target.closest('button'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();toggleAccordion(header.closest('.accordion'));}};
 });
-document.querySelectorAll('.tab-btn').forEach(btn=>{btn.onclick=btn.dataset.tab==='errors'?openErrorsTab:()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');};});
-document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');closeAccordions();};
+document.querySelectorAll('.tab-btn').forEach(btn=>{btn.onclick=btn.dataset.tab==='errors'?openErrorsTab:()=>{activateTab(btn.dataset.tab);hero.classList.add('compact');updateHash(btn.dataset.tab);};});
+document.getElementById('brand-home').onclick=()=>{activateTab('catalog');hero.classList.remove('compact');closeAccordions();updateHash('catalog');};
+(function restoreFromHash(){const h=location.hash.slice(1);if(!h)return;const params=new URLSearchParams(h);const tab=params.get('tab'),section=params.get('section');
+if(tab==='errors'){openErrorsTab();}else if(tab&&document.querySelector('.tab-btn[data-tab="'+tab+'"]')){activateTab(tab);hero.classList.add('compact');}
+if(section&&document.getElementById(section)){openAccordion(section);}
+})();
+let modalReturnFocus=null;
+function modalFocusables(modal){return [...modal.querySelectorAll('button,a[href],input,select,textarea,[tabindex]')].filter(el=>!el.disabled&&el.tabIndex!==-1&&el.offsetParent!==null);}
+new MutationObserver(muts=>{muts.forEach(m=>{const el=m.target;if(!(el instanceof Element)||!el.classList.contains('modal-overlay'))return;
+if(el.classList.contains('open')){modalReturnFocus=document.activeElement;const focusables=modalFocusables(el);(focusables[0]||el).focus();}
+else if(modalReturnFocus){modalReturnFocus.focus();modalReturnFocus=null;}
+});}).observe(document.body,{attributes:true,attributeFilter:['class'],subtree:true});
+document.addEventListener('keydown',e=>{const modal=document.querySelector('.modal-overlay.open');if(!modal)return;
+if(e.key==='Escape'){modal.classList.remove('open');return;}
+if(e.key!=='Tab')return;
+const focusables=modalFocusables(modal);if(!focusables.length)return;
+const first=focusables[0],last=focusables[focusables.length-1];
+if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+});
 </script></body></html>""".encode("utf-8")
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [body]

@@ -13,6 +13,33 @@ def test_error_log_tracks_unread_count(tmp_path):
     assert log.recent()[0]["read_at"] is not None
 
 
+def test_add_defaults_to_error_level_and_accepts_info(tmp_path):
+    log = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    log.add("moysklad", "GET /entity/product failed with HTTP 500")
+    log.add("health_check", "X: снова работает", level="info")
+
+    entries = log.recent()
+    assert entries[0]["level"] == "info"
+    assert entries[1]["level"] == "error"
+
+
+def test_migrates_an_existing_table_missing_the_level_column(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "errors.sqlite3")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            """CREATE TABLE error_log (
+            id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, source TEXT NOT NULL,
+            message TEXT NOT NULL, details TEXT NOT NULL, read_at TEXT)"""
+        )
+
+    log = ErrorLog(path)  # migration runs on open
+    log.add("moysklad", "GET /entity/product failed with HTTP 500")
+
+    assert log.recent()[0]["level"] == "error"
+
+
 def test_log_exception_captures_traceback(tmp_path):
     log = ErrorLog(str(tmp_path / "errors.sqlite3"))
     try:

@@ -224,7 +224,9 @@ def test_record_logs_recovery_once_when_it_comes_back(tmp_path):
     entries = errors.recent()
     assert len(entries) == 2
     assert entries[0]["message"] == "X: снова работает"  # most recent first
+    assert entries[0]["level"] == "info"  # a recovery notice, not a real failure
     assert entries[1]["message"] == "X сломан"
+    assert entries[1]["level"] == "error"
 
 
 def test_record_skips_not_applicable_results(tmp_path):

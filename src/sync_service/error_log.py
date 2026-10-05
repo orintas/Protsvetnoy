@@ -26,12 +26,21 @@ class ErrorLog:
                 id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, source TEXT NOT NULL,
                 message TEXT NOT NULL, details TEXT NOT NULL, read_at TEXT)"""
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(error_log)")}
+            if "level" not in columns:
+                db.execute("ALTER TABLE error_log ADD COLUMN level TEXT")
 
-    def add(self, source: str, message: str, details: str = "") -> None:
+    def add(self, source: str, message: str, details: str = "", *, level: str = "error") -> None:
+        """`level` distinguishes a real unresolved failure ("error", the
+        default) from an informational recovery notice ("info", e.g. a
+        health check reporting something that was failing now works again)
+        — both share this table so the UI can show them together, but a
+        recovery notice must not look identical to a real failure (badge
+        color alone used to be the only differentiator)."""
         with sqlite3.connect(self.path) as db:
             db.execute(
-                "INSERT INTO error_log(created_at,source,message,details,read_at) VALUES(?,?,?,?,NULL)",
-                (datetime.now(timezone.utc).isoformat(), source, message, details),
+                "INSERT INTO error_log(created_at,source,message,details,read_at,level) VALUES(?,?,?,?,NULL,?)",
+                (datetime.now(timezone.utc).isoformat(), source, message, details, level),
             )
 
     def log_exception(self, source: str, error: BaseException, context: str = "") -> None:
