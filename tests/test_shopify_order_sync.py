@@ -3,7 +3,6 @@ import hashlib
 import hmac
 
 from sync_service.shopify_order_sync import (
-    BALTIC_WAREHOUSE_CHAIN,
     COUNTRY_AGENTS,
     CURRENCY_ID,
     GROUP_ID,
@@ -13,7 +12,6 @@ from sync_service.shopify_order_sync import (
     PLN_CURRENCY_ID,
     POLAND_WAREHOUSE_CHAIN,
     PROJECT_EUROPE_ID,
-    ULEMISTE_STORE_ID,
     WOLA_PARK_STORE_ID,
     process_new_order,
     verify_webhook_signature,
@@ -89,25 +87,21 @@ def test_creates_order_from_main_warehouse_when_stock_available(tmp_path):
     assert kinds == ["order_created"]
 
 
-def test_falls_back_to_ulemiste_when_main_warehouse_lacks_stock(tmp_path):
+def test_baltic_orders_always_use_the_main_warehouse_even_without_stock(tmp_path):
+    """No fallback store for Finland/Estonia/Latvia/Lithuania — per explicit
+    request, the warehouse is always ProTsvetnoy OU regardless of stock."""
     log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
-    moysklad = FakeMoySklad(
-        products={"ABC": _product("ABC")},
-        stock_by_store={
-            MAIN_STORE_ID: [{"code": "ABC", "quantity": 0}],
-            ULEMISTE_STORE_ID: [{"code": "ABC", "quantity": 3}],
-        },
-    )
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 0}]})
     process_new_order(order=_order(country_code="LV"), moysklad=moysklad, log=log)
-    assert moysklad.created["store_id"] == ULEMISTE_STORE_ID
+    assert moysklad.created["store_id"] == MAIN_STORE_ID
     assert moysklad.created["agent_id"] == COUNTRY_AGENTS["LV"]
 
 
-def test_baltic_chain_falls_back_to_last_store_even_when_insufficient_everywhere(tmp_path):
+def test_baltic_orders_use_the_main_warehouse_when_stock_is_sufficient(tmp_path):
     log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
-    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={})
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 3}]})
     process_new_order(order=_order(country_code="FI"), moysklad=moysklad, log=log)
-    assert moysklad.created["store_id"] == BALTIC_WAREHOUSE_CHAIN[-1] == ULEMISTE_STORE_ID
+    assert moysklad.created["store_id"] == MAIN_STORE_ID
 
 
 def test_poland_orders_use_pln_currency_and_presentment_price(tmp_path):

@@ -42,11 +42,11 @@ PLN_CURRENCY_ID = "cae74fea-26ec-11ee-0a80-02b4000b49e4"  # PLN, злотый �
 NEW_STATE_ID = "4102d27f-ab05-11e4-90a2-8ecb0016c16c"  # customerorder state "Новый"
 PROJECT_EUROPE_ID = "aa777526-bab4-11ea-0a80-030400080408"  # project "Европа" — per explicit request, every new Shopify order is tagged with it
 
-# Baltic + Finland: ship from the main warehouse first, Ulemiste as fallback.
+# Baltic + Finland: always ship from this one warehouse — per explicit
+# request, no fallback to another store even when it's short on stock.
 MAIN_STORE_ID = "d9a80084-1bf4-11ea-0a80-057b000493d9"  # warehouse "ProTsvetnoy OU"
-ULEMISTE_STORE_ID = "70633779-2d92-11ec-0a80-00c500080605"  # "Ulemiste keskus"
 BALTIC_COUNTRIES = {"FI", "EE", "LV", "LT"}
-BALTIC_WAREHOUSE_CHAIN = [MAIN_STORE_ID, ULEMISTE_STORE_ID]
+BALTIC_WAREHOUSE_CHAIN = [MAIN_STORE_ID]
 
 # Rest of Europe: Wola Park first, then any other active Poland store —
 # the full live list under the Poland organization (entity/retailstore),
