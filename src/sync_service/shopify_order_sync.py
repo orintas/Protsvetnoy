@@ -128,16 +128,56 @@ def _format_address(order: dict[str, Any]) -> str:
     return ", ".join(str(part) for part in parts if part)
 
 
+def _format_discount_codes(order: dict[str, Any]) -> str:
+    """Promo codes actually applied to the order (order["discount_codes"]) —
+    surfaced in the document description alongside the per-position
+    "discount" percentage _line_item_discount_percent computes."""
+    codes = [str(entry.get("code")) for entry in order.get("discount_codes") or [] if entry.get("code")]
+    return ", ".join(codes)
+
+
 def _line_item_price(item: dict[str, Any], *, use_presentment: bool) -> float:
     """Shopify's `price` field (and price_set.shop_money, which always
     matches it) is in the shop's base currency (EUR). Polish orders need
     the actual PLN amount the customer was charged — that's
-    price_set.presentment_money, same per-unit granularity as `price`."""
+    price_set.presentment_money, same per-unit granularity as `price`.
+
+    Both are the PRE-discount unit price, left as-is here on purpose — a
+    promo code's effect goes on MoySklad's own position "discount"
+    percentage field instead (see _line_item_discount_percent), not folded
+    into this price, per explicit request."""
     if use_presentment:
         presentment = ((item.get("price_set") or {}).get("presentment_money") or {}).get("amount")
         if presentment is not None:
             return float(presentment)
     return float(item.get("price") or 0)
+
+
+def _line_item_discount_percent(item: dict[str, Any], *, price: float, use_presentment: bool) -> float:
+    """MoySklad's customerorder position has its own "discount" field — a
+    percentage (0-100) applied to price*quantity, confirmed live 2026-10-06
+    against a real position (`"price": 631.0, "discount": 0.0`). Computed
+    from Shopify's discount_allocations, the only place a promo code's
+    effect actually shows up (a line item's own total_discount stays
+    "0.00" even when a code was applied). discount_allocations' amount is
+    for the line as a whole (quantity included, not per unit — confirmed
+    against a real qty=4 line item, where it was exactly 4x a single
+    unit's discount), which is exactly the base price*quantity is taken
+    against, so no separate division by quantity is needed here."""
+    currency_key = "presentment_money" if use_presentment else "shop_money"
+    discount_total = 0.0
+    for allocation in item.get("discount_allocations") or []:
+        amount = ((allocation.get("amount_set") or {}).get(currency_key) or {}).get("amount")
+        if amount is None:
+            amount = allocation.get("amount")
+        try:
+            discount_total += float(amount)
+        except (TypeError, ValueError):
+            pass
+    line_total = price * (item.get("quantity") or 1)
+    if not discount_total or not line_total:
+        return 0.0
+    return round(discount_total / line_total * 100, 2)
 
 
 def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]], *, use_presentment_price: bool) -> tuple[list[dict[str, Any]], list[str]]:
@@ -149,11 +189,16 @@ def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]],
         if product is None:
             missing_skus.append(sku or "(пусто)")
             continue
-        positions.append({
+        price = _line_item_price(item, use_presentment=use_presentment_price)
+        discount_percent = _line_item_discount_percent(item, price=price, use_presentment=use_presentment_price)
+        position: dict[str, Any] = {
             "quantity": item.get("quantity") or 1,
-            "price": round(_line_item_price(item, use_presentment=use_presentment_price) * 100),
+            "price": round(price * 100),
             "assortment": {"meta": product["meta"]},
-        })
+        }
+        if discount_percent:
+            position["discount"] = discount_percent
+        positions.append(position)
     return positions, missing_skus
 
 
@@ -205,7 +250,13 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
         store_id = _pick_store(moysklad, country_code, skus_needed)
 
         address = _format_address(order)
-        description = f"{order_name}\nАдрес доставки: {address}" if address else order_name
+        discount_codes = _format_discount_codes(order)
+        description_lines = [order_name]
+        if address:
+            description_lines.append(f"Адрес доставки: {address}")
+        if discount_codes:
+            description_lines.append(f"Промокод: {discount_codes}")
+        description = "\n".join(description_lines)
         created_order = moysklad.create_customer_order(
             moment=_moysklad_moment(order.get("created_at")),
             organization_id=ORGANIZATION_ID,

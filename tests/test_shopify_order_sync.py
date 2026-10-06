@@ -44,7 +44,7 @@ def _product(code):
     return {"meta": {"href": f"https://api.moysklad.ru/api/remap/1.2/entity/product/{code}", "type": "product"}}
 
 
-def _order(order_id=1001, name="#7775", country_code="EE", line_items=None):
+def _order(order_id=1001, name="#7775", country_code="EE", line_items=None, discount_codes=None):
     return {
         "id": order_id,
         "name": name,
@@ -60,6 +60,7 @@ def _order(order_id=1001, name="#7775", country_code="EE", line_items=None):
             "phone": "+3725551234",
         },
         "line_items": line_items if line_items is not None else [{"sku": "ABC", "quantity": 1, "price": "14.00"}],
+        "discount_codes": discount_codes or [],
     }
 
 
@@ -144,6 +145,86 @@ def test_non_poland_orders_still_use_eur_and_shop_price(tmp_path):
     process_new_order(order=order, moysklad=moysklad, log=log)
     assert moysklad.created["currency_id"] == CURRENCY_ID
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_promo_code_sets_discount_percent_and_keeps_full_price(tmp_path):
+    """Shapes taken from a real discounted order (code MINUS10, confirmed
+    live 2026-10-06): price "18.00", discount_allocations amount "1.80" —
+    10%. MoySklad gets the full price plus its own "discount" percentage
+    field (per explicit request), not an already-discounted price."""
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    order = _order(country_code="EE", line_items=[{
+        "sku": "ABC", "quantity": 1, "price": "18.00",
+        "price_set": {"shop_money": {"amount": "18.00", "currency_code": "EUR"}, "presentment_money": {"amount": "18.00", "currency_code": "EUR"}},
+        "discount_allocations": [{"amount": "1.80", "amount_set": {"shop_money": {"amount": "1.80", "currency_code": "EUR"}, "presentment_money": {"amount": "1.80", "currency_code": "EUR"}}, "discount_application_index": 0}],
+    }])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1800, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_promo_code_discount_percent_accounts_for_line_quantity(tmp_path):
+    """Shapes taken from a real order (4x the same SKU, code applied once):
+    price "1.00"/unit, discount_allocations amount "0.40" for the WHOLE
+    line (not per unit) — confirmed live 2026-10-06. discount_allocations'
+    base is price*quantity (1.00*4=4.00), so 0.40/4.00 = 10%, same as a
+    single unit would get — not 0.40/1.00 = 40%."""
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 10}]})
+    order = _order(country_code="EE", line_items=[{
+        "sku": "ABC", "quantity": 4, "price": "1.00",
+        "discount_allocations": [{"amount": "0.40", "amount_set": {"shop_money": {"amount": "0.40", "currency_code": "EUR"}, "presentment_money": {"amount": "0.40", "currency_code": "EUR"}}, "discount_application_index": 0}],
+    }])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["positions"] == [{"quantity": 4, "price": 100, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_promo_code_discount_percent_uses_presentment_amounts_for_poland(tmp_path):
+    """Shapes taken from a real Polish order: shop price "34.70" EUR,
+    presentment "152.00" PLN, discount_allocations "3.47" EUR /
+    "15.20" PLN — the percentage must come from the PLN figures (15.20/152
+    = 10%) since that's the currency the position's price itself is in,
+    not the EUR ones leaking in and producing a wrong percentage."""
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={WOLA_PARK_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    order = _order(country_code="PL", line_items=[{
+        "sku": "ABC", "quantity": 1, "price": "34.70",
+        "price_set": {"shop_money": {"amount": "34.70", "currency_code": "EUR"}, "presentment_money": {"amount": "152.00", "currency_code": "PLN"}},
+        "discount_allocations": [{"amount": "3.47", "amount_set": {"shop_money": {"amount": "3.47", "currency_code": "EUR"}, "presentment_money": {"amount": "15.20", "currency_code": "PLN"}}, "discount_application_index": 0}],
+    }])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 15200, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+
+
+def test_promo_code_is_added_to_the_order_description(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    order = _order(discount_codes=[{"code": "MINUS10", "amount": "6.00", "type": "percentage"}])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["description"] == "#7775\nАдрес доставки: Jane Doe, Main St 1, Tallinn, 10111, Estonia, +3725551234\nПромокод: MINUS10"
+
+
+def test_multiple_promo_codes_are_joined_in_the_description(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    order = _order(discount_codes=[{"code": "MINUS10"}, {"code": "WELCOME5"}])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert "Промокод: MINUS10, WELCOME5" in moysklad.created["description"]
+
+
+def test_no_promo_code_leaves_description_unchanged(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    process_new_order(order=_order(), moysklad=moysklad, log=log)
+    assert "Промокод" not in moysklad.created["description"]
+
+
+def test_no_discount_allocations_leaves_price_unchanged(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
+    order = _order(country_code="EE", line_items=[{"sku": "ABC", "quantity": 1, "price": "18.00"}])
+    process_new_order(order=order, moysklad=moysklad, log=log)
+    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1800, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_rest_of_europe_uses_wola_park_first(tmp_path):
