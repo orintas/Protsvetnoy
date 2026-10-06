@@ -5,6 +5,7 @@ from sync_service.yandex_market_order_sync import (
     DELIVERING_STATE_ID,
     GROUP_ID,
     MAX_LABEL_RETRIES,
+    ORGANIZATION_ID,
     OWNER_EMPLOYEE_ID,
     handle_order_cancelled,
     notify_courier_arrived,
@@ -16,11 +17,16 @@ from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 
 class FakeMoySklad:
-    def __init__(self, products=None, existing_order=None):
+    def __init__(self, products=None, existing_order=None, order_positions=None, create_loss_error=False):
         self.products = products or {}
         self.existing_order = existing_order
         self.created = None
         self.state_updates = []
+        self.order_positions = order_positions if order_positions is not None else [
+            {"quantity": 1.0, "assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/prod-1"}}}
+        ]
+        self.create_loss_error = create_loss_error
+        self.losses_created = []
 
     def customer_order_by_external_code(self, external_code):
         return self.existing_order
@@ -34,6 +40,15 @@ class FakeMoySklad:
 
     def update_customer_order_state(self, order_id, state_id, *, previous_state_id=None):
         self.state_updates.append((order_id, state_id))
+
+    def customer_order_positions(self, order_id):
+        return self.order_positions
+
+    def create_loss(self, **kwargs):
+        if self.create_loss_error:
+            raise RuntimeError("boom loss")
+        self.losses_created.append(kwargs)
+        return {"id": "loss-1", "name": "8д900", "meta": {"uuidHref": "https://online.moysklad.ru/app/#loss/edit?id=loss-1"}}
 
 
 class FakeYandex:
@@ -413,6 +428,82 @@ def test_handle_order_cancelled_still_notifies_telegram_when_order_missing_from_
     assert len(telegram.messages) == 1  # still worth knowing about, even if MoySklad wasn't updated
     kinds = [e["kind"] for e in log.recent()]
     assert "order_cancel_error" in kinds
+
+
+def test_handle_order_cancelled_creates_loss_and_notifies_on_shop_failed(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(moysklad.losses_created) == 1
+    created = moysklad.losses_created[0]
+    assert created["organization_id"] == ORGANIZATION_ID
+    assert created["store_id"] == CAMPAIGN_STORES["149179260"]
+    assert created["positions"] == [{"quantity": 1.0, "assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/prod-1"}}}]
+    text = telegram.messages[0][1]
+    assert "Создано списание в МойСклад" in text
+    assert "8д900" in text
+    kinds = [e["kind"] for e in log.recent()]
+    assert "loss_created" in kinds
+
+
+def test_handle_order_cancelled_does_not_create_loss_for_buyer_cancellation(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.losses_created == []
+    assert "списание" not in telegram.messages[0][1].lower()
+
+
+def test_handle_order_cancelled_does_not_create_loss_twice_on_redelivered_webhook(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(moysklad.losses_created) == 1
+
+
+def test_handle_order_cancelled_skips_loss_when_store_unknown_for_campaign(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"})
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=999999999, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.losses_created == []
+    assert len(telegram.messages) == 1  # cancellation notice still goes out
+
+
+def test_handle_order_cancelled_reports_loss_failure_without_blocking_cancellation(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "order-1"}, create_loss_error=True)
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert len(telegram.messages) == 1
+    assert "Создано списание" not in telegram.messages[0][1]
+    kinds = [e["kind"] for e in log.recent()]
+    assert "loss_create_error" in kinds
+    assert "cancel_notified" in kinds  # still notified despite the loss failure
+
+
+def test_handle_order_cancelled_skips_loss_when_order_missing_from_moysklad(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order=None)
+    telegram = FakeTelegram()
+
+    handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="SHOP_FAILED", moysklad=moysklad, telegram=telegram, telegram_chat_id="-100123", log=log)
+
+    assert moysklad.losses_created == []
 
 
 def test_handle_order_cancelled_skips_telegram_when_not_configured(tmp_path):

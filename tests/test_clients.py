@@ -200,6 +200,87 @@ def test_counterparty_report_returns_stats():
     assert client.counterparty_report("cp-1") == {"demandsCount": 5}
 
 
+def test_stock_by_products_builds_filter_with_products_and_store():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"rows": [{"code": "MG2466", "stock": 1, "reserve": 1, "quantity": 0}]})
+
+    client = _moysklad_client_with_handler(handler)
+    rows = client.stock_by_products(["p1", "p2"], store_id="s1")
+
+    assert requests[0].url.path.endswith("/report/stock/all")
+    filter_value = requests[0].url.params["filter"]
+    assert "product=" in filter_value and "p1" in filter_value
+    assert "p2" in filter_value
+    assert "store=" in filter_value and "s1" in filter_value
+    assert rows[0]["code"] == "MG2466"
+
+
+def test_customer_order_positions_lists_rows_with_assortment_expanded():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/entity/customerorder/order-1/positions")
+        assert request.url.params["expand"] == "assortment"
+        return httpx.Response(200, json={"rows": [{"id": "pos-1", "assortment": {"code": "MG2466"}}]})
+
+    client = _moysklad_client_with_handler(handler)
+    positions = client.customer_order_positions("order-1")
+
+    assert positions == [{"id": "pos-1", "assortment": {"code": "MG2466"}}]
+
+
+def test_create_customer_order_includes_project_when_given():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"name": "00042"})
+
+    client = _moysklad_client_with_handler(handler)
+    client.create_customer_order(
+        moment="2026-10-06 00:00:00", organization_id="org-1", agent_id="agent-1", store_id="store-1",
+        external_code="ext-1", positions=[], project_id="project-1",
+    )
+
+    body = requests[0].content.decode("utf-8")
+    assert "entity/project/project-1" in body
+
+
+def test_create_customer_order_omits_project_when_not_given():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"name": "00042"})
+
+    client = _moysklad_client_with_handler(handler)
+    client.create_customer_order(moment="2026-10-06 00:00:00", organization_id="org-1", agent_id="agent-1", store_id="store-1", external_code="ext-1", positions=[])
+
+    body = requests[0].content.decode("utf-8")
+    assert "entity/project" not in body
+
+
+def test_create_loss_posts_expected_body():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": "loss-1", "name": "8д900", "meta": {"uuidHref": "https://x/loss-1"}})
+
+    client = _moysklad_client_with_handler(handler)
+    positions = [{"quantity": 1.0, "assortment": {"meta": {"href": "https://x/entity/product/p1"}}}]
+    result = client.create_loss(organization_id="org-1", store_id="store-1", positions=positions, description="тест")
+
+    assert requests[0].method == "POST"
+    assert requests[0].url.path.endswith("/entity/loss")
+    body = requests[0].content.decode("utf-8")
+    assert "entity/organization/org-1" in body
+    assert "entity/store/store-1" in body
+    assert "тест" in body
+    assert result["name"] == "8д900"
+
+
 def test_set_position_slot_puts_slot_meta():
     requests: list[httpx.Request] = []
 

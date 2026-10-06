@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Protocol
 
@@ -27,7 +28,7 @@ DEFAULT_QUESTION = "Какой сейчас статус этого заказа
 # under.
 SYSTEM_PROMPT = """Ты — помощник склада цветочного магазина «Varvikas | Цветной» в рабочем чате Telegram, где сборщики читают этикетки заказов и иногда спрашивают про них — ответом на сообщение, номером заказа или фото чека/этикетки.
 
-Тебе передают данные одного конкретного заказа (из МойСклад и, если есть, с площадки — Яндекс.Маркет или OZON, включая данные о курьере) и вопрос сотрудника о нём. Отвечай кратко, по-русски, только на основе переданных данных. Если в данных нет ответа на вопрос — так и скажи, не придумывай.
+Тебе передают данные одного конкретного заказа (из МойСклад и, если есть, с площадки — Яндекс.Маркет или OZON, включая данные о курьере; для вопросов про остатки — текущий остаток в МойСклад на складе заказа и остаток, который сервис передавал на Яндекс.Маркет или OZON ближе к моменту заказа) и вопрос сотрудника о нём. Отвечай кратко, по-русски, только на основе переданных данных. Если в данных нет ответа на вопрос — так и скажи, не придумывай.
 
 Ты не можешь ничего изменить в заказе — ни отменить, ни поменять статус, ни связаться с курьером или покупателем. Если сотрудник просит об этом — объясни, что сам ты этого сделать не можешь, и что нужно сделать вручную (в МойСклад и/или в личном кабинете площадки). Никогда не пиши, что что-то сделал или меняешь.
 
@@ -145,6 +146,112 @@ def _courier_line(marketplace: str, details: dict[str, Any]) -> str | None:
     return None
 
 
+def _store_id_from_order(order: dict) -> str | None:
+    href = ((order.get("store") or {}).get("meta") or {}).get("href", "")
+    return href.rstrip("/").split("/")[-1] or None
+
+
+_MARKETPLACE_STOCK_LOG = {
+    # (log attribute name chosen by the caller, sync-log kind, display name)
+    "yandex_market": ("stock_sync", "Яндекс.Маркете"),
+    "ozon": ("ozon_stock_sync", "OZON"),
+}
+
+
+def _closest_stock_history_lines(*, log: YandexMarketSyncLog, codes: list[str], kind: str, order_created_at: str | None) -> list[str]:
+    """For each SKU, the stock-sync log entry closest to (at or before) the
+    order's own creation time — i.e. what this service last told the
+    marketplace the stock was around then. Prefers the precise before→after
+    for that SKU from the entry's own payload (OZON logs one row per
+    warehouse covering several SKUs at once, so the raw message text alone
+    can omit a SKU if the preview was truncated); falls back to the full
+    message when the payload doesn't help."""
+    lines = []
+    for code in codes:
+        candidates = [e for e in log.search(code) if e.get("kind") == kind]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda e: e.get("created_at") or "")
+        if order_created_at:
+            before = [e for e in candidates if (e.get("created_at") or "") <= order_created_at]
+            pick = before[-1] if before else candidates[0]
+        else:
+            pick = candidates[-1]
+        change_text = None
+        try:
+            payload = json.loads(pick.get("payload") or "{}")
+            for change in payload.get("changes") or []:
+                if change.get("sku") == code:
+                    before_val = change.get("before")
+                    change_text = f"{code}: {before_val if before_val is not None else '—'}→{change.get('after')}"
+                    break
+        except (TypeError, ValueError):
+            pass
+        lines.append(f"{change_text or pick.get('message')} ({pick.get('created_at')})")
+    return lines
+
+
+def fetch_stock_context(*, moysklad: MoySkladClient, yandex_log: YandexMarketSyncLog, ozon_log: YandexMarketSyncLog | None = None, order: dict, marketplace: str | None, external_id: str | None) -> list[str]:
+    """Best-effort: current MoySklad stock for every SKU in the order at its
+    store, plus — for a Yandex Market or OZON order — the closest stock-sync
+    entry this service logged for each SKU around when the order was created
+    (what we told that marketplace the stock was at the time). Any failure
+    here just leaves the stock section of the answer empty rather than
+    failing the whole question — this mirrors fetch_marketplace_details's
+    own contract.
+    """
+    lines: list[str] = []
+    try:
+        store_id = _store_id_from_order(order)
+        order_id = order.get("id")
+        if not store_id or not order_id:
+            return lines
+        positions = moysklad.customer_order_positions(order_id)
+        codes: list[str] = []
+        for position in positions:
+            assortment = position.get("assortment") or {}
+            code = assortment.get("code") or assortment.get("article")
+            if code and code not in codes:
+                codes.append(code)
+        if not codes:
+            return lines
+
+        product_ids = []
+        for position in positions:
+            assortment = position.get("assortment") or {}
+            if assortment.get("id"):
+                product_ids.append(assortment["id"])
+        stock_rows = moysklad.stock_by_products(product_ids, store_id=store_id) if product_ids else []
+        by_code = {(row.get("code") or row.get("article")): row for row in stock_rows}
+        stock_lines = []
+        for code in codes:
+            row = by_code.get(code)
+            if row is None:
+                stock_lines.append(f"{code}: 0 шт. на складе заказа (товар не числится в остатках)")
+            else:
+                stock_lines.append(f"{code}: остаток {row.get('stock', 0)}, резерв {row.get('reserve', 0)}, доступно {row.get('quantity', 0)}")
+        if stock_lines:
+            lines.append("Текущий остаток в МойСклад на складе заказа:")
+            lines.extend(stock_lines)
+
+        marketplace_log = {"yandex_market": yandex_log, "ozon": ozon_log}.get(marketplace or "")
+        stock_kind_and_label = _MARKETPLACE_STOCK_LOG.get(marketplace or "")
+        if marketplace_log is not None and stock_kind_and_label and external_id:
+            kind, display_name = stock_kind_and_label
+            order_created_at = None
+            for entry in marketplace_log.search(external_id):
+                if entry.get("kind") == "order_created" and entry.get("external_id") == external_id:
+                    order_created_at = entry.get("created_at")
+                    break
+            marketplace_lines = _closest_stock_history_lines(log=marketplace_log, codes=codes, kind=kind, order_created_at=order_created_at)
+            if marketplace_lines:
+                lines.append(f"Остаток на {display_name} по нашей синхронизации (ближайшая запись к моменту заказа):")
+                lines.extend(marketplace_lines)
+    except Exception:
+        return lines
+    return lines
+
+
 def _marketplace_context_lines(*, marketplace: str | None, details: dict[str, Any] | None) -> list[str]:
     if not marketplace or not details:
         return []
@@ -159,7 +266,7 @@ def _marketplace_context_lines(*, marketplace: str | None, details: dict[str, An
     return lines
 
 
-def _order_context_text(*, order: dict, marketplace: str | None, marketplace_details: dict[str, Any] | None = None) -> str:
+def _order_context_text(*, order: dict, marketplace: str | None, marketplace_details: dict[str, Any] | None = None, stock_lines: list[str] | None = None) -> str:
     state_name = (order.get("state") or {}).get("name", "неизвестен")
     header = f"Площадка: {MARKETPLACE_NAMES.get(marketplace, marketplace)}\n" if marketplace else ""
     lines = [
@@ -169,9 +276,11 @@ def _order_context_text(*, order: dict, marketplace: str | None, marketplace_det
         f"Состав заказа:\n{order.get('description') or '(нет данных)'}"
     ]
     lines.extend(_marketplace_context_lines(marketplace=marketplace, details=marketplace_details))
+    if stock_lines:
+        lines.append("\n".join(stock_lines))
     return "\n".join(lines)
 
 
-def answer_question(*, client: LLMClient, order: dict, marketplace: str | None, question: str, marketplace_details: dict[str, Any] | None = None) -> str:
-    context = _order_context_text(order=order, marketplace=marketplace, marketplace_details=marketplace_details)
+def answer_question(*, client: LLMClient, order: dict, marketplace: str | None, question: str, marketplace_details: dict[str, Any] | None = None, stock_lines: list[str] | None = None) -> str:
+    context = _order_context_text(order=order, marketplace=marketplace, marketplace_details=marketplace_details, stock_lines=stock_lines)
     return client.complete(system=SYSTEM_PROMPT, user_message=f"Данные о заказе:\n{context}\n\nВопрос от сотрудника склада:\n{question}")

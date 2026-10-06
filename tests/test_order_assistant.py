@@ -2,6 +2,7 @@ from sync_service.order_assistant import (
     answer_question,
     extract_order_candidates,
     fetch_marketplace_details,
+    fetch_stock_context,
     find_order_by_label_message,
     read_order_number_from_image,
     resolve_order_by_number,
@@ -11,15 +12,29 @@ from sync_service.yandex_market_sync import YandexMarketSyncLog
 
 
 class FakeMoySklad:
-    def __init__(self, by_external_code=None, by_name=None):
+    def __init__(self, by_external_code=None, by_name=None, positions=None, stock_rows=None):
         self.by_external_code = by_external_code or {}
         self.by_name = by_name or {}
+        self.positions = positions or []
+        self.stock_rows = stock_rows or []
+        self.requested_order_id = None
+        self.requested_store_id = None
+        self.requested_product_ids = None
 
     def customer_order_by_external_code(self, external_code):
         return self.by_external_code.get(external_code)
 
     def customer_order_by_name(self, name):
         return self.by_name.get(name)
+
+    def customer_order_positions(self, order_id):
+        self.requested_order_id = order_id
+        return self.positions
+
+    def stock_by_products(self, product_ids, *, store_id):
+        self.requested_product_ids = product_ids
+        self.requested_store_id = store_id
+        return self.stock_rows
 
 
 class FakeAnthropic:
@@ -272,3 +287,115 @@ def test_system_prompt_forbids_claiming_to_act():
     from sync_service.order_assistant import SYSTEM_PROMPT
 
     assert "не можешь ничего изменить" in SYSTEM_PROMPT
+
+
+def _order_with_store(store_id="store-1", order_id="order-1", name="0001234"):
+    return {
+        "id": order_id,
+        "name": name,
+        "state": {"name": "Отгружен"},
+        "description": "Картина MG2466 x1",
+        "store": {"meta": {"href": f"https://api.moysklad.ru/api/remap/1.2/entity/store/{store_id}"}},
+    }
+
+
+def test_fetch_stock_context_includes_current_moysklad_stock(tmp_path):
+    order = _order_with_store()
+    moysklad = FakeMoySklad(
+        positions=[{"assortment": {"id": "prod-1", "code": "MG2466"}}],
+        stock_rows=[{"code": "MG2466", "stock": 1, "reserve": 1, "quantity": 0}],
+    )
+    yandex_log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+
+    lines = fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, order=order, marketplace=None, external_id=None)
+
+    assert moysklad.requested_order_id == "order-1"
+    assert moysklad.requested_store_id == "store-1"
+    assert moysklad.requested_product_ids == ["prod-1"]
+    assert any("MG2466" in line and "резерв 1" in line and "доступно 0" in line for line in lines)
+
+
+def test_fetch_stock_context_reports_zero_when_product_missing_from_stock_rows(tmp_path):
+    order = _order_with_store()
+    moysklad = FakeMoySklad(positions=[{"assortment": {"id": "prod-1", "code": "MG2466"}}], stock_rows=[])
+    yandex_log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+
+    lines = fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, order=order, marketplace=None, external_id=None)
+
+    assert any("MG2466" in line and "0 шт." in line for line in lines)
+
+
+def test_fetch_stock_context_includes_closest_yandex_market_history_entry(tmp_path):
+    order = _order_with_store()
+    moysklad = FakeMoySklad(positions=[{"assortment": {"id": "prod-1", "code": "MG2466"}}], stock_rows=[{"code": "MG2466", "stock": 0, "reserve": 0, "quantity": 0}])
+    yandex_log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    yandex_log.add("order_created", "success", "Заказ создан", "999", None)
+    with __import__("sqlite3").connect(yandex_log.path) as db:
+        db.execute("UPDATE sync_log SET created_at=? WHERE kind='order_created'", ("2026-10-05T07:34:00+00:00",))
+        db.execute(
+            "INSERT INTO sync_log(created_at,kind,external_id,status,message,payload) VALUES (?,?,?,?,?,?)",
+            ("2026-10-05T06:04:29+00:00", "stock_sync", None, "success", "ТЦ Саларис: MG2466: 1→0", "{}"),
+        )
+        db.execute(
+            "INSERT INTO sync_log(created_at,kind,external_id,status,message,payload) VALUES (?,?,?,?,?,?)",
+            ("2026-10-06T06:04:29+00:00", "stock_sync", None, "success", "ТЦ Саларис: MG2466: 0→5", "{}"),
+        )
+
+    lines = fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, order=order, marketplace="yandex_market", external_id="999")
+
+    joined = "\n".join(lines)
+    assert "1→0" in joined
+    assert "0→5" not in joined  # that entry is after the order, not the closest one before it
+
+
+def test_fetch_stock_context_skips_yandex_market_history_for_ozon(tmp_path):
+    order = _order_with_store()
+    moysklad = FakeMoySklad(positions=[{"assortment": {"id": "prod-1", "code": "MG2466"}}], stock_rows=[{"code": "MG2466", "stock": 1, "reserve": 0, "quantity": 1}])
+    yandex_log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    yandex_log.add("stock_sync", "success", "ТЦ Саларис: MG2466: 1→0", None, None)
+
+    lines = fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, order=order, marketplace="ozon", external_id="12345-0001-1")
+
+    assert "Яндекс.Маркет" not in "\n".join(lines)
+
+
+def test_fetch_stock_context_includes_ozon_stock_history(tmp_path):
+    order = _order_with_store()
+    moysklad = FakeMoySklad(positions=[{"assortment": {"id": "prod-1", "code": "MG2466"}}], stock_rows=[{"code": "MG2466", "stock": 0, "reserve": 0, "quantity": 0}])
+    ozon_log = YandexMarketSyncLog(str(tmp_path / "ozon.sqlite3"))
+    ozon_log.add("order_created", "success", "Отправление 12345-0001-1: упаковка подтверждена", "12345-0001-1", None)
+    # OZON logs one row per warehouse covering several SKUs — the specific
+    # SKU's before/after lives in payload["changes"], not necessarily spelled
+    # out in the summary message text.
+    ozon_log.add(
+        "ozon_stock_sync", "success",
+        "OZON ТЦ Саларис: остатки обновлены, офферов 500, изменилось 2: MG2466: 1→0 и ещё 1",
+        None, {"warehouse_id": 1, "count": 500, "changes": [{"sku": "MG2466", "before": 1, "after": 0}, {"sku": "OTHER", "before": 2, "after": 1}]},
+    )
+
+    lines = fetch_stock_context(moysklad=moysklad, yandex_log=YandexMarketSyncLog(str(tmp_path / "ym.sqlite3")), ozon_log=ozon_log, order=order, marketplace="ozon", external_id="12345-0001-1")
+
+    joined = "\n".join(lines)
+    assert "OZON" in joined
+    assert "MG2466: 1→0" in joined
+
+
+def test_fetch_stock_context_returns_empty_when_order_has_no_store(tmp_path):
+    order = {"id": "order-1", "name": "0001234", "description": "x"}
+    moysklad = FakeMoySklad()
+    yandex_log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+
+    assert fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, order=order, marketplace=None, external_id=None) == []
+
+
+def test_answer_question_includes_stock_lines():
+    order = {"name": "0001234", "state": {"name": "Отгружен"}, "description": "Картина MG2466 x1"}
+    client = FakeAnthropic(reply="На складе нет.")
+
+    answer_question(
+        client=client, order=order, marketplace="yandex_market", question="есть ли остаток?",
+        stock_lines=["Текущий остаток в МойСклад на складе заказа:", "MG2466: остаток 1, резерв 1, доступно 0"],
+    )
+
+    user_message = client.calls[0]["user_message"]
+    assert "MG2466: остаток 1, резерв 1, доступно 0" in user_message

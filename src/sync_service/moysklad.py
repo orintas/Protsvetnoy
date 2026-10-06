@@ -141,6 +141,38 @@ class MoySkladClient:
                 return result
             payload = self._client.get_url(str(next_link))
 
+    def stock_by_products(self, product_ids: list[str], *, store_id: str) -> list[dict[str, Any]]:
+        """Sellable stock (stock/reserve/quantity, plus "code"/"article") for
+        specific products at one store — a narrower, cheaper version of
+        stock_by_store for a handful of known SKUs (e.g. answering a stock
+        question about one order's positions instead of the whole warehouse)."""
+        href = f"{self._client.base_url}/entity/store/{store_id}"
+        filter_value = ";".join([f"product={self._client.base_url}/entity/product/{pid}" for pid in product_ids] + [f"store={href}"])
+        payload = self._client.get("/report/stock/all", params={"filter": filter_value, "limit": 1000})
+        rows = payload.get("rows", [])
+        return [row for row in rows if isinstance(row, dict)]
+
+    def customer_order_positions(self, order_id: str) -> list[dict[str, Any]]:
+        payload = self._client.get(f"/entity/customerorder/{order_id}/positions", params={"limit": 1000, "expand": "assortment"})
+        rows = payload.get("rows", [])
+        return [row for row in rows if isinstance(row, dict)]
+
+    def create_loss(self, *, organization_id: str, store_id: str, positions: list[dict[str, Any]], description: str = "") -> dict[str, Any]:
+        """Списание — a stock write-off. `positions` items are shaped
+        `{"quantity": ..., "assortment": {"meta": ...}}` (e.g. taken straight
+        from customer_order_positions' expanded assortment). `name` is left
+        for MoySklad to auto-assign, same convention as create_customer_order."""
+        body: dict[str, Any] = {
+            "organization": self._meta("organization", organization_id),
+            "store": self._meta("store", store_id),
+            "positions": positions,
+            "description": description,
+        }
+        result = self._client.post("/entity/loss", body)
+        record(service="moysklad", entity_type="loss", entity_id=result.get("name") or "", action="create",
+               after={"store_id": store_id, "positions": len(positions), "description": description}, link=result.get("meta", {}).get("uuidHref"))
+        return result
+
     def customer_order_by_external_code(self, external_code: str) -> dict[str, Any] | None:
         payload = self._client.get("/entity/customerorder", params={"filter": f"externalCode={external_code}", "limit": 1})
         rows = payload.get("rows", [])
@@ -185,6 +217,7 @@ class MoySkladClient:
         state_id: str | None = None,
         owner_id: str | None = None,
         group_id: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         """`name=None` lets MoySklad assign the next number in its own shared
         sequence — the convention already used for every manually-entered
@@ -210,9 +243,11 @@ class MoySkladClient:
             body["owner"] = self._meta("employee", owner_id)
         if group_id:
             body["group"] = self._meta("group", group_id)
+        if project_id:
+            body["project"] = self._meta("project", project_id)
         result = self._client.post("/entity/customerorder", body)
         record(service="moysklad", entity_type="customerorder", entity_id=result.get("name") or external_code, action="create",
-               after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id},
+               after={"name": result.get("name"), "externalCode": external_code, "positions": len(positions), "description": description, "state_id": state_id, "currency_id": currency_id, "project_id": project_id},
                link=result.get("meta", {}).get("uuidHref"))
         return result
 

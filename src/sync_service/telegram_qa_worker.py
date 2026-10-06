@@ -12,6 +12,7 @@ from .order_assistant import (
     DEFAULT_QUESTION,
     answer_question,
     fetch_marketplace_details,
+    fetch_stock_context,
     find_order_by_label_message,
     read_order_number_from_image,
     resolve_order_by_number,
@@ -109,8 +110,9 @@ def _answer_message(message: dict[str, Any], *, settings: Settings, yandex_log: 
     if order is None:
         return  # nothing about an order in this message — silently drop it
     marketplace_details = fetch_marketplace_details(marketplace=marketplace, external_id=external_id, yandex=yandex, ozon=ozon) if marketplace and external_id else None
+    stock_lines = fetch_stock_context(moysklad=moysklad, yandex_log=yandex_log, ozon_log=ozon_log, order=order, marketplace=marketplace, external_id=external_id)
     question = str(message.get("text") or message.get("caption") or "").strip() or DEFAULT_QUESTION
-    answer = answer_question(client=llm, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details)
+    answer = answer_question(client=llm, order=order, marketplace=marketplace, question=question, marketplace_details=marketplace_details, stock_lines=stock_lines)
     telegram.send_message(chat_id=settings.telegram_label_chat_id, text=answer, reply_to_message_id=message.get("message_id"))
 
 

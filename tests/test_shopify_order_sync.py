@@ -8,10 +8,11 @@ from sync_service.shopify_order_sync import (
     CURRENCY_ID,
     GROUP_ID,
     MAIN_STORE_ID,
+    NEW_STATE_ID,
     OWNER_EMPLOYEE_ID,
     PLN_CURRENCY_ID,
     POLAND_WAREHOUSE_CHAIN,
-    SHIPPING_STATE_ID,
+    PROJECT_EUROPE_ID,
     ULEMISTE_STORE_ID,
     WOLA_PARK_STORE_ID,
     process_new_order,
@@ -79,9 +80,10 @@ def test_creates_order_from_main_warehouse_when_stock_available(tmp_path):
     assert "name" not in moysklad.created  # MoySklad auto-numbers it
     assert moysklad.created["description"] == "#7775\nАдрес доставки: Jane Doe, Main St 1, Tallinn, 10111, Estonia, +3725551234"
     assert moysklad.created["currency_id"] == CURRENCY_ID
-    assert moysklad.created["state_id"] == SHIPPING_STATE_ID
+    assert moysklad.created["state_id"] == NEW_STATE_ID
     assert moysklad.created["owner_id"] == OWNER_EMPLOYEE_ID
     assert moysklad.created["group_id"] == GROUP_ID
+    assert moysklad.created["project_id"] == PROJECT_EUROPE_ID
     assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["order_created"]

@@ -60,6 +60,13 @@ def _cancel_reason_text(substatus: str | None) -> str:
         return "причина не указана"
     return CANCEL_REASON_LABELS.get(substatus, substatus)
 
+
+# Substatus codes that mean the shop itself failed to fulfill (as opposed to
+# the buyer cancelling, a timeout, or an administrative replacement) — these
+# are the ones worth an automatic stock write-off, since the book stock told
+# us we had it and we didn't.
+SHOP_FAULT_SUBSTATUSES = {"SHOP_FAILED"}
+
 # campaignId -> MoySklad store id, one per physical shop.
 CAMPAIGN_STORES: dict[str, str] = {
     "149179204": "497d98c2-7e21-11ee-0a80-0e2a000dc91f",  # ТЦ Авиапарк
@@ -359,6 +366,49 @@ def notify_courier_arrived(
         log.add(COURIER_NOTIFIED_KIND, "success", f"Заказ {order_id}: уведомление о курьере отправлено в Telegram", external_code)
 
 
+def _create_loss_for_cancelled_order(*, moysklad: MoySkladClient, order: dict[str, Any], campaign_id: int, order_id: int, log: YandexMarketSyncLog, external_code: str) -> str | None:
+    """SHOP_FAILED means Market (and the book stock we fed it) said the item
+    was available and it wasn't — write off the order's positions at its own
+    store right away so the same SKU doesn't oversell again on the next
+    order, instead of leaving that correction to be found by hand later (as
+    happened in the real incident this responds to: a product's book stock
+    stayed wrong for days before it tripped up another order).
+
+    Best-effort and independently idempotency-guarded via "loss_created" —
+    this must never run twice for the same order even if a later step in the
+    same call (e.g. the Telegram send) fails and the whole function gets
+    retried on a redelivered webhook. Any failure here is logged but never
+    blocks the cancellation notice itself.
+    """
+    if log.has_success("loss_created", external_code):
+        return None
+    store_id = CAMPAIGN_STORES.get(str(campaign_id))
+    if not store_id:
+        return None
+    try:
+        positions = moysklad.customer_order_positions(str(order["id"]))
+        loss_positions = []
+        for position in positions:
+            assortment = position.get("assortment") or {}
+            quantity = position.get("quantity")
+            if not assortment.get("meta") or not quantity:
+                continue
+            loss_positions.append({"quantity": quantity, "assortment": {"meta": assortment["meta"]}})
+        if not loss_positions:
+            return None
+        result = moysklad.create_loss(
+            organization_id=ORGANIZATION_ID,
+            store_id=store_id,
+            positions=loss_positions,
+            description=f"Автосписание: заказ {order_id} отменён площадкой как SHOP_FAILED — товар числился в наличии по данным МойСклад, но не найден при сборке.",
+        )
+        log.add("loss_created", "success", f"Заказ {order_id}: создано списание в МойСклад ({len(loss_positions)} поз.)", external_code, moysklad_link_fields(result, f"Списание по заказу {order_id}"))
+        return f"📦 Создано списание в МойСклад: {result.get('name')} — проверьте физический остаток."
+    except Exception as error:
+        log.add("loss_create_error", "error", f"Заказ {order_id}: не удалось создать списание в МойСклад: {error}", external_code)
+        return None
+
+
 def handle_order_cancelled(
     *,
     order_id: int,
@@ -386,16 +436,21 @@ def handle_order_cancelled(
             return
         reason = _cancel_reason_text(substatus)
         order = moysklad.customer_order_by_external_code(external_code)
+        loss_line = None
         if order is None:
             log.add("order_cancel_error", "error", f"Заказ {order_id}: не найден в МойСклад, статус «Отменен» не проставлен", external_code)
         else:
             previous_state_id = _previous_state_id(order)
             moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID, previous_state_id=previous_state_id)
             log.add("order_cancelled", "success", f"Заказ {order_id}: статус в МойСклад изменён на «Отменен» ({reason}), резерв снят", external_code, moysklad_link_fields(order, f"Заказ {order_id}"))
+            if substatus in SHOP_FAULT_SUBSTATUSES:
+                loss_line = _create_loss_for_cancelled_order(moysklad=moysklad, order=order, campaign_id=campaign_id, order_id=order_id, log=log, external_code=external_code)
 
         if telegram is not None and telegram_chat_id:
             store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
             text = f"❌ Заказ №{order_id} ({store_name}) отменён.\nПричина: {reason}"
+            if loss_line:
+                text += f"\n{loss_line}"
             label_payload = log.get_payload("label_sent", external_code)
             reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
             telegram.send_message(chat_id=telegram_chat_id, text=text, reply_to_message_id=reply_to)

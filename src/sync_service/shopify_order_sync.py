@@ -39,7 +39,8 @@ OWNER_EMPLOYEE_ID = "475d16c9-18cb-11ee-0a80-08a80023ea46"  # Александр
 GROUP_ID = "62a11082-1b25-11ea-0a80-030300038a2c"  # "ProTsvetnoy OU"
 CURRENCY_ID = "5100bbd5-1cec-11ea-0a80-04b1000ad00d"  # EUR
 PLN_CURRENCY_ID = "cae74fea-26ec-11ee-0a80-02b4000b49e4"  # PLN, злотый — Polish orders are billed in PLN, not EUR
-SHIPPING_STATE_ID = "dd675d83-a396-11e2-c56e-001b21d91495"  # customerorder state "Отгружать"
+NEW_STATE_ID = "4102d27f-ab05-11e4-90a2-8ecb0016c16c"  # customerorder state "Новый"
+PROJECT_EUROPE_ID = "aa777526-bab4-11ea-0a80-030400080408"  # project "Европа" — per explicit request, every new Shopify order is tagged with it
 
 # Baltic + Finland: ship from the main warehouse first, Ulemiste as fallback.
 MAIN_STORE_ID = "d9a80084-1bf4-11ea-0a80-057b000493d9"  # warehouse "ProTsvetnoy OU"
@@ -215,8 +216,9 @@ def process_new_order(*, order: dict[str, Any], moysklad: MoySkladClient, log: S
             description=description,
             sales_channel_id=SALES_CHANNEL_ID,
             currency_id=currency_id,
-            state_id=SHIPPING_STATE_ID,
+            state_id=NEW_STATE_ID,
             owner_id=OWNER_EMPLOYEE_ID,
             group_id=GROUP_ID,
+            project_id=PROJECT_EUROPE_ID,
         )
         log.add("order_created", "success", f"Заказ {order_name}: создан в МойСклад ({len(positions)} позиций)", external_code, {**order, **moysklad_link_fields(created_order, f"Заказ {order_name}")})
