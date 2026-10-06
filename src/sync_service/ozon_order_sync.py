@@ -40,6 +40,28 @@ SHIP_FROM_STATUS = "awaiting_packaging"
 TERMINAL_STATUSES = {"cancelled", "not_accepted"}
 DELIVERED_STATUS = "delivered"
 
+# MoySklad customerorder workflow state "Отменен" (stateType "Unsuccessful",
+# releases the reserve automatically) — same account/global state Yandex
+# Market's pipeline uses (yandex_market_order_sync.CANCELLED_STATE_ID),
+# duplicated here rather than imported to keep the two marketplace pipelines
+# independent, matching this codebase's existing per-integration convention.
+CANCELLED_STATE_ID = "ad2312d4-a7f7-11e2-fb80-001b21d91495"
+
+# OZON's cancellation payload (POST /v3/posting/fbs/get -> result.cancellation)
+# carries cancel_reason_id/cancel_reason/cancellation_type — confirmed live
+# 2026-10-06 against 8 real cancelled postings on this account. Only
+# cancel_reason_id 352 ("Товар закончился на вашем складе" / item ran out of
+# stock at our warehouse) is the actual analog of Yandex Market's SHOP_FAILED
+# substatus. Other seller-type reasons seen live are NOT stock problems —
+# e.g. 747 "Службе доставки не удалось забрать заказ" (delivery service
+# failed to collect the package) — and must not trigger a write-off, since
+# the item is presumably still physically on the shelf; a type_id=="seller"
+# blanket check would have wrongly written those off too. The catalog (GET
+# /v2/posting/fbs/cancel-reason/list) also lists 401 ("Продавец отклонил
+# арбитраж") and 402 ("Другое") as seller-type but neither means "we didn't
+# have the stock" either.
+SHOP_FAULT_CANCEL_REASON_IDS = {352}
+
 # The courier physically at the store to collect the package.
 #
 # WRONG GUESS, corrected live 2026-09-30: status "delivering" / substatus
@@ -280,6 +302,90 @@ def _notify_courier_arrived(posting_number: str, details: dict[str, Any], queue:
     queue.mark_courier_notified(posting_number)
 
 
+def _entity_id_from_meta(entity: dict[str, Any] | None) -> str | None:
+    href = ((entity or {}).get("meta") or {}).get("href", "")
+    return href.rstrip("/").split("/")[-1] or None
+
+
+def _create_loss_for_cancelled_posting(*, moysklad: MoySkladClient, order: dict[str, Any], posting_number: str, log: YandexMarketSyncLog, errors: ErrorLog) -> str | None:
+    """cancel_reason_id 352 means OZON (and the book stock we fed it) said
+    the item was available and it wasn't — write off the order's positions
+    at its own store right away, same as Yandex Market's SHOP_FAILED path.
+
+    Independently idempotency-guarded via "loss_created" — this must never
+    run twice for the same posting even if a later step (e.g. the Telegram
+    send) fails and _process_one retries the whole cancellation on the next
+    tick. Best-effort: any failure here is logged but never blocks the
+    cancellation notice itself.
+    """
+    if log.has_success("loss_created", posting_number):
+        return None
+    organization_id = _entity_id_from_meta(order.get("organization"))
+    store_id = _entity_id_from_meta(order.get("store"))
+    if not organization_id or not store_id:
+        return None
+    try:
+        positions = moysklad.customer_order_positions(str(order["id"]))
+        loss_positions = []
+        for position in positions:
+            assortment = position.get("assortment") or {}
+            quantity = position.get("quantity")
+            if not assortment.get("meta") or not quantity:
+                continue
+            loss_positions.append({"quantity": quantity, "assortment": {"meta": assortment["meta"]}})
+        if not loss_positions:
+            return None
+        result = moysklad.create_loss(
+            organization_id=organization_id,
+            store_id=store_id,
+            positions=loss_positions,
+            description=f"Автосписание: отправление {posting_number} отменено (товар закончился на складе) — числился в наличии по данным МойСклад, но не найден при сборке.",
+        )
+        log.add("loss_created", "success", f"Отправление {posting_number}: создано списание в МойСклад ({len(loss_positions)} поз.)", posting_number, moysklad_link_fields(result, f"Списание по отправлению {posting_number}"))
+        return f"📦 Создано списание в МойСклад: {result.get('name')} — проверьте физический остаток."
+    except Exception as error:
+        _log_error(log, errors, "loss_create_error", f"Отправление {posting_number}: не удалось создать списание в МойСклад: {error}", posting_number)
+        return None
+
+
+def _handle_cancelled_posting(*, posting_number: str, details: dict[str, Any], moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
+    """A real OZON cancellation (as opposed to "not_accepted", which never
+    carries a cancellation reason and is left to the simple fallback in
+    _process_one): move the MoySklad order to "Отменен" (releases the
+    reserve automatically), write off the stock if OZON says it was a stock
+    shortage on our side, then notify Telegram.
+
+    Guarded by has_success on "cancel_notified" so a retry after a partial
+    failure (e.g. the Telegram send throwing, which leaves _process_one's
+    caller to retry this posting next tick since mark_done wasn't reached)
+    doesn't send a second notice — mirrors
+    yandex_market_order_sync.handle_order_cancelled's own guard.
+    """
+    if log.has_success("cancel_notified", posting_number):
+        return
+    cancellation = details.get("cancellation") or {}
+    reason_text = cancellation.get("cancel_reason") or "причина не указана"
+    reason_id = cancellation.get("cancel_reason_id")
+    order = moysklad.customer_order_by_name(posting_number)
+    loss_line = None
+    if order is None:
+        log.add("order_cancel_error", "error", f"Отправление {posting_number}: не найден заказ в МойСклад, статус «Отменен» не проставлен", posting_number)
+    else:
+        moysklad.update_customer_order_state(str(order["id"]), CANCELLED_STATE_ID)
+        log.add("order_cancelled_moysklad", "success", f"Отправление {posting_number}: статус в МойСклад изменён на «Отменен» ({reason_text}), резерв снят", posting_number, moysklad_link_fields(order, f"Отправление {posting_number}"))
+        if reason_id in SHOP_FAULT_CANCEL_REASON_IDS:
+            loss_line = _create_loss_for_cancelled_posting(moysklad=moysklad, order=order, posting_number=posting_number, log=log, errors=errors)
+
+    if telegram is not None and telegram_chat_id:
+        text = f"❌ Отправление {posting_number} отменено.\nПричина: {reason_text}"
+        if loss_line:
+            text += f"\n{loss_line}"
+        label_payload = log.get_payload("label_sent", posting_number)
+        reply_to = (label_payload or {}).get("message_id") if isinstance(label_payload, dict) else None
+        telegram.send_message(chat_id=telegram_chat_id, text=text, reply_to_message_id=reply_to)
+        log.add("cancel_notified", "success", f"Отправление {posting_number}: уведомление об отмене отправлено в Telegram", posting_number)
+
+
 def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, moysklad: MoySkladClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
     posting_number = row["posting_number"]
     label_already_sent = bool(row["label_sent"])
@@ -298,7 +404,15 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
 
     status = details.get("status")
     queue.update_last_status(posting_number, status or "(пусто)")
-    if status in TERMINAL_STATUSES:
+    if status == "cancelled":
+        try:
+            _handle_cancelled_posting(posting_number=posting_number, details=details, moysklad=moysklad, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors)
+        except Exception as error:
+            _log_error(log, errors, "order_pipeline_error", f"Отправление {posting_number}: ошибка обработки отмены: {error}", posting_number)
+            return  # don't mark_done — retry the cancellation handling next tick
+        queue.mark_done(posting_number)
+        return
+    if status in TERMINAL_STATUSES:  # "not_accepted" — never carries a cancellation reason, no MoySklad/Telegram action to take
         log.add("order_cancelled", "success", f"Отправление {posting_number}: статус «{status}», этикетка не нужна", posting_number)
         queue.mark_done(posting_number)
         return

@@ -75,9 +75,15 @@ class FakeTelegram:
 
 
 class FakeMoySklad:
-    def __init__(self, orders_by_name=None):
+    def __init__(self, orders_by_name=None, order_positions=None, create_loss_error=False):
         self.orders_by_name = orders_by_name or {}
         self.description_updates = []
+        self.state_updates = []
+        self.order_positions = order_positions if order_positions is not None else [
+            {"quantity": 1.0, "assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/prod-1"}}}
+        ]
+        self.create_loss_error = create_loss_error
+        self.losses_created = []
         self.closed = False
 
     def customer_order_by_name(self, name):
@@ -88,6 +94,18 @@ class FakeMoySklad:
         for order in self.orders_by_name.values():
             if str(order["id"]) == order_id:
                 order["description"] = description
+
+    def update_customer_order_state(self, order_id, state_id, *, previous_state_id=None):
+        self.state_updates.append((order_id, state_id))
+
+    def customer_order_positions(self, order_id):
+        return self.order_positions
+
+    def create_loss(self, **kwargs):
+        if self.create_loss_error:
+            raise RuntimeError("boom loss")
+        self.losses_created.append(kwargs)
+        return {"id": "loss-1", "name": "8д900", "meta": {"uuidHref": "https://online.moysklad.ru/app/#loss/edit?id=loss-1"}}
 
     def close(self):
         self.closed = True
@@ -101,7 +119,7 @@ def _patched(monkeypatch, ozon, telegram=None, moysklad=None):
     monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad or FakeMoySklad())
 
 
-def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None, substatus=None, provider_status=""):
+def _posting(status, *, warehouse="ТЦ Саларис", products=None, available_actions=None, substatus=None, provider_status="", cancellation=None):
     return {
         "status": status,
         "substatus": substatus,
@@ -109,6 +127,16 @@ def _posting(status, *, warehouse="ТЦ Саларис", products=None, availabl
         "delivery_method": {"warehouse": warehouse},
         "products": products or [{"offer_id": "LE148", "sku": 1536499166, "quantity": 1}],
         "available_actions": available_actions or [],
+        "cancellation": cancellation,
+    }
+
+
+def _moysklad_order(order_id="order-1"):
+    return {
+        "id": order_id,
+        "name": "0001234",
+        "organization": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/organization/org-1"}},
+        "store": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/store/store-1"}},
     }
 
 
@@ -305,11 +333,14 @@ def test_run_once_retries_when_label_not_ready_yet(tmp_path, monkeypatch):
 
 
 def test_run_once_marks_cancelled_posting_done_without_shipping_or_labeling(tmp_path, monkeypatch):
+    """No MoySklad order is configured in the fake for this posting, so the
+    cancellation handler logs order_cancel_error — but still notifies
+    Telegram and marks the posting done rather than getting stuck."""
     queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
     log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
-    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled")})
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 502, "cancel_reason": "Покупатель отменил заказ", "cancellation_type": "client"})})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
@@ -317,8 +348,132 @@ def test_run_once_marks_cancelled_posting_done_without_shipping_or_labeling(tmp_
 
     assert ozon.ship_calls == [] and ozon.label_calls == [] and telegram.sent == []
     assert queue.pending() == []
-    entries = log.recent()
-    assert entries[0]["kind"] == "order_cancelled" and entries[0]["status"] == "success"
+    kinds = [e["kind"] for e in log.recent()]
+    assert "order_cancel_error" in kinds
+    assert "cancel_notified" in kinds
+
+
+def test_run_once_cancellation_moves_moysklad_state_and_notifies_telegram(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 502, "cancel_reason": "Покупатель отменил заказ", "cancellation_type": "client"})})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()})
+    log.add("label_sent", "success", "sent earlier", "X-1", {"message_id": 4242})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert moysklad.state_updates == [("order-1", "ad2312d4-a7f7-11e2-fb80-001b21d91495")]
+    assert moysklad.losses_created == []  # not a stock-fault reason
+    assert len(telegram.messages) == 1
+    chat_id, text, reply_to, _ = telegram.messages[0]
+    assert chat_id == "-100123"
+    assert reply_to == 4242
+    assert "Покупатель отменил заказ" in text
+    assert "Создано списание" not in text
+
+
+def test_run_once_cancellation_creates_loss_for_stock_fault_reason(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 352, "cancel_reason": "Товар закончился на вашем складе", "cancellation_type": "seller"})})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert len(moysklad.losses_created) == 1
+    created = moysklad.losses_created[0]
+    assert created["organization_id"] == "org-1"
+    assert created["store_id"] == "store-1"
+    assert created["positions"] == [{"quantity": 1.0, "assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/prod-1"}}}]
+    text = telegram.messages[0][1]
+    assert "Создано списание в МойСклад" in text
+    kinds = [e["kind"] for e in log.recent()]
+    assert "loss_created" in kinds
+
+
+def test_run_once_cancellation_does_not_create_loss_for_other_seller_reasons(tmp_path, monkeypatch):
+    """A seller-type reason that isn't actually a stock shortage (e.g. the
+    delivery service failing to collect the package) must not trigger a
+    write-off — the item is presumably still physically on the shelf."""
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 747, "cancel_reason": "Службе доставки не удалось забрать заказ", "cancellation_type": "seller"})})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert moysklad.losses_created == []
+
+
+def test_run_once_cancellation_does_not_create_loss_twice_on_retry(tmp_path, monkeypatch):
+    """If a prior tick already created the loss and marked it, but the whole
+    posting somehow gets reprocessed (e.g. mark_done didn't persist), the
+    loss must not be created a second time."""
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    log.add("loss_created", "success", "already created", "X-1", None)
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 352, "cancel_reason": "Товар закончился на вашем складе", "cancellation_type": "seller"})})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert moysklad.losses_created == []
+
+
+def test_run_once_cancellation_reports_loss_failure_without_blocking_notice(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("cancelled", cancellation={"cancel_reason_id": 352, "cancel_reason": "Товар закончился на вашем складе", "cancellation_type": "seller"})})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()}, create_loss_error=True)
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert len(telegram.messages) == 1
+    assert "Создано списание" not in telegram.messages[0][1]
+    kinds = [e["kind"] for e in log.recent()]
+    assert "loss_create_error" in kinds
+    assert "cancel_notified" in kinds
+    assert queue.pending() == []  # still marked done despite the loss failure
+
+
+def test_run_once_not_accepted_posting_uses_the_simple_fallback(tmp_path, monkeypatch):
+    """Only "cancelled" carries a cancellation reason — "not_accepted" keeps
+    the old simple log-and-done behavior, no MoySklad/Telegram action."""
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("not_accepted")})
+    telegram = FakeTelegram()
+    moysklad = FakeMoySklad(orders_by_name={"X-1": _moysklad_order()})
+    _patched(monkeypatch, ozon, telegram, moysklad)
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert moysklad.state_updates == []
+    assert telegram.messages == []
+    kinds = [e["kind"] for e in log.recent()]
+    assert kinds == ["order_cancelled"]
 
 
 def test_run_once_gives_up_after_max_attempts(tmp_path, monkeypatch):
