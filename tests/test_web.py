@@ -1,5 +1,6 @@
 import io
 import json
+from time import monotonic
 
 import sync_service.web as web_module
 from sync_service.error_log import ErrorLog
@@ -105,3 +106,169 @@ def test_planfix_webhook_responds_400_for_a_non_company_contact(tmp_path, monkey
     application(environ, start_response)
     assert captured["status"] == "400 Bad Request"
     assert captured["headers"]["error"] == "Это не компания"
+
+
+def _sample_moysklad_product(code: str = "ABC1", name: str = "Test product") -> dict:
+    return {
+        "id": "prod-1",
+        "code": code,
+        "name": name,
+        "pathName": "Painting by numbers",
+        "updated": "2026-01-01 00:00:00",
+        "salePrices": [{"priceType": {"name": "Cena w Polsce"}, "value": 1000}],
+    }
+
+
+class _FakeCategorySyncConfig:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def load(self):
+        return {"novicloud": ["Painting by numbers"], "shopify": []}
+
+
+class _ExplodingMoySkladClient:
+    """Fails the test if /generate refetches instead of using the cache."""
+
+    def __init__(self, **kwargs):
+        pass
+
+    def products(self):
+        raise AssertionError("MoySkladClient.products() should not be called when the catalog cache is fresh")
+
+    def close(self):
+        pass
+
+
+class _ExplodingNovicloudClient:
+    def __init__(self, **kwargs):
+        pass
+
+    def all_products(self):
+        raise AssertionError("NovicloudClient.all_products() should not be called when the catalog cache is fresh")
+
+    def close(self):
+        pass
+
+
+class _FakeMoySkladClient:
+    def __init__(self, products, **kwargs):
+        self._products = products
+        self.closed = False
+
+    def products(self):
+        return self._products
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeNovicloudClient:
+    def __init__(self, products, **kwargs):
+        self._products = products
+        self.closed = False
+
+    def all_products(self):
+        return self._products
+
+    def close(self):
+        self.closed = True
+
+
+def _reset_catalog_cache():
+    web_module._catalog_cache["at"] = 0.0
+    web_module._catalog_cache["moysklad"] = None
+    web_module._catalog_cache["novicloud"] = None
+
+
+def _generate_environ(codes: list[str], format_name: str = "csv") -> dict:
+    from urllib.parse import urlencode
+
+    query = urlencode({"format": format_name, "codes": ",".join(codes)})
+    return {"PATH_INFO": "/generate", "QUERY_STRING": query, "REQUEST_METHOD": "GET"}
+
+
+def test_generate_reuses_cached_catalog_without_refetching(monkeypatch):
+    # /generate used to repeat the same full MoySklad+Novicloud fetch
+    # /api/compare-stream had just finished seconds earlier, which on the
+    # real catalog took 30-80s and made the "Скачать CSV" button look hung.
+    _reset_catalog_cache()
+    monkeypatch.setattr(web_module, "CategorySyncConfig", _FakeCategorySyncConfig)
+    monkeypatch.setattr(web_module, "MoySkladClient", _ExplodingMoySkladClient)
+    monkeypatch.setattr(web_module, "NovicloudClient", _ExplodingNovicloudClient)
+    product = _sample_moysklad_product()
+    web_module._store_catalog_cache([product], [])
+
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    body = b"".join(application(_generate_environ(["ABC1"]), start_response))
+
+    assert captured["status"] == "200 OK"
+    assert b"ABC1" in body
+
+
+def test_generate_rejects_without_refetching_when_cache_is_empty(monkeypatch):
+    # The download button is only ever enabled right after a successful
+    # "Сравнить каталоги" run, so a missing cache means that comparison is
+    # stale/never happened — /generate must not silently repeat the slow
+    # full-catalog fetch (that repeat fetch is the original bug).
+    _reset_catalog_cache()
+    monkeypatch.setattr(web_module, "CategorySyncConfig", _FakeCategorySyncConfig)
+    monkeypatch.setattr(web_module, "MoySkladClient", _ExplodingMoySkladClient)
+    monkeypatch.setattr(web_module, "NovicloudClient", _ExplodingNovicloudClient)
+
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    body = b"".join(application(_generate_environ(["ABC1"]), start_response))
+
+    assert captured["status"] == "409 Conflict"
+    assert "Сравнить каталоги" in body.decode("utf-8")
+
+
+def test_generate_rejects_without_refetching_when_cache_is_stale(monkeypatch):
+    _reset_catalog_cache()
+    monkeypatch.setattr(web_module, "CategorySyncConfig", _FakeCategorySyncConfig)
+    monkeypatch.setattr(web_module, "MoySkladClient", _ExplodingMoySkladClient)
+    monkeypatch.setattr(web_module, "NovicloudClient", _ExplodingNovicloudClient)
+    stale_product = _sample_moysklad_product(code="STALE1")
+    web_module._store_catalog_cache([stale_product], [])
+    web_module._catalog_cache["at"] = monotonic() - web_module._CATALOG_CACHE_TTL_SECONDS - 1
+
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    body = b"".join(application(_generate_environ(["STALE1"]), start_response))
+
+    assert captured["status"] == "409 Conflict"
+    assert "Сравнить каталоги" in body.decode("utf-8")
+
+
+def test_compare_stream_populates_catalog_cache(monkeypatch):
+    _reset_catalog_cache()
+    monkeypatch.setattr(web_module, "CategorySyncConfig", _FakeCategorySyncConfig)
+    product = _sample_moysklad_product()
+    monkeypatch.setattr(web_module, "MoySkladClient", lambda **kwargs: _FakeMoySkladClient([product], **kwargs))
+    monkeypatch.setattr(web_module, "NovicloudClient", lambda **kwargs: _FakeNovicloudClient([], **kwargs))
+
+    environ = {"PATH_INFO": "/api/compare-stream", "QUERY_STRING": "", "REQUEST_METHOD": "GET"}
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    list(application(environ, start_response))
+
+    assert captured["status"] == "200 OK"
+    cached = web_module._cached_catalogs()
+    assert cached is not None
+    cached_moysklad, cached_novicloud = cached
+    assert cached_moysklad == [product]
+    assert cached_novicloud == []

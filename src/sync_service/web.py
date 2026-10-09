@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from html import escape
 from json import dumps, loads
 from socketserver import ThreadingMixIn
+from time import monotonic
+from typing import Any
 from urllib.parse import parse_qs
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -317,6 +320,33 @@ def _ndjson_line(payload: dict) -> bytes:
     return dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
 
 
+_catalog_cache_lock = threading.Lock()
+_catalog_cache: dict[str, Any] = {"at": 0.0, "moysklad": None, "novicloud": None}
+_CATALOG_CACHE_TTL_SECONDS = 1800.0
+
+
+def _store_catalog_cache(moysklad_products: list[dict[str, Any]], novicloud_products: list[dict[str, Any]]) -> None:
+    with _catalog_cache_lock:
+        _catalog_cache["at"] = monotonic()
+        _catalog_cache["moysklad"] = moysklad_products
+        _catalog_cache["novicloud"] = novicloud_products
+
+
+def _cached_catalogs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    """Reuse the catalogs /api/compare-stream just fetched, if still fresh.
+
+    /generate needs the same full MoySklad/Novicloud catalogs compare-stream
+    already fetches. Without this cache it repeated that same ~30-80s fetch
+    on every click of "Скачать CSV", right after compare-stream had just
+    finished it — on a full catalog this made the download look hung or
+    simply broken.
+    """
+    with _catalog_cache_lock:
+        if _catalog_cache["moysklad"] is None or monotonic() - _catalog_cache["at"] >= _CATALOG_CACHE_TTL_SECONDS:
+            return None
+        return _catalog_cache["moysklad"], _catalog_cache["novicloud"]
+
+
 def _compare_stream():
     """Yield one JSON line per real comparison stage as it actually starts.
 
@@ -338,6 +368,7 @@ def _compare_stream():
         moysklad_products = moysklad.products()
         yield _ndjson_line({"stage": "novicloud"})
         novicloud_products = novicloud.all_products()
+        _store_catalog_cache(moysklad_products, novicloud_products)
         yield _ndjson_line({"stage": "matching"})
         categories = tuple(CategorySyncConfig().load()["novicloud"])
         comparison = compare_catalogs(moysklad_products, novicloud_products, categories)
@@ -415,7 +446,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <section class="card accordion" id="section-catalog">
 <div class="accordion-header" data-section="catalog" role="button" tabindex="0">
 <div style="display:flex;align-items:center;gap:8px"><h2>Синхронизация ассортимента</h2><button class="help-btn" id="catalog-help" type="button" aria-label="Как это работает" title="Как это работает">?</button></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><button class="button secondary compact" id="download-csv" type="button" disabled title="Сначала выполните сравнение каталогов">↓&nbsp; Скачать CSV</button><span class="accordion-chevron">▸</span></div>
+<div style="display:flex;align-items:center;gap:14px"><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button><button class="button" id="compare" type="button">↻&nbsp; Сравнить каталоги</button><button class="button secondary compact" id="download-csv" type="button" disabled title="Сначала выполните сравнение каталогов">↓&nbsp; Скачать CSV</button><span id="download-status" class="muted"></span><span class="accordion-chevron">▸</span></div>
 </div>
 <div class="accordion-body" id="body-catalog" hidden>
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
@@ -599,7 +630,16 @@ document.getElementById('search').oninput=draw;document.getElementById('category
 draw();}
 function visible(){const q=(document.getElementById('search')?.value||'').toLowerCase(), category=document.getElementById('category')?.value, only=document.getElementById('onlyDiff')?.checked;return rows.filter(r=>(!only||r.status!=='same')&&(!category||r.category===category)&&(!q||(r.code+' '+r.name).toLowerCase().includes(q)));}
 function draw(){const visibleRows=visible(), tbody=document.getElementById('tbody');tbody.innerHTML=visibleRows.map((r,index)=>{const blocked=r.status==='no_price';return '<tr'+(blocked?' class="blocked"':'')+'><td>'+String(index+1)+'</td><td>'+(blocked?'<input type="checkbox" disabled title="Сначала задайте цену в МойСклад">':'<input class="pick" type="checkbox" value="'+encodeURIComponent(r.code)+'" checked>')+'</td><td><strong>'+r.code+'</strong><br><span>'+r.name+'</span></td><td>'+r.category+'</td><td><span class="badge '+r.status+'">'+labels[r.status]+'</span></td><td>'+r.price.toFixed(2)+' PLN</td></tr>';}).join('');document.getElementById('count').textContent=visibleRows.length+' позиций';}
-function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;location.href='/generate?format='+format+'&codes='+codes;}
+async function download(format){const codes=[...document.querySelectorAll('.pick:checked')].map(x=>x.value).join(',');if(!codes)return;
+const status=document.getElementById('download-status');downloadCsvBtn.disabled=true;status.className='muted';status.textContent='Формируем файл…';
+try{const response=await fetch('/generate?format='+format+'&codes='+codes);
+if(!response.ok){status.className='error';status.textContent=await response.text();return;}
+const blob=await response.blob();
+const match=/filename="?([^"]+)"?/.exec(response.headers.get('Content-Disposition')||'');
+const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=match?match[1]:('novicloud-import.'+format);
+document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(link.href);status.textContent='';}
+catch(error){status.className='error';status.textContent='Не удалось скачать файл: '+error.message;}
+finally{downloadCsvBtn.disabled=false;}}
 downloadCsvBtn.onclick=()=>download('csv');
 async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog(allLogEntries);}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
@@ -995,18 +1035,22 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
     if path != "/generate":
         start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
         return [b"Not found"]
-    settings = Settings.from_env()
-    novicloud = NovicloudClient(base_url=settings.novicloud_base_url, version=settings.novicloud_api_version, account=settings.novicloud_account, password=settings.novicloud_password)
-    moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
-    try:
-        params = parse_qs(environ.get("QUERY_STRING", ""))
-        codes = set(params.get("codes", [""])[0].split(",")) if params.get("codes") else set()
-        categories = tuple(CategorySyncConfig().load()["novicloud"])
-        rows = rows_for_codes(moysklad.products(), novicloud.all_products(), codes, categories)
-    finally:
-        novicloud.close()
-        moysklad.close()
+    cached = _cached_catalogs()
+    if cached is None:
+        # No slow fallback fetch here on purpose: the download button is only
+        # ever enabled right after a successful "Сравнить каталоги" run, so a
+        # missing/expired cache means that comparison is stale, not that this
+        # request should silently repeat its ~30-80s full-catalog fetch (that
+        # repeat fetch is what made downloads look hung before this cache
+        # existed). Ask the user to re-run the comparison instead.
+        message = "Сравнение устарело — нажмите «Сравнить каталоги» ещё раз."
+        start_response("409 Conflict", [("Content-Type", "text/plain; charset=utf-8")])
+        return [message.encode("utf-8")]
+    moysklad_products, novicloud_products = cached
     params = parse_qs(environ.get("QUERY_STRING", ""))
+    codes = set(params.get("codes", [""])[0].split(",")) if params.get("codes") else set()
+    categories = tuple(CategorySyncConfig().load()["novicloud"])
+    rows = rows_for_codes(moysklad_products, novicloud_products, codes, categories)
     format_name = params.get("format", ["xlsx"])[0]
     if format_name == "csv":
         content, content_type, filename = csv_bytes(rows), "text/csv; charset=utf-8", "novicloud-import.csv"
