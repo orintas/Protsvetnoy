@@ -159,6 +159,9 @@ class _FakeMoySkladClient:
     def products(self):
         return self._products
 
+    def products_pages(self):
+        yield self._products
+
     def close(self):
         self.closed = True
 
@@ -170,6 +173,9 @@ class _FakeNovicloudClient:
 
     def all_products(self):
         return self._products
+
+    def all_products_pages(self):
+        yield self._products
 
     def close(self):
         self.closed = True
@@ -272,3 +278,45 @@ def test_compare_stream_populates_catalog_cache(monkeypatch):
     cached_moysklad, cached_novicloud = cached
     assert cached_moysklad == [product]
     assert cached_novicloud == []
+
+
+class _PagedMoySkladClient:
+    def __init__(self, pages, **kwargs):
+        self._pages = pages
+
+    def products_pages(self):
+        yield from self._pages
+
+    def close(self):
+        pass
+
+
+class _PagedNovicloudClient:
+    def __init__(self, pages, **kwargs):
+        self._pages = pages
+
+    def all_products_pages(self):
+        yield from self._pages
+
+    def close(self):
+        pass
+
+
+def test_compare_stream_reports_a_running_count_as_pages_arrive(monkeypatch):
+    # A single static "Загружаем каталог…" label made a slow (~30-80s)
+    # catalog fetch look stuck. Progress events with a running item count
+    # per page let the UI show it's actually moving.
+    _reset_catalog_cache()
+    monkeypatch.setattr(web_module, "CategorySyncConfig", _FakeCategorySyncConfig)
+    moysklad_pages = [[_sample_moysklad_product(code="A1")], [_sample_moysklad_product(code="A2")]]
+    novicloud_pages = [[{"kod": "A1"}], [{"kod": "A2"}], [{"kod": "A3"}]]
+    monkeypatch.setattr(web_module, "MoySkladClient", lambda **kwargs: _PagedMoySkladClient(moysklad_pages, **kwargs))
+    monkeypatch.setattr(web_module, "NovicloudClient", lambda **kwargs: _PagedNovicloudClient(novicloud_pages, **kwargs))
+
+    events = [json.loads(line) for line in web_module._compare_stream()]
+
+    moysklad_counts = [e["count"] for e in events if e["stage"] == "moysklad"]
+    novicloud_counts = [e["count"] for e in events if e["stage"] == "novicloud"]
+    assert moysklad_counts == [0, 1, 2]
+    assert novicloud_counts == [0, 1, 2, 3]
+    assert events[-1]["stage"] == "done"

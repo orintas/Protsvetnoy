@@ -28,6 +28,29 @@ def test_novicloud_products_uses_v2_and_barcode_filter():
     assert requests[0].url.params["kod"] == "123"
 
 
+def test_novicloud_all_products_pages_follows_links_next():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("page") == "2":
+            return httpx.Response(200, json={"dane": [{"kod": "b"}], "links": {}})
+        return httpx.Response(200, json={
+            "dane": [{"kod": "a"}],
+            "links": {"next": "https://system.novicloud.pl/rest/api/v2/Varvikas/towary?page=2"},
+        })
+
+    client = NovicloudClient(
+        base_url="https://system.novicloud.pl/rest/api",
+        version="v2",
+        account="Varvikas",
+        password="secret",
+    )
+    client._client._client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://system.novicloud.pl/rest/api/v2/Varvikas",
+    )
+    assert list(client.all_products_pages()) == [[{"kod": "a"}], [{"kod": "b"}]]
+    assert client.all_products() == [{"kod": "a"}, {"kod": "b"}]
+
+
 def test_novicloud_sales_builds_date_filter():
     requests: list[httpx.Request] = []
 
@@ -72,6 +95,20 @@ def _moysklad_client_with_handler(handler):
     client = MoySkladClient(base_url="https://api.moysklad.ru/api/remap/1.2", token="secret")
     client._client._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.moysklad.ru/api/remap/1.2")
     return client
+
+
+def test_moysklad_products_pages_follows_next_href():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "offset" in request.url.params:
+            return httpx.Response(200, json={"rows": [{"id": "p2"}], "meta": {}})
+        return httpx.Response(200, json={
+            "rows": [{"id": "p1"}],
+            "meta": {"nextHref": "https://api.moysklad.ru/api/remap/1.2/entity/product?limit=1000&offset=1000"},
+        })
+
+    client = _moysklad_client_with_handler(handler)
+    assert list(client.products_pages()) == [[{"id": "p1"}], [{"id": "p2"}]]
+    assert client.products() == [{"id": "p1"}, {"id": "p2"}]
 
 
 def test_demand_template_from_customer_order_puts_order_meta():

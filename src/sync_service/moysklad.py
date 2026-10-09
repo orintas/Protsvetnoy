@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -50,18 +51,26 @@ class MoySkladClient:
                 return result
             payload = self._client.get_url(str(next_link))
 
-    def products(self) -> list[dict[str, Any]]:
+    def products_pages(self) -> Iterator[list[dict[str, Any]]]:
+        """Yield each page of /entity/product as it's fetched, rather than
+        buffering the whole catalog — lets a caller report progress on a
+        fetch that otherwise runs silently for tens of seconds."""
         payload = self._client.get("/entity/product", params={"limit": 1000})
-        result: list[dict[str, Any]] = []
         while True:
             rows = payload.get("rows", [])
             if not isinstance(rows, list):
                 raise ValueError("MoySklad products response has invalid rows")
-            result.extend(row for row in rows if isinstance(row, dict))
+            yield [row for row in rows if isinstance(row, dict)]
             next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
             if not next_link:
-                return result
+                return
             payload = self._client.get_url(str(next_link))
+
+    def products(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for page in self.products_pages():
+            result.extend(page)
+        return result
 
     def products_by_category(self, path_name: str) -> list[dict[str, Any]]:
         """Non-archived products in one category (pathName), with images expanded."""

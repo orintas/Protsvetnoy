@@ -364,10 +364,16 @@ def _compare_stream():
         yield _ndjson_line({"stage": "error", "message": str(error)})
         return
     try:
-        yield _ndjson_line({"stage": "moysklad"})
-        moysklad_products = moysklad.products()
-        yield _ndjson_line({"stage": "novicloud"})
-        novicloud_products = novicloud.all_products()
+        yield _ndjson_line({"stage": "moysklad", "count": 0})
+        moysklad_products: list[dict[str, Any]] = []
+        for page in moysklad.products_pages():
+            moysklad_products.extend(page)
+            yield _ndjson_line({"stage": "moysklad", "count": len(moysklad_products)})
+        yield _ndjson_line({"stage": "novicloud", "count": 0})
+        novicloud_products: list[dict[str, Any]] = []
+        for page in novicloud.all_products_pages():
+            novicloud_products.extend(page)
+            yield _ndjson_line({"stage": "novicloud", "count": len(novicloud_products)})
         _store_catalog_cache(moysklad_products, novicloud_products)
         yield _ndjson_line({"stage": "matching"})
         categories = tuple(CategorySyncConfig().load()["novicloud"])
@@ -616,7 +622,7 @@ while((newlineAt=buffer.indexOf('\\n'))>=0){const line=buffer.slice(0,newlineAt)
 const event=JSON.parse(line);
 if(event.stage==='error')throw new Error(event.message);
 if(event.stage==='done')return event.rows;
-progressLabel.textContent=stageLabels[event.stage]||'';}}
+progressLabel.textContent=(stageLabels[event.stage]||'')+(typeof event.count==='number'&&event.count>0?' ('+event.count+' товаров)':'');}}
 throw new Error('Соединение прервано до получения результата');}
 const downloadCsvBtn=document.getElementById('download-csv');
 compare.onclick=async()=>{openAccordion('section-catalog');compare.disabled=true;downloadCsvBtn.disabled=true;result.innerHTML='';progressLabel.textContent=stageLabels.moysklad;progressWrap.hidden=false;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -17,18 +18,26 @@ class NovicloudClient:
         params = {"kod": barcode} if barcode else None
         return self._client.get("/towary", params=params)
 
-    def all_products(self) -> list[dict[str, Any]]:
+    def all_products_pages(self) -> Iterator[list[dict[str, Any]]]:
+        """Yield each page of /towary as it's fetched, rather than buffering
+        the whole catalog — lets a caller report progress on a fetch that
+        otherwise runs silently for tens of seconds."""
         payload = self.products()
-        result: list[dict[str, Any]] = []
         while True:
             rows = payload.get("dane", [])
             if not isinstance(rows, list):
                 raise ValueError("Novicloud products response has invalid dane")
-            result.extend(row for row in rows if isinstance(row, dict))
+            yield [row for row in rows if isinstance(row, dict)]
             next_link = payload.get("links", {}).get("next") if isinstance(payload.get("links"), dict) else None
             if not next_link:
-                return result
+                return
             payload = self._client.get_url(str(next_link))
+
+    def all_products(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for page in self.all_products_pages():
+            result.extend(page)
+        return result
 
     def stores(self) -> dict[str, Any]:
         return self._client.get("/sklepy")
