@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -61,11 +62,11 @@ class FakeMoySklad:
 
     def create_retail_demand(self, **kwargs):
         self.created_demands.append(kwargs)
-        return {"id": "demand-1"}
+        return {"id": "demand-1", "meta": {"uuidHref": "https://online.moysklad.ru/app/#retaildemand/edit?id=demand-1"}}
 
     def create_retail_return(self, **kwargs):
         self.created_returns.append(kwargs)
-        return {"id": "return-1"}
+        return {"id": "return-1", "meta": {"uuidHref": "https://online.moysklad.ru/app/#retailsalesreturn/edit?id=return-1"}}
 
     def close(self):
         self.closed = True
@@ -141,6 +142,25 @@ def test_sync_store_sales_creates_document_with_positions_and_cash_split(tmp_pat
     assert moysklad.created_shifts == []  # reused the existing open shift
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["sale"]
+
+
+def test_sync_store_sales_logs_a_clickable_moysklad_link(tmp_path):
+    # The journal row's payload used to be the raw Novicloud document, which
+    # has no MoySklad reference at all — the web UI's entityLink() looks for
+    # a moysklad_url key, so the logged sale was never clickable.
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    novicloud = FakeNovicloud(
+        docs=[_sale_doc()],
+        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
+        products_by_link={"https://novicloud/towary/1": _product_payload()},
+    )
+    moysklad = FakeMoySklad(open_shift={"id": "existing-shift"})
+
+    sync_store_sales(moysklad, novicloud, STORE, log)
+
+    payload = json.loads(log.recent()[0]["payload"])
+    assert payload["moysklad_url"] == "https://online.moysklad.ru/app/#retaildemand/edit?id=demand-1"
+    assert payload["nr_dok"] == "P/1"  # original Novicloud document fields still present
 
 
 def test_sync_store_sales_omits_document_number_when_not_numeric(tmp_path):
@@ -269,6 +289,23 @@ def test_sync_store_returns_negates_payment_split(tmp_path):
     assert ret["non_cash_sum"] == -5900
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["return"]
+
+
+def test_sync_store_returns_logs_a_clickable_moysklad_link(tmp_path):
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    doc = _sale_doc(nr_dok="Z/1")
+    novicloud = FakeNovicloud(
+        docs=[doc],
+        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
+        products_by_link={"https://novicloud/towary/1": _product_payload()},
+    )
+    moysklad = FakeMoySklad(open_shift={"id": "shift-1"})
+
+    sync_store_returns(moysklad, novicloud, STORE, log)
+
+    payload = json.loads(log.recent()[0]["payload"])
+    assert payload["moysklad_url"] == "https://online.moysklad.ru/app/#retailsalesreturn/edit?id=return-1"
+    assert payload["nr_dok"] == "Z/1"
 
 
 def test_run_once_logs_a_heartbeat_summary_even_when_nothing_new(tmp_path, monkeypatch):

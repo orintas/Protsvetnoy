@@ -437,7 +437,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 </style></head>
 <body><main class="wrap">
 <header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><div style="display:flex;align-items:center;gap:14px"><button class="status" id="status-indicator" type="button">Система готова</button><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></div></header>
-<section class="hero" id="hero"><h1>Управление интеграциями</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
+<section class="hero compact" id="hero"><h1>Управление интеграциями</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
@@ -458,13 +458,13 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="compare-progress" class="progress-wrap" hidden><div class="progress-bar"><div class="progress-fill"></div></div><span id="progress-label" class="muted"></span></div>
 <div id="result"></div>
 </div></section>
-<section class="card accordion" id="section-sales">
+<section class="card accordion open" id="section-sales">
 <div class="accordion-header" data-section="sales" role="button" tabindex="0">
 <div><h2>Синхронизация продаж</h2><p>Боевой режим: чеки и возвраты из Novicloud создаются в МойСклад (retaildemand/retailsalesreturn) для магазинов Польши. Проверка каждые 15 минут.</p></div>
-<div style="display:flex;align-items:center;gap:14px"><button class="button secondary" id="refresh-log" type="button">Обновить</button><span class="accordion-chevron">▸</span></div>
+<span class="accordion-chevron">▸</span>
 </div>
-<div class="accordion-body" id="body-sales" hidden>
-<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><input id="log-search" class="field" placeholder="Поиск по номеру документа" style="min-width:220px"></div>
+<div class="accordion-body" id="body-sales">
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><button class="button secondary" id="refresh-log" type="button">Обновить</button><input id="log-search" class="field" placeholder="Поиск по номеру документа" style="min-width:220px"></div>
 <div id="sync-log" class="log"></div>
 </div></section>
 </section>
@@ -675,7 +675,7 @@ rowsHtml+=Object.keys(payload).filter(k=>k!=='platnosci'||true).map(k=>'<dt>'+(l
 body.innerHTML=rowsHtml;modal.classList.add('open');}
 document.getElementById('log-detail-close').onclick=()=>document.getElementById('log-detail-modal').classList.remove('open');
 document.getElementById('log-detail-modal').onclick=e=>{if(e.target.id==='log-detail-modal')e.currentTarget.classList.remove('open');};
-document.getElementById('refresh-log').onclick=()=>{openAccordion('section-sales');loadLog();};loadLog();
+document.getElementById('refresh-log').onclick=loadLog;loadLog();
 const catalogHelpBtn=document.getElementById('catalog-help'), catalogHelpModal=document.getElementById('catalog-help-modal');
 catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');

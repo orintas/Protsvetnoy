@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .error_log import ErrorLog
 from .moysklad import MoySkladClient
+from .moysklad_links import moysklad_link_fields
 from .novicloud import NovicloudClient
 from .store_mapping import StoreMapping, load_store_mappings
 from .sync_log import SyncLog
@@ -137,7 +138,7 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
         if shift_id is None:
             shift_id = _ensure_open_shift(moysklad, store)
         cash_sum, non_cash_sum = _payment_split(doc, negate=False)
-        moysklad.create_retail_demand(
+        demand = moysklad.create_retail_demand(
             name=nr_dok,
             moment=_to_moysklad_moment(doc.get("data_wystawienia")),
             document_number=_as_int(doc.get("nr_systemowy")),
@@ -153,7 +154,7 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
             cash_sum=cash_sum,
             non_cash_sum=non_cash_sum,
         )
-        log.add("sale", "success", f"{store.name}: чек {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, doc)
+        log.add("sale", "success", f"{store.name}: чек {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, {**doc, **moysklad_link_fields(demand, f"Чек {nr_dok}")})
         created += 1
         time.sleep(RATE_LIMIT_SLEEP_SECONDS)
     return created
@@ -182,7 +183,7 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
         if shift_id is None:
             shift_id = _ensure_open_shift(moysklad, store)
         cash_sum, non_cash_sum = _payment_split(doc, negate=True)
-        moysklad.create_retail_return(
+        sales_return = moysklad.create_retail_return(
             name=nr_dok,
             moment=_to_moysklad_moment(doc.get("data_wystawienia")),
             organization_id=store.organization_id,
@@ -196,7 +197,7 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
             cash_sum=cash_sum,
             non_cash_sum=non_cash_sum,
         )
-        log.add("return", "success", f"{store.name}: возврат {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, doc)
+        log.add("return", "success", f"{store.name}: возврат {nr_dok} создан в МойСклад ({len(positions)} позиций)", nr_dok, {**doc, **moysklad_link_fields(sales_return, f"Возврат {nr_dok}")})
         created += 1
         time.sleep(RATE_LIMIT_SLEEP_SECONDS)
     return created
