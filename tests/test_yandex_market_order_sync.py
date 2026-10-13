@@ -149,7 +149,7 @@ def test_full_pipeline_creates_confirms_and_sends_label(tmp_path):
 
     assert moysklad.created["store_id"] == CAMPAIGN_STORES["149179260"]
     assert moysklad.created["external_code"] == "999"
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 36130000, "assortment": {"meta": product["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 36130000, "assortment": {"meta": product["meta"]}}]
     assert moysklad.created["description"] == "RGL02 × 1"
     assert moysklad.created["owner_id"] == OWNER_EMPLOYEE_ID
     assert moysklad.created["group_id"] == GROUP_ID

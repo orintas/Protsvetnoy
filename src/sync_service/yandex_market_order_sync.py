@@ -119,8 +119,13 @@ def _build_positions(moysklad: MoySkladClient, items: list[dict[str, Any]]) -> t
             missing_codes.append(code or "(пусто)")
             continue
         price_value = ((item.get("prices") or {}).get("payment") or {}).get("value", 0)
+        quantity = item.get("count", 1)
         positions.append({
-            "quantity": item.get("count", 1),
+            "quantity": quantity,
+            # See shopify_order_sync._build_positions for why this is needed:
+            # without it the position stays unreserved until a human touches
+            # the order, and "available" stock stays wrong on every channel.
+            "reserve": quantity,
             "price": round(float(price_value) * 100),
             "assortment": {"meta": product["meta"]},
         })

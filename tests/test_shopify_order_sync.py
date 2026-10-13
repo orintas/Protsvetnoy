@@ -83,7 +83,7 @@ def test_creates_order_from_main_warehouse_when_stock_available(tmp_path):
     assert moysklad.created["owner_id"] == OWNER_EMPLOYEE_ID
     assert moysklad.created["group_id"] == GROUP_ID
     assert moysklad.created["project_id"] == PROJECT_EUROPE_ID
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["order_created"]
 
@@ -117,7 +117,7 @@ def test_poland_orders_use_pln_currency_and_presentment_price(tmp_path):
     }])
     process_new_order(order=order, moysklad=moysklad, log=log)
     assert moysklad.created["currency_id"] == PLN_CURRENCY_ID
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 6100, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 6100, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_poland_order_falls_back_to_shop_price_when_no_presentment_money(tmp_path):
@@ -129,7 +129,7 @@ def test_poland_order_falls_back_to_shop_price_when_no_presentment_money(tmp_pat
     order = _order(country_code="PL", line_items=[{"sku": "ABC", "quantity": 1, "price": "14.00"}])
     process_new_order(order=order, moysklad=moysklad, log=log)
     assert moysklad.created["currency_id"] == PLN_CURRENCY_ID
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_non_poland_orders_still_use_eur_and_shop_price(tmp_path):
@@ -144,7 +144,7 @@ def test_non_poland_orders_still_use_eur_and_shop_price(tmp_path):
     }])
     process_new_order(order=order, moysklad=moysklad, log=log)
     assert moysklad.created["currency_id"] == CURRENCY_ID
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 1400, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_promo_code_sets_discount_percent_and_keeps_full_price(tmp_path):
@@ -160,7 +160,7 @@ def test_promo_code_sets_discount_percent_and_keeps_full_price(tmp_path):
         "discount_allocations": [{"amount": "1.80", "amount_set": {"shop_money": {"amount": "1.80", "currency_code": "EUR"}, "presentment_money": {"amount": "1.80", "currency_code": "EUR"}}, "discount_application_index": 0}],
     }])
     process_new_order(order=order, moysklad=moysklad, log=log)
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1800, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 1800, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_promo_code_discount_percent_accounts_for_line_quantity(tmp_path):
@@ -176,7 +176,7 @@ def test_promo_code_discount_percent_accounts_for_line_quantity(tmp_path):
         "discount_allocations": [{"amount": "0.40", "amount_set": {"shop_money": {"amount": "0.40", "currency_code": "EUR"}, "presentment_money": {"amount": "0.40", "currency_code": "EUR"}}, "discount_application_index": 0}],
     }])
     process_new_order(order=order, moysklad=moysklad, log=log)
-    assert moysklad.created["positions"] == [{"quantity": 4, "price": 100, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 4, "reserve": 4, "price": 100, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_promo_code_discount_percent_uses_presentment_amounts_for_poland(tmp_path):
@@ -193,7 +193,7 @@ def test_promo_code_discount_percent_uses_presentment_amounts_for_poland(tmp_pat
         "discount_allocations": [{"amount": "3.47", "amount_set": {"shop_money": {"amount": "3.47", "currency_code": "EUR"}, "presentment_money": {"amount": "15.20", "currency_code": "PLN"}}, "discount_application_index": 0}],
     }])
     process_new_order(order=order, moysklad=moysklad, log=log)
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 15200, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 15200, "discount": 10.0, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_promo_code_is_added_to_the_order_description(tmp_path):
@@ -224,7 +224,7 @@ def test_no_discount_allocations_leaves_price_unchanged(tmp_path):
     moysklad = FakeMoySklad(products={"ABC": _product("ABC")}, stock_by_store={MAIN_STORE_ID: [{"code": "ABC", "quantity": 2}]})
     order = _order(country_code="EE", line_items=[{"sku": "ABC", "quantity": 1, "price": "18.00"}])
     process_new_order(order=order, moysklad=moysklad, log=log)
-    assert moysklad.created["positions"] == [{"quantity": 1, "price": 1800, "assortment": {"meta": _product("ABC")["meta"]}}]
+    assert moysklad.created["positions"] == [{"quantity": 1, "reserve": 1, "price": 1800, "assortment": {"meta": _product("ABC")["meta"]}}]
 
 
 def test_rest_of_europe_uses_wola_park_first(tmp_path):

@@ -191,8 +191,15 @@ def _build_positions(moysklad: MoySkladClient, line_items: list[dict[str, Any]],
             continue
         price = _line_item_price(item, use_presentment=use_presentment_price)
         discount_percent = _line_item_discount_percent(item, price=price, use_presentment=use_presentment_price)
+        quantity = item.get("quantity") or 1
         position: dict[str, Any] = {
-            "quantity": item.get("quantity") or 1,
+            "quantity": quantity,
+            # Without this, MoySklad leaves the position unreserved until a
+            # human opens/edits the order — "available" (stock - reserve)
+            # then stays wrong and Shopify keeps selling stock that's
+            # already spoken for (confirmed live: order #7896 sat reserve=0
+            # for ~3 days until staff touched it, MG2445e stayed "in stock").
+            "reserve": quantity,
             "price": round(price * 100),
             "assortment": {"meta": product["meta"]},
         }
