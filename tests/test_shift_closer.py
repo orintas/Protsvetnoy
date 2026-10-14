@@ -21,7 +21,7 @@ class FakeMoySkladClient:
         # attempt fails — simulates the race losing right at the PUT itself.
         self.close_during_our_attempt_ids: set[str] = set()
 
-    def open_retail_shifts(self, organization_id, since):
+    def open_retail_shifts(self, organization_id):
         if organization_id in self.fail_orgs:
             raise RuntimeError("boom (503)")
         return self.shifts_by_org.get(organization_id, [])

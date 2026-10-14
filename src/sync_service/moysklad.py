@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime
 from typing import Any
 
 from .change_log import record
@@ -285,20 +284,70 @@ class MoySkladClient:
         payload = self._client.get(f"/entity/{entity}", params={"filter": f"name={name};retailStore={href}", "limit": 1})
         return bool(payload.get("rows"))
 
-    def find_open_retail_shift(self, retail_store_id: str) -> dict[str, Any] | None:
+    def retail_shift_for_day(self, retail_store_id: str, day: str) -> dict[str, Any] | None:
+        """The store's shift opened on `day` ("YYYY-MM-DD"), open or already closed — earliest one if there are several."""
         href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
-        payload = self._client.get("/entity/retailshift", params={"filter": f"retailStore={href};closeDate=", "order": "created,desc", "limit": 1})
+        payload = self._client.get("/entity/retailshift", params={
+            "filter": f"retailStore={href};moment>={day} 00:00:00;moment<={day} 23:59:59",
+            "order": "moment,asc",
+            "limit": 1,
+        })
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
-    def create_retail_shift(self, *, organization_id: str, store_id: str, retail_store_id: str, department_id: str, owner_id: str) -> dict[str, Any]:
-        body = {
+    def stale_open_retail_shifts(self, retail_store_id: str, before_day: str) -> list[dict[str, Any]]:
+        """The store's still-open shifts opened before `before_day` ("YYYY-MM-DD") — i.e. ones a previous day left open."""
+        href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
+        payload = self._client.get("/entity/retailshift", params={
+            "filter": f"retailStore={href};closeDate=;moment<{before_day} 00:00:00",
+            "order": "moment,asc",
+            "limit": 100,
+        })
+        return [row for row in payload.get("rows", []) if isinstance(row, dict)]
+
+    def retail_entities_since(self, entity: str, retail_store_id: str, since_day: str) -> list[dict[str, Any]]:
+        """Every `entity` (retailshift/retaildemand/retailsalesreturn) of one retail store with moment on/after `since_day`."""
+        href = f"{self._client.base_url}/entity/retailstore/{retail_store_id}"
+        payload = self._client.get(f"/entity/{entity}", params={
+            "filter": f"retailStore={href};moment>={since_day} 00:00:00",
+            "order": "moment,asc",
+            "limit": 1000,
+        })
+        result: list[dict[str, Any]] = []
+        while True:
+            result.extend(row for row in payload.get("rows", []) if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
+    def move_to_retail_shift(self, entity: str, documents: list[dict[str, Any]], shift_id: str) -> None:
+        """Re-attach existing retail documents to another shift, in bulk (MoySklad's array POST updates rows that carry their meta)."""
+        shift = self._meta("retailshift", shift_id)
+        for start in range(0, len(documents), 100):
+            chunk = documents[start:start + 100]
+            # A return without a base demand is rejected on any update that doesn't resend its cash/non-cash split (code 19001).
+            carried = ("cashSum", "noCashSum") if entity == "retailsalesreturn" else ()
+            rows = [{"meta": doc["meta"], "retailShift": shift, **{key: doc.get(key, 0) for key in carried}} for doc in chunk]
+            result = self._client.post_array(f"/entity/{entity}", rows)
+            errors = [row["errors"] for row in result if isinstance(row, dict) and row.get("errors")]
+            if errors:
+                raise RuntimeError(f"MoySklad rejected moving {len(errors)} {entity} to shift {shift_id}: {errors[:3]}")
+        record(service="moysklad", entity_type=f"{entity}.retailShift", entity_id=shift_id, action="update",
+               after={"documents": [doc.get("name") for doc in documents]})
+
+    def create_retail_shift(
+        self, *, organization_id: str, store_id: str, retail_store_id: str, department_id: str, owner_id: str, moment: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
             "organization": self._meta("organization", organization_id),
             "store": self._meta("store", store_id),
             "retailStore": self._meta("retailstore", retail_store_id),
             "group": self._meta("group", department_id),
             "owner": self._meta("employee", owner_id),
         }
+        if moment is not None:
+            body["moment"] = moment
         result = self._client.post("/entity/retailshift", body)
         record(service="moysklad", entity_type="retailshift", entity_id=result.get("name") or str(result.get("id")), action="create",
                after={"retail_store_id": retail_store_id, "store_id": store_id}, link=result.get("meta", {}).get("uuidHref"))
@@ -387,17 +436,19 @@ class MoySkladClient:
                link=result.get("meta", {}).get("uuidHref"))
         return result
 
-    def open_retail_shifts(self, organization_id: str, since: datetime) -> list[dict[str, Any]]:
-        """Retail shifts for an organization that have no closeDate yet.
+    def open_retail_shifts(self, organization_id: str) -> list[dict[str, Any]]:
+        """Retail shifts for an organization that have no closeDate yet, however long ago they were opened.
 
-        Scoped to shifts opened at or after ``since`` so we don't page through
-        the full historical shift log (there can be well over 100k rows).
+        Filtered server-side on an empty closeDate, so this never pages
+        through the full historical shift log (there can be well over 100k
+        rows). It used to be scoped to shifts opened in the last few days
+        instead — which silently let any shift older than that stay open
+        forever (confirmed live: Poland shifts open since 2026-08-24).
         """
         href = f"{self._client.base_url}/entity/organization/{organization_id}"
-        since_str = since.strftime("%Y-%m-%d %H:%M:%S")
         payload = self._client.get(
             "/entity/retailshift",
-            params={"filter": f"organization={href};moment>={since_str}", "order": "moment,asc", "limit": 100, "expand": "retailStore"},
+            params={"filter": f"organization={href};closeDate=", "order": "moment,asc", "limit": 100, "expand": "retailStore"},
         )
         result: list[dict[str, Any]] = []
         while True:

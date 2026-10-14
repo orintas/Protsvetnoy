@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from sync_service.novicloud_retail_sync import _within_sales_sync_window, run_once, sync_store_returns, sync_store_sales
+from sync_service.novicloud_retail_sync import _within_sales_sync_window, close_stale_shifts, run_once, sync_store_returns, sync_store_sales
 from sync_service.store_mapping import StoreMapping
 from sync_service.sync_log import SyncLog
 
@@ -39,10 +39,14 @@ STORE = StoreMapping(
 class FakeMoySklad:
     base_url = "https://api.moysklad.ru/api/remap/1.2"
 
-    def __init__(self, *, existing_names=None, open_shift=None):
+    def __init__(self, *, existing_names=None, open_shift=None, day_shifts=None, stale_shifts=None):
         self.existing_names = existing_names or set()
+        # open_shift: the shift returned for any day; day_shifts: per-day override ("YYYY-MM-DD" -> shift)
         self.open_shift = open_shift
+        self.day_shifts = day_shifts or {}
+        self.stale_shifts = stale_shifts or []
         self.created_shifts = []
+        self.closed_shifts = []
         self.created_demands = []
         self.created_returns = []
         self.closed = False
@@ -53,12 +57,20 @@ class FakeMoySklad:
     def document_exists(self, entity, *, name, retail_store_id):
         return name in self.existing_names
 
-    def find_open_retail_shift(self, retail_store_id):
-        return self.open_shift
+    def retail_shift_for_day(self, retail_store_id, day):
+        return self.day_shifts.get(day, self.open_shift)
 
     def create_retail_shift(self, **kwargs):
         self.created_shifts.append(kwargs)
-        return {"id": "new-shift"}
+        shift = {"id": "new-shift" if len(self.created_shifts) == 1 else f"new-shift-{len(self.created_shifts)}"}
+        self.day_shifts[kwargs["moment"][:10]] = shift
+        return shift
+
+    def stale_open_retail_shifts(self, retail_store_id, before_day):
+        return [shift for shift in self.stale_shifts if shift["moment"][:10] < before_day]
+
+    def close_retail_shift(self, shift_id, close_date, *, name=None):
+        self.closed_shifts.append((shift_id, close_date))
 
     def create_retail_demand(self, **kwargs):
         self.created_demands.append(kwargs)
@@ -208,6 +220,43 @@ def test_sync_store_sales_creates_shift_when_none_open(tmp_path):
 
     assert len(moysklad.created_shifts) == 1
     assert moysklad.created_demands[0]["retail_shift_id"] == "new-shift"
+
+
+def test_sync_store_sales_puts_each_day_into_its_own_shift(tmp_path):
+    # Regression: every receipt used to go into "whichever shift is open" —
+    # once one nightly close was missed (2026-08-24) weeks of receipts piled
+    # into a single shift. Each day must get its own shift instead.
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    day1, day2, day2_later = _sale_doc("P/1"), _sale_doc("P/2"), _sale_doc("P/3")
+    day1["data_wystawienia"] = "2026-09-10T10:31:45"
+    day2["data_wystawienia"] = "2026-09-11T11:00:00"
+    day2_later["data_wystawienia"] = "2026-09-11T15:00:00"
+    novicloud = FakeNovicloud(
+        docs=[day2_later, day1, day2],  # Novicloud's order isn't guaranteed chronological
+        positions_by_link={"https://novicloud/pozdok?dokument.id=1": _positions_payload()},
+        products_by_link={"https://novicloud/towary/1": _product_payload()},
+    )
+    moysklad = FakeMoySklad(day_shifts={"2026-09-10": {"id": "shift-10"}})
+
+    sync_store_sales(moysklad, novicloud, STORE, log)
+
+    assert [(d["name"], d["retail_shift_id"]) for d in moysklad.created_demands] == [
+        ("P/1", "shift-10"), ("P/2", "new-shift"), ("P/3", "new-shift"),
+    ]
+    assert [s["moment"] for s in moysklad.created_shifts] == ["2026-09-11 11:00:00.000"]  # opened at the day's first receipt
+
+
+def test_close_stale_shifts_closes_previous_days_at_their_own_day_end(tmp_path):
+    log = SyncLog(str(tmp_path / "sync.sqlite3"))
+    moysklad = FakeMoySklad(stale_shifts=[
+        {"id": "old", "name": "00637", "moment": "2026-08-24 11:05:00.000", "meta": {}},
+        {"id": "today", "name": "00700", "moment": "2026-10-14 10:00:00.000", "meta": {}},
+    ])
+
+    closed = close_stale_shifts(moysklad, STORE, log, today="2026-10-14")
+
+    assert closed == 1
+    assert moysklad.closed_shifts == [("old", "2026-08-24 23:59:59.000")]
 
 
 def test_sync_store_sales_skips_already_existing_document(tmp_path):

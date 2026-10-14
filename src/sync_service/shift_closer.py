@@ -26,7 +26,6 @@ TARGET_ORGANIZATIONS: dict[str, str] = {
 # than four separate per-country timezones.
 CLOSE_TIMEZONE = ZoneInfo("Europe/Moscow")
 CLOSE_HOUR, CLOSE_MINUTE = 23, 50
-LOOKBACK_DAYS = 3
 
 
 class ShiftCloseLog:
@@ -114,13 +113,11 @@ def _close_with_renamed_fallback(client: MoySkladClient, shift_id: str, close_da
     return None
 
 
-def list_open_shifts(client: MoySkladClient, *, now: datetime | None = None) -> list[dict[str, Any]]:
+def list_open_shifts(client: MoySkladClient) -> list[dict[str, Any]]:
     """Read-only view of currently open PL/LT/LV/EE shifts — never logs or closes anything."""
-    now = now or datetime.now(CLOSE_TIMEZONE)
-    since = now - timedelta(days=LOOKBACK_DAYS)
     result: list[dict[str, Any]] = []
     for org_id, country in TARGET_ORGANIZATIONS.items():
-        for shift in client.open_retail_shifts(org_id, since):
+        for shift in client.open_retail_shifts(org_id):
             result.append({
                 "country": country,
                 "id": shift.get("id"),
@@ -137,12 +134,11 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
     Returns the number of open shifts found. One shift failing to close does
     not stop the others from being attempted.
     """
-    since = close_moment - timedelta(days=LOOKBACK_DAYS)
     close_date = close_moment.strftime("%Y-%m-%d %H:%M:%S.000")
     total_open = 0
     for org_id, country in TARGET_ORGANIZATIONS.items():
         try:
-            open_shifts = client.open_retail_shifts(org_id, since)
+            open_shifts = client.open_retail_shifts(org_id)
         except Exception as error:
             # A transient failure listing one country's shifts (e.g. a
             # MoySklad 503) must not abort the other three — this used to

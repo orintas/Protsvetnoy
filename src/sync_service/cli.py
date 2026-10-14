@@ -36,6 +36,12 @@ def main() -> None:
     subparsers.add_parser("moysklad-shift-close-worker")
     subparsers.add_parser("health-check-worker")
     subparsers.add_parser("telegram-qa-worker")
+    backfill = subparsers.add_parser(
+        "novicloud-shift-backfill",
+        description="Split the Novicloud stores' receipts back into one MoySklad shift per day (dry run unless --apply).",
+    )
+    backfill.add_argument("--since", required=True, help="First day to repair, YYYY-MM-DD")
+    backfill.add_argument("--apply", action="store_true", help="Actually write to MoySklad")
     assign_slots = subparsers.add_parser(
         "moysklad-assign-slots",
         description="Create an Отгрузка from each given Заказ покупателя and assign a ячейка to every line.",
@@ -82,6 +88,32 @@ def main() -> None:
     if args.command == "telegram-qa-worker":
         from .telegram_qa_worker import worker as telegram_qa_worker
         telegram_qa_worker()
+        return
+    if args.command == "novicloud-shift-backfill":
+        from zoneinfo import ZoneInfo
+        from .shift_backfill import apply_day, describe, plan_store
+        from .store_mapping import load_store_mappings
+        settings = Settings.from_env()
+        client = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
+        now = datetime.now(ZoneInfo("Europe/Warsaw"))
+        today = now.date().isoformat()
+        try:
+            for store in load_store_mappings():
+                # Open today's shift first, so the live sync's new receipts land in it rather than an old shift being repaired.
+                if args.apply and client.retail_shift_for_day(store.retail_store_id, today) is None:
+                    created = client.create_retail_shift(
+                        organization_id=store.organization_id, store_id=store.moysklad_store_id, retail_store_id=store.retail_store_id,
+                        department_id=store.department_id, owner_id=store.owner_id, moment=now.strftime("%Y-%m-%d %H:%M:%S.000"),
+                    )
+                    print(f"===== {store.name}: открыта смена №{created.get('name')} на сегодня", flush=True)
+                plans = plan_store(client, store, since_day=args.since, today=today)
+                print(f"===== {store.name}: дней к исправлению {len(plans)}")
+                for plan in plans:
+                    print(("  " if args.apply else "  [тест] ") + describe(plan), flush=True)
+                    if args.apply:
+                        print(f"    -> готово, смена №{apply_day(client, store, plan)}", flush=True)
+        finally:
+            client.close()
         return
     if args.command == "moysklad-assign-slots":
         from .slot_assignment import create_demands_with_slots

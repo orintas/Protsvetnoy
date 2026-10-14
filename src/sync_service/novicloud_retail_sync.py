@@ -101,18 +101,41 @@ def _build_positions(moysklad: MoySkladClient, novicloud: NovicloudClient, posit
     return positions, missing
 
 
-def _ensure_open_shift(moysklad: MoySkladClient, store: StoreMapping) -> str:
-    shift = moysklad.find_open_retail_shift(store.retail_store_id)
-    if shift is not None:
-        return str(shift["id"])
-    created = moysklad.create_retail_shift(
-        organization_id=store.organization_id,
-        store_id=store.moysklad_store_id,
-        retail_store_id=store.retail_store_id,
-        department_id=store.department_id,
-        owner_id=store.owner_id,
-    )
-    return str(created["id"])
+def _shift_for_day(moysklad: MoySkladClient, store: StoreMapping, moment: str, cache: dict[str, str]) -> str:
+    """The store's shift for the calendar day of `moment`, creating one (opened at `moment`) if that day has none yet.
+
+    One shift per day, never "whichever shift happens to be open": the Make
+    scenario this was ported from reused any open shift, so once a nightly
+    close was missed (2026-08-24) every later receipt piled into that one
+    shift for weeks. Receipts reach us late, so a day's shift may already
+    be closed by the time its last receipts arrive — they still belong in it.
+    """
+    day = moment[:10]
+    if day not in cache:
+        shift = moysklad.retail_shift_for_day(store.retail_store_id, day)
+        if shift is None:
+            shift = moysklad.create_retail_shift(
+                organization_id=store.organization_id,
+                store_id=store.moysklad_store_id,
+                retail_store_id=store.retail_store_id,
+                department_id=store.department_id,
+                owner_id=store.owner_id,
+                moment=moment,
+            )
+        cache[day] = str(shift["id"])
+    return cache[day]
+
+
+def close_stale_shifts(moysklad: MoySkladClient, store: StoreMapping, log: SyncLog, *, today: str) -> int:
+    """Close the store's shifts left open from a previous day, each at the end of its own day."""
+    closed = 0
+    for shift in moysklad.stale_open_retail_shifts(store.retail_store_id, today):
+        close_date = f"{str(shift['moment'])[:10]} 23:59:59.000"
+        moysklad.close_retail_shift(str(shift["id"]), close_date)
+        log.add("shift", "success", f"{store.name}: закрыта смена №{shift.get('name')} за {close_date[:10]}", shift.get("name"),
+                {**shift, **moysklad_link_fields(shift, f"Смена №{shift.get('name')}")})
+        closed += 1
+    return closed
 
 
 def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store: StoreMapping, log: SyncLog) -> int:
@@ -121,8 +144,8 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
     docs = novicloud.documents(typ_dok=SALE_DOC_TYPES, sklep_id=store.novicloud_store_id, date_from=date_from).get("dane", []) or []
 
     created = 0
-    shift_id: str | None = None
-    for doc in docs:
+    shifts: dict[str, str] = {}
+    for doc in sorted(docs, key=lambda d: d.get("data_wystawienia") or ""):
         nr_dok = doc.get("nr_dok")
         if not nr_dok or doc.get("storno"):
             continue
@@ -135,12 +158,12 @@ def sync_store_sales(moysklad: MoySkladClient, novicloud: NovicloudClient, store
         if not positions:
             continue
 
-        if shift_id is None:
-            shift_id = _ensure_open_shift(moysklad, store)
+        moment = _to_moysklad_moment(doc.get("data_wystawienia"))
+        shift_id = _shift_for_day(moysklad, store, moment, shifts)
         cash_sum, non_cash_sum = _payment_split(doc, negate=False)
         demand = moysklad.create_retail_demand(
             name=nr_dok,
-            moment=_to_moysklad_moment(doc.get("data_wystawienia")),
+            moment=moment,
             document_number=_as_int(doc.get("nr_systemowy")),
             check_number=_as_int(doc.get("nr_fiskalny")),
             organization_id=store.organization_id,
@@ -166,8 +189,8 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
     docs = novicloud.documents(typ_dok=RETURN_DOC_TYPE, sklep_id=store.novicloud_store_id, date_from=date_from).get("dane", []) or []
 
     created = 0
-    shift_id: str | None = None
-    for doc in docs:
+    shifts: dict[str, str] = {}
+    for doc in sorted(docs, key=lambda d: d.get("data_wystawienia") or ""):
         nr_dok = doc.get("nr_dok")
         if not nr_dok:
             continue
@@ -180,12 +203,12 @@ def sync_store_returns(moysklad: MoySkladClient, novicloud: NovicloudClient, sto
         if not positions:
             continue
 
-        if shift_id is None:
-            shift_id = _ensure_open_shift(moysklad, store)
+        moment = _to_moysklad_moment(doc.get("data_wystawienia"))
+        shift_id = _shift_for_day(moysklad, store, moment, shifts)
         cash_sum, non_cash_sum = _payment_split(doc, negate=True)
         sales_return = moysklad.create_retail_return(
             name=nr_dok,
-            moment=_to_moysklad_moment(doc.get("data_wystawienia")),
+            moment=moment,
             organization_id=store.organization_id,
             store_id=store.moysklad_store_id,
             retail_store_id=store.retail_store_id,
@@ -227,6 +250,10 @@ def run_once(settings: Settings, log: SyncLog) -> None:
                 total_returns += sync_store_returns(moysklad, novicloud, store, log)
             except Exception as error:
                 log.add("return_error", "error", f"{store.name}: ошибка синхронизации возвратов: {error}", None)
+            try:
+                close_stale_shifts(moysklad, store, log, today=datetime.now(WARSAW).date().isoformat())
+            except Exception as error:
+                log.add("shift_error", "error", f"{store.name}: ошибка закрытия смен прошлых дней: {error}", None)
         log.add("run", "success", f"Проверка завершена: новых чеков {total_sales}, возвратов {total_returns}")
     finally:
         moysklad.close()

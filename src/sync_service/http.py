@@ -148,6 +148,16 @@ class JsonClient:
             raise ApiError(f"POST {response.url} returned a non-object JSON response")
         return result
 
+    def post_array(self, path: str, payload: list[Mapping[str, Any]]) -> list[Any]:
+        """Bulk create/update endpoints take and return a JSON array rather than an object."""
+        response = self._request_with_retry("POST", path, json=payload)
+        if response.is_error:
+            raise ApiError(f"POST {response.url} failed with HTTP {response.status_code}: {response.text[:500]}")
+        result = response.json()
+        if not isinstance(result, list):
+            raise ApiError(f"POST {response.url} returned a non-array JSON response")
+        return result
+
     def put(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         response = self._request_with_retry("PUT", path, json=payload)
         if response.is_error:
