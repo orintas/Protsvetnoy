@@ -22,6 +22,7 @@ from .planfix_client import PlanFixClient
 from .planfix_contact_sync import NotACompany, sync_contact
 from .planfix_log import PlanFixSyncLog
 from .planfix_new_goods import launch_new_product_tasks
+from .review_rules import ReviewRulesStore
 from .review_worker import handle_new_question
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
@@ -495,7 +496,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 </style></head>
 <body><main class="wrap">
 <header class="top"><button class="brand" id="brand-home" type="button"><img class="mark" src="https://static.tildacdn.com/tild3935-3263-4363-a333-393162643930/__-removebg-preview.png" alt="Varvikas"><span>Varvikas | Цветной</span></button><div style="display:flex;align-items:center;gap:14px"><button class="status" id="status-indicator" type="button">Система готова</button><button class="gear-btn open-categories" type="button" aria-label="Категории синхронизации" title="Категории синхронизации">⚙</button></div></header>
-<section class="hero compact" id="hero"><h1>Управление интеграциями</h1><p>Сравнение ассортимента с Novicloud, журнал синхронизации продаж и возвратов, а также синхронизация заказов Яндекс.Маркета.</p></section>
+<section class="hero compact" id="hero"><h1>Управление интеграциями</h1><p>Ассортимент, остатки и заказы — Novicloud, МойСклад, OZON, Shopify, Яндекс.Маркет и PlanFix — плюс автоответы на отзывы и вопросы на маркетплейсах.</p></section>
 <nav class="tabs">
 <button class="tab-btn active" data-tab="catalog" type="button">Novicloud</button>
 <button class="tab-btn" data-tab="moysklad" type="button">МойСклад</button>
@@ -503,6 +504,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 <button class="tab-btn" data-tab="planfix" type="button">PlanFix</button>
+<button class="tab-btn" data-tab="reviews" type="button">Отзывы</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
 <button class="tab-btn" data-tab="changes" type="button">Изменения</button>
 </nav>
@@ -522,7 +524,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <span class="accordion-chevron">▸</span>
 </div>
 <div class="accordion-body" id="body-sales">
-<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><button class="button secondary" id="refresh-log" type="button">Обновить</button><input id="log-search" class="field" placeholder="Поиск по номеру документа" style="min-width:220px"></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><button class="button secondary" id="refresh-log" type="button">Обновить</button><select id="log-kind" class="field"><option value="">Все типы</option></select><input id="log-search" class="field" placeholder="Поиск по номеру документа" style="min-width:220px"></div>
 <div id="sync-log" class="log"></div>
 </div></section>
 </section>
@@ -584,9 +586,18 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="ym-sync-log" class="log"></div></section>
 </section>
 <section id="tab-planfix" class="tab-panel">
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">PlanFix — журнал</h2><p style="margin:0">Кнопка «Отправить в МойСклад» на карточке компании в PlanFix создаёт или обновляет контрагента в МойСклад (поиск по сохранённому MoySkladID, затем по email).</p></div><button class="button secondary" id="refresh-planfix-log" type="button">Обновить</button></div>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">PlanFix — журнал</h2><p style="margin:0">Два независимых сценария: кнопка «Отправить в МойСклад» на карточке компании создаёт или обновляет контрагента в МойСклад (поиск по сохранённому MoySkladID, затем по email); автоматизация «Запуск подзадач с новинками» по завершении задачи «Установить артикулы новинок» создаёт по одной подзадаче «Проработка продукта» на каждый товар из поля «Товары».</p></div><button class="button secondary" id="refresh-planfix-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="planfix-log-kind" class="field"><option value="">Все типы</option></select><input id="planfix-log-search" class="field" placeholder="Поиск" style="min-width:220px"></div>
 <div id="planfix-sync-log" class="log"></div></section>
+</section>
+<section id="tab-reviews" class="tab-panel">
+<section class="card"><div><h2 style="margin:0 0 6px">Отзывы и вопросы — автоответы</h2><p style="margin:0">Бот следит за новыми отзывами и вопросами на OZON и Я.Маркете, готовит черновик ответа (YandexGPT) и присылает его на согласование в Telegram. Там же — одобрение, правка или отклонение черновика; запоминание правок в свод правил; и просмотр/редактирование свода правил командой «правила» в чате.</p></div>
+<h3 style="margin:20px 0 8px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Свод правил</h3>
+<div id="review-rules" class="log"><p class="muted">Загрузка…</p></div>
+</section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал</h2><p style="margin:0">Черновики, публикации, отклонения и ошибки — по отзывам и вопросам OZON и Я.Маркета.</p></div><button class="button secondary" id="refresh-reviews-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="reviews-log-kind" class="field"><option value="">Все типы</option></select><input id="reviews-log-search" class="field" placeholder="Поиск по площадке/ID" style="min-width:220px"></div>
+<div id="reviews-sync-log" class="log"></div></section>
 </section>
 <section id="tab-errors" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
@@ -705,25 +716,52 @@ document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(l
 catch(error){status.className='error';status.textContent='Не удалось скачать файл: '+error.message;}
 finally{downloadCsvBtn.disabled=false;}}
 downloadCsvBtn.onclick=()=>download('csv');
-async function loadLog(){const target=document.getElementById('sync-log');try{const response=await fetch('/api/sync-log');allLogEntries=await response.json();renderLog(allLogEntries);}catch(error){allLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 function docNumber(entry){try{const payload=JSON.parse(entry.payload);return payload&&payload.nr_dok?String(payload.nr_dok):(entry.external_id||'');}catch(e){return entry.external_id||'';}}
-function renderLog(entries){const target=document.getElementById('sync-log'), query=(document.getElementById('log-search')?.value||'').trim();
-target.innerHTML=entries.length?entries.map((e,i)=>'<div class="log-row clickable" data-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+e.kind+'</b><span>'+escapeHtml(e.message)+(docNumber(e)?' · '+escapeHtml(docNumber(e)):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(query?'Ничего не найдено — поиск охватывает весь журнал, а не только последние записи.':'Проверок пока не было.')+'</p>';
-const rows=target.querySelectorAll('[data-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(entries[Number(row.dataset.logIndex)]));makeRowsKeyboardAccessible(rows);}
-let allLogEntries=[];
-let logSearchTimer=null;
-async function searchLog(){const query=(document.getElementById('log-search')?.value||'').trim();
-if(!query){renderLog(allLogEntries);return;}
-try{const response=await fetch('/api/sync-log?q='+encodeURIComponent(query));renderLog(await response.json());}
-catch(error){document.getElementById('sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
-document.getElementById('log-search').oninput=()=>{clearTimeout(logSearchTimer);logSearchTimer=setTimeout(searchLog,300);};
+function createLogSection(opts){
+const target=document.getElementById(opts.target);
+const kindSelect=opts.kindSelect?document.getElementById(opts.kindSelect):null;
+const searchInput=opts.searchInput?document.getElementById(opts.searchInput):null;
+let all=[],searchResults=null,searchTimer=null;
+function render(){
+const kind=kindSelect?kindSelect.value:'';
+const query=(searchInput&&searchInput.value||'').trim();
+const source=searchResults!==null?searchResults:all;
+const filtered=source.filter(e=>!kind||e.kind===kind);
+target.innerHTML=filtered.length?filtered.map((e,i)=>{
+const label=(opts.kindLabels&&opts.kindLabels[e.kind])||e.kind;
+const extra=opts.rowExtra?opts.rowExtra(e):'';
+return '<div class="log-row clickable" data-row-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+escapeHtml(label)+'</b><span>'+escapeHtml(e.message)+extra+entityLink(e.payload)+'</span></div>';
+}).join(''):'<p class="muted">'+((kind||query)?('Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.')):opts.emptyMessage)+'</p>';
+const rows=target.querySelectorAll('[data-row-index]');
+rows.forEach(row=>row.onclick=()=>{const entry=filtered[Number(row.dataset.rowIndex)];showLogDetail(entry,(opts.kindLabels&&opts.kindLabels[entry.kind])||entry.kind);});
+makeRowsKeyboardAccessible(rows);
+}
+async function load(){
+try{const response=await fetch(opts.endpoint);all=await response.json();
+if(kindSelect){const current=kindSelect.value, kinds=[...new Set(all.map(e=>e.kind))].sort();
+kindSelect.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+escapeHtml((opts.kindLabels&&opts.kindLabels[k])||k)+'</option>').join('');}
+searchResults=null;render();}
+catch(error){all=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
+async function search(){
+const query=(searchInput&&searchInput.value||'').trim();
+if(!query){searchResults=null;render();return;}
+try{const response=await fetch(opts.endpoint+'?q='+encodeURIComponent(query));searchResults=await response.json();render();}
+catch(error){target.innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
+if(kindSelect)kindSelect.onchange=render;
+if(searchInput)searchInput.oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(search,300);};
+if(opts.refresh)document.getElementById(opts.refresh).onclick=load;
+load();
+return {load};
+}
+const syncLogKindLabels={sale:'Продажа',return:'Возврат',sale_error:'Ошибка продажи',return_error:'Ошибка возврата',shift:'Смена закрыта',shift_error:'Ошибка закрытия смены',run:'Проверка завершена'};
+createLogSection({target:'sync-log',endpoint:'/api/sync-log',kindSelect:'log-kind',searchInput:'log-search',refresh:'refresh-log',kindLabels:syncLogKindLabels,emptyMessage:'Проверок пока не было.',rowExtra:e=>docNumber(e)?' · '+escapeHtml(docNumber(e)):''});
 function fieldLabels(){return {id:'ID продажи',data:'Дата и время',nr_dok:'Номер документа',typ_dok:'Тип операции',nr_systemowy:'Системный номер',nr_fiskalny:'Фискальный номер',nr_rap_dobowego:'Номер суточного отчёта',ilosc:'Количество',cena:'Цена за ед.',cena_przed_rab:'Цена до скидки',stawka_vat:'Ставка НДС',brutto:'Сумма (брутто)',podatek:'Налог',rabat:'Скидка',orderId:'ID заказа',status:'Статус заказа',substatus:'Подстатус',createdAt:'Создан',updatedAt:'Обновлён',itemsTotal:'Сумма товаров',buyerTotal:'Сумма к оплате покупателем',name:'Номер смены',opened:'Открыта',retailStore:'Точка продаж',store:'Магазин',campaign_id:'Кампания',count:'Офферов',changes:'Изменения остатков (было → стало)',department:'Отдел',error_detail:'Техническая причина'};}
 function formatValue(key,value){if(value===null||value===undefined)return '—';
 if(typeof value==='object'){if(key==='towar')return 'товар #'+(value.id??'');if(key==='sklep')return 'магазин #'+(value.id??'');if(key==='kasa')return 'касса #'+(value.id??'');if(key==='kasjer')return 'кассир #'+(value.id??'');if(Array.isArray(value)){if(key==='items')return value.map(it=>(it.offerId||it.offer_id||'?')+' × '+(it.count??it.quantity??'?')).join(', ');if(key==='platnosci')return value.map(p=>(p.wplata_waluta??'?')+' '+(p.kod_waluty??'')).join(', ');if(key==='changes')return value.length?('<div class="log">'+value.map(c=>'<div class="log-row"><span><b>'+c.sku+'</b></span><span>'+(c.before??'—')+' → '+c.after+'</span></div>').join('')+'</div>'):'нет изменений';return value.length+' элемент(ов)';}return JSON.stringify(value);}
 return escapeHtml(String(value));}
-function showLogDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
+function showLogDetail(entry,titleLabel){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
 const doc=docNumber(entry);
-title.textContent=(entry.kind==='sale'?'Продажа':entry.kind==='return'?'Возврат':entry.kind==='sale_error'?'Ошибка продажи':entry.kind==='return_error'?'Ошибка возврата':entry.kind==='order'?'Заказ':'Событие')+(doc?' · '+doc:'');
+title.textContent=(titleLabel||'Событие')+(doc?' · '+doc:'');
 let payload={};try{payload=JSON.parse(entry.payload);}catch(e){payload={};}
 const labels=fieldLabels();
 let rowsHtml='<dt>Сообщение</dt><dd>'+escapeHtml(entry.message)+'</dd><dt>Время проверки</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd>';
@@ -733,7 +771,6 @@ rowsHtml+=Object.keys(payload).filter(k=>k!=='platnosci'||true).map(k=>'<dt>'+(l
 body.innerHTML=rowsHtml;modal.classList.add('open');}
 document.getElementById('log-detail-close').onclick=()=>document.getElementById('log-detail-modal').classList.remove('open');
 document.getElementById('log-detail-modal').onclick=e=>{if(e.target.id==='log-detail-modal')e.currentTarget.classList.remove('open');};
-document.getElementById('refresh-log').onclick=loadLog;loadLog();
 const catalogHelpBtn=document.getElementById('catalog-help'), catalogHelpModal=document.getElementById('catalog-help-modal');
 catalogHelpBtn.onclick=()=>catalogHelpModal.classList.add('open');
 document.getElementById('catalog-help-close').onclick=()=>catalogHelpModal.classList.remove('open');
@@ -750,92 +787,28 @@ const ozonOrdersHelpBtn=document.getElementById('ozon-orders-help'), ozonOrdersH
 ozonOrdersHelpBtn.onclick=()=>ozonOrdersHelpModal.classList.add('open');
 document.getElementById('ozon-orders-help-close').onclick=()=>ozonOrdersHelpModal.classList.remove('open');
 ozonOrdersHelpModal.onclick=e=>{if(e.target===ozonOrdersHelpModal)ozonOrdersHelpModal.classList.remove('open');};
-let allYmLogEntries=[];
-let ymSearchResults=null;
-let ymSearchTimer=null;
 const ymKindLabels={order_created:'Заказ создан',assembly_confirmed:'Сборка подтверждена',label_sent:'Этикетка отправлена',order_pipeline_error:'Ошибка заказа',order_state_updated:'Статус заказа обновлён',order_state_error:'Ошибка статуса заказа',label_retry_error:'Повтор отправки этикетки не удался',stock_sync:'Синхронизация остатков',webhook:'Уведомление Яндекс.Маркета'};
-async function loadYmLog(){const target=document.getElementById('ym-sync-log');try{const response=await fetch('/api/yandex-market-sync-log');allYmLogEntries=await response.json();
-const select=document.getElementById('ym-log-kind'), current=select.value, kinds=[...new Set(allYmLogEntries.map(e=>e.kind))].sort();
-select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ymKindLabels[k]||k)+'</option>').join('');
-ymSearchResults=null;renderYmLog();}catch(error){allYmLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-function renderYmLog(){const target=document.getElementById('ym-sync-log'), kind=document.getElementById('ym-log-kind')?.value||'', query=(document.getElementById('ym-log-search')?.value||'').trim();
-const source=ymSearchResults!==null?ymSearchResults:allYmLogEntries;
-const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ym-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ymKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+(e.external_id?' · заказ '+escapeHtml(e.external_id):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-const rows=target.querySelectorAll('[data-ym-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ymLogIndex)]));makeRowsKeyboardAccessible(rows);}
-async function searchYmLog(){const query=(document.getElementById('ym-log-search')?.value||'').trim();
-if(!query){ymSearchResults=null;renderYmLog();return;}
-try{const response=await fetch('/api/yandex-market-sync-log?q='+encodeURIComponent(query));ymSearchResults=await response.json();renderYmLog();}
-catch(error){document.getElementById('ym-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
-document.getElementById('ym-log-kind').onchange=renderYmLog;
-document.getElementById('ym-log-search').oninput=()=>{clearTimeout(ymSearchTimer);ymSearchTimer=setTimeout(searchYmLog,300);};
-document.getElementById('refresh-ym-log').onclick=loadYmLog;loadYmLog();
-let allPlanfixLogEntries=[];
-let planfixSearchResults=null;
-let planfixSearchTimer=null;
-const planfixKindLabels={webhook:'Входящий вебхук',contact_sync:'Перенос контакта'};
-async function loadPlanfixLog(){const target=document.getElementById('planfix-sync-log');try{const response=await fetch('/api/planfix-sync-log');allPlanfixLogEntries=await response.json();
-const select=document.getElementById('planfix-log-kind'), current=select.value, kinds=[...new Set(allPlanfixLogEntries.map(e=>e.kind))].sort();
-select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(planfixKindLabels[k]||k)+'</option>').join('');
-planfixSearchResults=null;renderPlanfixLog();}catch(error){allPlanfixLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-function renderPlanfixLog(){const target=document.getElementById('planfix-sync-log'), kind=document.getElementById('planfix-log-kind')?.value||'', query=(document.getElementById('planfix-log-search')?.value||'').trim();
-const source=planfixSearchResults!==null?planfixSearchResults:allPlanfixLogEntries;
-const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-planfix-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(planfixKindLabels[e.kind]||e.kind)+(e.status==='error'?' · ошибка':'')+'</b><span>'+escapeHtml(e.message)+(e.external_id?' · '+escapeHtml(e.external_id):'')+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Уведомлений пока не было.')+'</p>';
-const rows=target.querySelectorAll('[data-planfix-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.planfixLogIndex)]));makeRowsKeyboardAccessible(rows);}
-async function searchPlanfixLog(){const query=(document.getElementById('planfix-log-search')?.value||'').trim();
-if(!query){planfixSearchResults=null;renderPlanfixLog();return;}
-try{const response=await fetch('/api/planfix-sync-log?q='+encodeURIComponent(query));planfixSearchResults=await response.json();renderPlanfixLog();}
-catch(error){document.getElementById('planfix-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
-document.getElementById('planfix-log-kind').onchange=renderPlanfixLog;
-document.getElementById('planfix-log-search').oninput=()=>{clearTimeout(planfixSearchTimer);planfixSearchTimer=setTimeout(searchPlanfixLog,300);};
-document.getElementById('refresh-planfix-log').onclick=loadPlanfixLog;loadPlanfixLog();
+createLogSection({target:'ym-sync-log',endpoint:'/api/yandex-market-sync-log',kindSelect:'ym-log-kind',searchInput:'ym-log-search',refresh:'refresh-ym-log',kindLabels:ymKindLabels,emptyMessage:'Проверок пока не было.',rowExtra:e=>e.external_id?' · заказ '+escapeHtml(e.external_id):''});
+const planfixKindLabels={webhook:'Входящий вебхук',contact_sync:'Перенос контакта',new_goods_task_created:'Подзадача создана',new_goods_run:'Запуск подзадач',new_goods_error:'Ошибка запуска подзадач'};
+createLogSection({target:'planfix-sync-log',endpoint:'/api/planfix-sync-log',kindSelect:'planfix-log-kind',searchInput:'planfix-log-search',refresh:'refresh-planfix-log',kindLabels:planfixKindLabels,emptyMessage:'Уведомлений пока не было.',rowExtra:e=>e.external_id?' · '+escapeHtml(e.external_id):''});
+const reviewsKindLabels={draft_sent:'Черновик отправлен',posted:'Опубликовано',declined:'Отклонено',auto_processed:'Обработано автоматически',post_error:'Ошибка публикации',draft_error:'Ошибка черновика'};
+createLogSection({target:'reviews-sync-log',endpoint:'/api/review-sync-log',kindSelect:'reviews-log-kind',searchInput:'reviews-log-search',refresh:'refresh-reviews-log',kindLabels:reviewsKindLabels,emptyMessage:'Проверок пока не было.',rowExtra:e=>e.external_id?' · '+escapeHtml(e.external_id):''});
+async function loadReviewRules(){const target=document.getElementById('review-rules');
+try{const response=await fetch('/api/review-rules');const data=await response.json();
+const block=(label,text)=>'<div style="padding:11px 0;border-bottom:1px solid var(--line)"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">'+label+'</div><div style="white-space:pre-wrap">'+(text?escapeHtml(text):'<span class="muted">Пока пусто — правил ещё не накопилось.</span>')+'</div></div>';
+target.innerHTML=block('Отзывы',data.review)+block('Вопросы',data.question);}
+catch(error){target.innerHTML='<p class="error">Свод правил недоступен: '+error.message+'</p>';}}
+loadReviewRules();
 async function loadShopifyWarehouses(){const target=document.getElementById('shopify-warehouses');
 try{const response=await fetch('/api/shopify-warehouses');const data=await response.json();const available=data.available||[], selected=new Set(data.selection||[]);
 settingsBaseline.warehouses=data.selection||[];
 const groups={};available.forEach(w=>{(groups[w.country]=groups[w.country]||[]).push(w);});
 target.innerHTML=Object.keys(groups).length?Object.entries(groups).map(([country,items])=>'<div style="margin-bottom:14px"><div class="muted" style="margin-bottom:6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em">'+escapeHtml(country)+'</div>'+items.map(w=>'<label style="display:flex;align-items:center;gap:8px;padding:6px 0"><input type="checkbox" class="shopify-wh" value="'+encodeURIComponent(w.id)+'" '+(selected.has(w.id)?'checked':'')+'> '+escapeHtml(w.name)+'</label>').join('')+'</div>').join(''):'<p class="muted">Склады не найдены.</p>';}
 catch(error){target.innerHTML='<p class="error">Не удалось загрузить склады: '+error.message+'</p>';}}
-let allShopifyLogEntries=[];
-let shopifySearchResults=null;
-let shopifySearchTimer=null;
 const shopifyKindLabels={catalog_created:'Товар создан',catalog_update:'Товар обновлён',catalog_error:'Ошибка ассортимента',stock_sync:'Остаток изменён',stock_run:'Синхронизация остатков',stock_error:'Ошибка остатков',order_created:'Заказ создан',order_error:'Ошибка заказа'};
-async function loadShopifyLog(){const target=document.getElementById('shopify-sync-log');try{const response=await fetch('/api/shopify-sync-log');allShopifyLogEntries=await response.json();
-const select=document.getElementById('shopify-log-kind'), current=select.value, kinds=[...new Set(allShopifyLogEntries.map(e=>e.kind))].sort();
-select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(shopifyKindLabels[k]||k)+'</option>').join('');
-shopifySearchResults=null;renderShopifyLog();}catch(error){allShopifyLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-function renderShopifyLog(){const target=document.getElementById('shopify-sync-log'), kind=document.getElementById('shopify-log-kind')?.value||'', query=(document.getElementById('shopify-log-search')?.value||'').trim();
-const source=shopifySearchResults!==null?shopifySearchResults:allShopifyLogEntries;
-const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-shopify-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(shopifyKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-const rows=target.querySelectorAll('[data-shopify-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.shopifyLogIndex)]));makeRowsKeyboardAccessible(rows);}
-async function searchShopifyLog(){const query=(document.getElementById('shopify-log-search')?.value||'').trim();
-if(!query){shopifySearchResults=null;renderShopifyLog();return;}
-try{const response=await fetch('/api/shopify-sync-log?q='+encodeURIComponent(query));shopifySearchResults=await response.json();renderShopifyLog();}
-catch(error){document.getElementById('shopify-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
-document.getElementById('shopify-log-kind').onchange=renderShopifyLog;
-document.getElementById('shopify-log-search').oninput=()=>{clearTimeout(shopifySearchTimer);shopifySearchTimer=setTimeout(searchShopifyLog,300);};
-document.getElementById('refresh-shopify-log').onclick=loadShopifyLog;loadShopifyLog();
-let allOzonLogEntries=[];
-let ozonSearchResults=null;
-let ozonSearchTimer=null;
+createLogSection({target:'shopify-sync-log',endpoint:'/api/shopify-sync-log',kindSelect:'shopify-log-kind',searchInput:'shopify-log-search',refresh:'refresh-shopify-log',kindLabels:shopifyKindLabels,emptyMessage:'Проверок пока не было.'});
 const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков',webhook:'Уведомление OZON',order_created:'Упаковка подтверждена',order_cancelled:'Отправление отменено',order_pipeline_error:'Ошибка заказа',order_error:'Не удалось получить этикетку',label_sent:'Этикетка отправлена'};
-async function loadOzonLog(){const target=document.getElementById('ozon-sync-log');try{const response=await fetch('/api/ozon-sync-log');allOzonLogEntries=await response.json();
-const select=document.getElementById('ozon-log-kind'), current=select.value, kinds=[...new Set(allOzonLogEntries.map(e=>e.kind))].sort();
-select.innerHTML='<option value="">Все типы</option>'+kinds.map(k=>'<option value="'+k+'"'+(k===current?' selected':'')+'>'+(ozonKindLabels[k]||k)+'</option>').join('');
-ozonSearchResults=null;renderOzonLog();}catch(error){allOzonLogEntries=[];target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
-function renderOzonLog(){const target=document.getElementById('ozon-sync-log'), kind=document.getElementById('ozon-log-kind')?.value||'', query=(document.getElementById('ozon-log-search')?.value||'').trim();
-const source=ozonSearchResults!==null?ozonSearchResults:allOzonLogEntries;
-const filtered=source.filter(e=>!kind||e.kind===kind);
-target.innerHTML=filtered.length?filtered.map((e,i)=>'<div class="log-row clickable" data-ozon-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+e.status+'">'+(ozonKindLabels[e.kind]||e.kind)+'</b><span>'+escapeHtml(e.message)+entityLink(e.payload)+'</span></div>').join(''):'<p class="muted">'+(kind||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Проверок пока не было.')+'</p>';
-const rows=target.querySelectorAll('[data-ozon-log-index]');rows.forEach(row=>row.onclick=()=>showLogDetail(filtered[Number(row.dataset.ozonLogIndex)]));makeRowsKeyboardAccessible(rows);}
-async function searchOzonLog(){const query=(document.getElementById('ozon-log-search')?.value||'').trim();
-if(!query){ozonSearchResults=null;renderOzonLog();return;}
-try{const response=await fetch('/api/ozon-sync-log?q='+encodeURIComponent(query));ozonSearchResults=await response.json();renderOzonLog();}
-catch(error){document.getElementById('ozon-sync-log').innerHTML='<p class="error">Поиск не удался: '+error.message+'</p>';}}
-document.getElementById('ozon-log-kind').onchange=renderOzonLog;
-document.getElementById('ozon-log-search').oninput=()=>{clearTimeout(ozonSearchTimer);ozonSearchTimer=setTimeout(searchOzonLog,300);};
-document.getElementById('refresh-ozon-log').onclick=loadOzonLog;loadOzonLog();
+createLogSection({target:'ozon-sync-log',endpoint:'/api/ozon-sync-log',kindSelect:'ozon-log-kind',searchInput:'ozon-log-search',refresh:'refresh-ozon-log',kindLabels:ozonKindLabels,emptyMessage:'Проверок пока не было.'});
 let allChangesLogEntries=[];
 let changesSearchResults=null;
 let changesSearchTimer=null;
@@ -849,7 +822,7 @@ function renderChangesLog(){const target=document.getElementById('changes-log'),
 const source=changesSearchResults!==null?changesSearchResults:allChangesLogEntries;
 const filtered=source.filter(e=>!service||e.service===service);
 target.innerHTML=filtered.length?filtered.map((e,i)=>{const entityRef=e.entity_id?(e.link?'<a href="'+escapeHtml(e.link)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(e.entity_id)+'</a>':escapeHtml(e.entity_id)):'';
-return '<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge success">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(entityRef?' · '+entityRef:'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>';}).join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
+return '<div class="log-row clickable" data-changes-log-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge">'+(changeServiceLabels[e.service]||e.service)+'</b><span><strong>'+escapeHtml(e.entity_type)+(entityRef?' · '+entityRef:'')+'</strong> — '+(changeActionLabels[e.action]||e.action)+(e.summary?': '+escapeHtml(e.summary):'')+'</span></div>';}).join(''):'<p class="muted">'+(service||query?'Ничего не найдено'+(query?' — поиск охватывает весь журнал.':'.'):'Изменений пока не было.')+'</p>';
 const rows=target.querySelectorAll('[data-changes-log-index]');rows.forEach(row=>row.onclick=()=>showChangeDetail(filtered[Number(row.dataset.changesLogIndex)]));makeRowsKeyboardAccessible(rows);}
 async function searchChangesLog(){const query=(document.getElementById('changes-log-search')?.value||'').trim();
 if(!query){changesSearchResults=null;renderChangesLog();return;}
@@ -871,7 +844,7 @@ const rows=target.querySelectorAll('[data-shift-log-index]');rows.forEach(row=>r
 catch(error){target.innerHTML='<p class="error">Журнал недоступен: '+error.message+'</p>';}}
 async function loadOpenShifts(){const target=document.getElementById('shift-open-list');
 try{const response=await fetch('/api/shift-open');const data=await response.json();const shifts=data.shifts||[];
-target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge missing">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
+target.innerHTML=shifts.length?shifts.map(s=>'<div class="log-row"><span class="log-time">'+escapeHtml(s.opened||'')+'</span><b class="badge">'+escapeHtml(s.country)+'</b><span><strong>'+escapeHtml(s.store||'—')+'</strong> · смена №'+escapeHtml(s.name)+'</span></div>').join(''):'<p class="muted">Незакрытых смен нет.</p>';}
 catch(error){target.innerHTML='<p class="error">Список недоступен: '+escapeHtml(error.message)+'</p>';}}
 loadOpenShifts();loadShiftCloseLog();
 let settingsBaseline={novicloud:[],shopify:[],warehouses:[]};
@@ -1064,6 +1037,20 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
         ozon_log = YandexMarketSyncLog("data/ozon_sync.sqlite3")
         entries = ozon_log.search(query) if query else ozon_log.recent()
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/review-sync-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        review_log = YandexMarketSyncLog("data/review_sync.sqlite3")
+        entries = review_log.search(query) if query else review_log.recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/review-rules":
+        payload = dumps(
+            {"review": ReviewRulesStore().get("review"), "question": ReviewRulesStore().get("question")},
+            ensure_ascii=False,
+        ).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
     if path == "/api/change-log":
