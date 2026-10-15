@@ -20,10 +20,10 @@ class FakePlanFixClient:
             raise RuntimeError("task not found")
         return self._task
 
-    def create_task(self, *, name, template_id=None, parent_id=None, project_id=None, status=None, description="", custom_data=None):
+    def create_task(self, *, name, template_id=None, parent_id=None, project_id=None, description="", custom_data=None):
         self.created_tasks.append({
             "name": name, "template_id": template_id, "parent_id": parent_id,
-            "project_id": project_id, "status": status, "description": description, "custom_data": custom_data,
+            "project_id": project_id, "description": description, "custom_data": custom_data,
         })
         if custom_data:
             entry_id = custom_data[0]["value"]["id"]
@@ -54,7 +54,7 @@ def test_launch_new_product_tasks_creates_one_subtask_per_entry(tmp_path):
     assert first["template_id"] == PRODUCT_TASK_TEMPLATE_ID
     assert first["parent_id"] == 7232
     assert first["project_id"] == 4206
-    assert first["status"] == "ACCEPTED"
+    assert "status" not in first
     assert first["custom_data"] == [{"field": {"id": PRODUCT_FIELD_ID}, "value": {"id": 20}}]
     kinds = [e["kind"] for e in log.recent()]
     assert kinds == ["new_goods_task_created", "new_goods_task_created"]

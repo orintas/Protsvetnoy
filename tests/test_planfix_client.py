@@ -113,7 +113,6 @@ def test_create_task_posts_expected_body_and_returns_new_id():
         template_id=3121686,
         parent_id=7232,
         project_id=4206,
-        status="ACCEPTED",
         custom_data=[{"field": {"id": 82080}, "value": {"id": 20}}],
     )
 
@@ -125,7 +124,7 @@ def test_create_task_posts_expected_body_and_returns_new_id():
     assert body["template"] == {"id": 3121686}
     assert body["parent"] == {"id": 7232}
     assert body["project"] == {"id": 4206}
-    assert body["status"] == "ACCEPTED"
+    assert "status" not in body
     assert body["customFieldData"] == [{"field": {"id": 82080}, "value": {"id": 20}}]
 
 

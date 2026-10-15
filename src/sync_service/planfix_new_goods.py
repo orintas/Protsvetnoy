@@ -9,10 +9,9 @@ from .planfix_log import PlanFixSyncLog
 # task carries a list of new products in a "Товары" custom field; this
 # creates one "Проработка продукта" subtask per product, each tagged with
 # that one product via "Товар" — same parent/project as the batch task.
-PRODUCT_TASK_TEMPLATE_ID = 3121686
+PRODUCT_TASK_TEMPLATE_ID = 4213  # "Проработка продукта" — confirmed live 2026-10-16 via GET /task/templates (the previous value, 3121686, wasn't a real template id at all: PlanFix silently created tasks under the account's default "Стандартный шаблон" (id 6) instead, which doesn't carry the "Товар" field — that's what the "Custom field not permitted" error actually was)
 GOODS_FIELD_ID = 82078  # "Товары" on the batch task — Set of directory values
 PRODUCT_FIELD_ID = 82080  # "Товар" on each subtask — Directory entry
-ACCEPTED_STATUS = "ACCEPTED"
 
 # Fallback notification when subtask creation fails outright — same project
 # the Make scenario's onError branch used ("ПланФикс: обучение и поддержка").
@@ -26,12 +25,9 @@ def _directory_entries(task: dict[str, Any], field_id: int) -> list[dict[str, An
 
     Tolerates either a bare list or a single dict for the field's value —
     same defensive spirit as planfix_contact_sync._custom_field_value.
-    PlanFix's "Set of directory values" array shape isn't confirmed live yet
-    (every real batch task found already had this field cleared by the time
-    it was inspected, presumably by whatever already-cleared it after the
-    Make scenario ran) — only the single-entry "Directory entry" shape is
-    (PlanFixClient.get_task). Verify this against the first real webhook
-    delivery rather than trusting it blindly.
+    PlanFix's "Set of directory values" array shape confirmed live
+    2026-10-16 against a real batch task (402193): `value` is a list of
+    `{"id": <directory entry key>, "value": <display text>}` dicts.
     """
     for entry in task.get("customFieldData", []) or []:
         if not isinstance(entry, dict):
@@ -104,7 +100,6 @@ def launch_new_product_tasks(planfix: PlanFixClient, *, task_id: int, log: PlanF
                 template_id=PRODUCT_TASK_TEMPLATE_ID,
                 parent_id=parent_id,
                 project_id=project_id,
-                status=ACCEPTED_STATUS,
                 custom_data=[{"field": {"id": PRODUCT_FIELD_ID}, "value": {"id": entry["id"]}}],
             )
             created_ids.append(new_id)

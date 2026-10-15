@@ -90,24 +90,28 @@ class PlanFixClient:
         template_id: int | None = None,
         parent_id: int | None = None,
         project_id: int | None = None,
-        status: str | None = None,
         description: str = "",
         custom_data: list[dict[str, Any]] | None = None,
     ) -> int:
-        """Creates a task, returns its new id.
+        """Creates a task, returns its new id — lands in the template's
+        default initial status (confirmed live 2026-10-16: "Новая"/New).
 
         `custom_data`: `[{"field": {"id": <field id>}, "value": {"id": <directory
         entry key>}}, ...]` for Directory-entry-typed fields (the only kind
-        this service sets). `status` is a plain string (e.g. "ACCEPTED"), not
-        an id reference — matches the enum PlanFix's own UI uses.
+        this service sets).
 
-        Endpoint/body shape ported from a published, actively-used
+        There used to be a `status` parameter here that sent a bare string
+        (e.g. "ACCEPTED") — removed after confirming live that POST /task/
+        rejects that outright ("Cannot deserialize, invalid JSON"): PlanFix
+        only accepts a {"id": int} status reference, and even then only
+        DRAFT/ACTIVE/DELAYED are valid to set at creation time — not
+        ACCEPTED/COMPLETED/etc. Setting a task to one of those after
+        creation needs a separate status-change call this client doesn't
+        have yet.
+
+        Endpoint/body shape otherwise ported from a published, actively-used
         community REST v2 client (github.com/popstas/planfix-mcp-server,
-        src/tools/planfix_create_sell_task_ids.ts) rather than from
-        PlanFix's own docs (their reference site wouldn't render for
-        automated fetching) — not yet confirmed against a live response from
-        this account; verify on the first real send, per this project's own
-        rule for every other integration here.
+        src/tools/planfix_create_sell_task_ids.ts).
         """
         body: dict[str, Any] = {"name": name, "description": description}
         if template_id is not None:
@@ -116,8 +120,6 @@ class PlanFixClient:
             body["parent"] = {"id": parent_id}
         if project_id is not None:
             body["project"] = {"id": project_id}
-        if status:
-            body["status"] = status
         if custom_data:
             body["customFieldData"] = custom_data
         payload = self._client.post("/task/", body)
