@@ -216,6 +216,50 @@ def test_get_updates_raises_after_exhausting_retries_on_transport_error(monkeypa
         client.get_updates()
 
 
+def test_set_message_reaction_posts_the_emoji_as_a_single_item_array():
+    import json
+    from urllib.parse import parse_qs
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    client = _client_with_handler(handler)
+    client.set_message_reaction(chat_id="-100123", message_id=501, emoji="👍")
+    assert requests[0].url.path == "/bottest-token/setMessageReaction"
+    form = parse_qs(requests[0].content.decode())
+    assert form["chat_id"] == ["-100123"]
+    assert form["message_id"] == ["501"]
+    assert json.loads(form["reaction"][0]) == [{"type": "emoji", "emoji": "👍"}]
+
+
+def test_set_message_reaction_with_no_emoji_clears_the_reaction():
+    import json
+    from urllib.parse import parse_qs
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    client = _client_with_handler(handler)
+    client.set_message_reaction(chat_id="-100123", message_id=501, emoji=None)
+    form = parse_qs(requests[0].content.decode())
+    assert json.loads(form["reaction"][0]) == []
+
+
+def test_set_message_reaction_raises_on_ok_false():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "description": "REACTION_INVALID"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(RuntimeError, match="REACTION_INVALID"):
+        client.set_message_reaction(chat_id="-100123", message_id=501, emoji="👍")
+
+
 def test_download_file_resolves_path_then_downloads_bytes():
     requests: list[httpx.Request] = []
 

@@ -77,6 +77,33 @@ class TelegramClient:
         record(service="telegram", entity_type="message", entity_id=chat_id, action="send", after={"text": text})
         return payload
 
+    def set_message_reaction(self, *, chat_id: str, message_id: int, emoji: str | None) -> dict[str, Any]:
+        """Sets (or, with emoji=None, clears) the bot's own reaction on a
+        message — a status marker placed directly on that message, separate
+        from any reaction a human already placed on it (e.g. the 👍 that
+        approves a draft — both coexist). `emoji` must be one of Telegram's
+        fixed set of reaction emoji (not an arbitrary one) — per the Bot API
+        docs that set doesn't include ✅/❌, but does include 👍/👎/🙏/👌/😢."""
+        reaction = [{"type": "emoji", "emoji": emoji}] if emoji else []
+        data = {"chat_id": chat_id, "message_id": message_id, "reaction": json.dumps(reaction)}
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                response = self._client.post("/setMessageReaction", data=data)
+            except httpx.TransportError:
+                if attempt <= MAX_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    continue
+                raise
+            break
+        if response.is_error:
+            raise RuntimeError(f"Telegram setMessageReaction failed with HTTP {response.status_code}: {response.text[:500]}")
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram setMessageReaction returned ok=false: {payload}")
+        return payload
+
     def download_file(self, file_id: str) -> bytes:
         """Fetches a file a user sent (e.g. a receipt/label photo) — two calls,
         per the Bot API: getFile resolves file_id to a temporary file_path,

@@ -39,6 +39,14 @@ DECLINE_WORDS = {"нет", "-", "отмена", "пропустить", "skip", 
 PLATFORM_LABELS = {"ozon": "OZON", "yandex_market": "Я.Маркет"}
 KIND_LABELS = {"review": "Отзыв", "question": "Вопрос"}
 
+# Status markers set directly on the draft message itself (not the reply
+# underneath it) once it's resolved, so it's visible at a glance in the
+# chat which drafts are still pending vs already handled — and how. ✅/❌
+# aren't in Telegram's fixed set of reaction emoji, hence this choice.
+POSTED_REACTION = "👌"
+DECLINED_REACTION = "👎"
+ERROR_REACTION = "😢"
+
 
 def _ratings_stars(rating: int | None) -> str:
     if not rating:
@@ -383,10 +391,12 @@ def _approve_and_post(draft: dict[str, Any], *, final_text: str, log: YandexMark
     except Exception as error:
         log.add("post_error", "error", f"{label}: ошибка публикации: {error}", external_id)
         telegram.send_message(chat_id=chat_id, text=f"Не удалось опубликовать: {error}", reply_to_message_id=reply_to_message_id)
+        telegram.set_message_reaction(chat_id=chat_id, message_id=draft["message_id"], emoji=ERROR_REACTION)
         return
 
     log.add("posted", "success", f"{label}: ответ опубликован", external_id, {"final_text": final_text, "edited": final_text != draft["draft_text"]})
     telegram.send_message(chat_id=chat_id, text=confirmation, reply_to_message_id=reply_to_message_id)
+    telegram.set_message_reaction(chat_id=chat_id, message_id=draft["message_id"], emoji=POSTED_REACTION)
 
 
 def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> None:
@@ -402,6 +412,7 @@ def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram
     if lowered in DECLINE_WORDS:
         log.add("declined", "success", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: отклонено сотрудником", draft["external_id"])
         telegram.send_message(chat_id=chat_id, text="Принято, публиковать не буду.", reply_to_message_id=message.get("message_id"))
+        telegram.set_message_reaction(chat_id=chat_id, message_id=draft["message_id"], emoji=DECLINED_REACTION)
         return
 
     final_text = draft["draft_text"] if (not reply_text or lowered in APPROVE_WORDS) else reply_text

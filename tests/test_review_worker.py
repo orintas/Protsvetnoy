@@ -3,7 +3,10 @@ import json
 from sync_service.error_log import ErrorLog
 from sync_service.http import ApiError
 from sync_service.review_worker import (
+    DECLINED_REACTION,
+    ERROR_REACTION,
     MAX_DRAFTS_PER_TICK,
+    POSTED_REACTION,
     _draft_question,
     _find_pending_draft,
     _format_received_at,
@@ -129,12 +132,17 @@ class FakeLLM:
 class FakeTelegram:
     def __init__(self):
         self.messages = []
+        self.reactions = []
         self._next_message_id = 500
 
     def send_message(self, *, chat_id, text, reply_to_message_id=None, parse_mode=None):
         self._next_message_id += 1
         self.messages.append({"chat_id": chat_id, "text": text, "reply_to_message_id": reply_to_message_id})
         return {"ok": True, "result": {"message_id": self._next_message_id}}
+
+    def set_message_reaction(self, *, chat_id, message_id, emoji):
+        self.reactions.append({"chat_id": chat_id, "message_id": message_id, "emoji": emoji})
+        return {"ok": True}
 
     def get_updates(self, *, offset=None, timeout=25, allowed_updates=None):
         return getattr(self, "_updates", [])
@@ -441,6 +449,7 @@ def test_handle_reply_approves_and_posts_the_draft_as_is(tmp_path):
     kinds = [e["kind"] for e in log.recent()]
     assert "posted" in kinds
     assert "Опубликовано" in telegram.messages[0]["text"]
+    assert telegram.reactions == [{"chat_id": "-100999", "message_id": 501, "emoji": POSTED_REACTION}]
 
 
 def test_handle_reply_posts_the_staff_edited_text_instead_of_the_draft(tmp_path):
@@ -471,6 +480,7 @@ def test_handle_reply_declines_without_posting(tmp_path):
     kinds = [e["kind"] for e in log.recent()]
     assert "declined" in kinds
     assert "posted" not in kinds
+    assert telegram.reactions == [{"chat_id": "-100999", "message_id": 501, "emoji": DECLINED_REACTION}]
 
 
 def test_handle_reply_routes_yandex_market_question_to_answer_question(tmp_path):
@@ -514,6 +524,7 @@ def test_handle_reply_reports_a_post_error_without_marking_posted(tmp_path):
     assert "post_error" in kinds
     assert "posted" not in kinds
     assert "Не удалось опубликовать" in telegram.messages[0]["text"]
+    assert telegram.reactions == [{"chat_id": "-100999", "message_id": 501, "emoji": ERROR_REACTION}]
 
 
 def test_handle_reply_ignores_a_reply_to_an_unrelated_message(tmp_path):
@@ -556,6 +567,7 @@ def test_handle_reaction_approves_and_posts_the_draft_as_is(tmp_path):
     kinds = [e["kind"] for e in log.recent()]
     assert "posted" in kinds
     assert "Опубликовано" in telegram.messages[0]["text"]
+    assert telegram.reactions == [{"chat_id": "-100999", "message_id": 501, "emoji": POSTED_REACTION}]
 
 
 def test_handle_reaction_ignores_a_reaction_that_is_not_thumbs_up(tmp_path):
