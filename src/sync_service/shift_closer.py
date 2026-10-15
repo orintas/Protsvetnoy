@@ -70,6 +70,22 @@ class ShiftCloseLog:
                 (value,),
             )
 
+    def is_skipped(self, shift_id: str) -> bool:
+        """Whether this shift was already flagged unclosable (see
+        mark_skipped) — checked before every close attempt so a
+        permanently deactivated store's shift isn't retried, and doesn't
+        re-log the same failure, every single night forever."""
+        with sqlite3.connect(self.path) as db:
+            row = db.execute("SELECT 1 FROM shift_close_state WHERE key=?", (f"skip:{shift_id}",)).fetchone()
+            return row is not None
+
+    def mark_skipped(self, shift_id: str) -> None:
+        with sqlite3.connect(self.path) as db:
+            db.execute(
+                "INSERT INTO shift_close_state(key,value) VALUES(?,'1') ON CONFLICT(key) DO NOTHING",
+                (f"skip:{shift_id}",),
+            )
+
 
 def _store_name(shift: dict[str, Any]) -> str:
     retail_store = shift.get("retailStore")
@@ -167,6 +183,8 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                 )
                 continue
             shift_id = str(shift.get("id"))
+            if log.is_skipped(shift_id):
+                continue  # already flagged unclosable (see the 12011 branch below) — don't retry or re-log it every night
             if client.retail_shift_close_date(shift_id):
                 log.add(
                     "shift", "success",
@@ -205,6 +223,20 @@ def run_once(client: MoySkladClient, log: ShiftCloseLog, *, dry_run: bool, close
                             info,
                         )
                         continue
+                if "12011" in str(error) or "точка продаж не активна" in str(error).lower():
+                    # The store itself was deactivated in MoySklad (confirmed
+                    # live 2026-10-16: Nautica/Эстония) — MoySklad refuses any
+                    # retailshift write against it, forever, not just tonight.
+                    # Report it once and remember it, rather than retrying and
+                    # re-logging the same unfixable failure every night.
+                    log.mark_skipped(shift_id)
+                    log.add(
+                        "shift", "error",
+                        f"[{country}] {store}: смена №{shift.get('name')} не закрыта — точка продаж деактивирована в МойСклад. "
+                        "Повторных попыток не будет; закрыть вручную можно, временно включив точку продаж.",
+                        info,
+                    )
+                    continue
                 log.add("shift", "error", f"[{country}] {store}: не удалось закрыть смену №{shift.get('name')}: {error}", info)
     suffix = " (тестовый режим — ничего не закрывалось)" if dry_run and total_open else ""
     log.add("run", "success", f"Проверка завершена: незакрытых смен найдено {total_open}{suffix}")

@@ -20,6 +20,9 @@ class FakeMoySkladClient:
         # Shifts that only become "closed by the POS" once our own close
         # attempt fails — simulates the race losing right at the PUT itself.
         self.close_during_our_attempt_ids: set[str] = set()
+        # Shifts whose store has been deactivated in MoySklad — every close
+        # attempt fails with code 12011, forever.
+        self.inactive_store_ids: set[str] = set()
 
     def open_retail_shifts(self, organization_id):
         if organization_id in self.fail_orgs:
@@ -30,6 +33,10 @@ class FakeMoySkladClient:
         return "2026-09-13 21:00:00.000" if shift_id in self.already_closed_ids else None
 
     def close_retail_shift(self, shift_id, close_date, *, name=None):
+        if shift_id in self.inactive_store_ids:
+            raise RuntimeError(
+                'HTTP 412: {"errors":[{"error":"Ошибка открытия розничной смены: Точка продаж не активна.","code":12011}]}'
+            )
         if shift_id in self.close_during_our_attempt_ids:
             self.already_closed_ids.add(shift_id)
             raise RuntimeError("boom (412, name uniqueness)")
@@ -111,6 +118,28 @@ def test_skips_shift_the_store_pos_closes_during_our_own_close_attempt(tmp_path)
     assert not any(e["status"] == "error" for e in entries)
 
 
+def test_inactive_store_shift_is_logged_once_and_not_retried(tmp_path):
+    poland_org = next(iter(TARGET_ORGANIZATIONS))
+    client = FakeMoySkladClient({poland_org: [_shift("s1", "00077")]})
+    client.inactive_store_ids = {"s1"}
+    log = ShiftCloseLog(str(tmp_path / "inactive.sqlite3"))
+    close_moment = datetime(2026, 9, 13, 23, 50, tzinfo=timezone.utc)
+
+    count = run_once(client, log, dry_run=False, close_moment=close_moment)
+
+    assert count == 1
+    assert client.closed == []
+    entries = log.recent()
+    assert any(e["status"] == "error" and "деактивирована" in e["message"] for e in entries)
+    assert log.is_skipped("s1")
+
+    # A second nightly run must not touch MoySklad again or log another error for it.
+    second_count = run_once(client, log, dry_run=False, close_moment=close_moment)
+    assert second_count == 1  # still counted as "open" in the summary...
+    error_entries_after = [e for e in log.recent() if e["status"] == "error" and e["kind"] == "shift"]
+    assert len(error_entries_after) == 1  # ...but the failure itself wasn't re-logged
+
+
 def test_last_run_date_persists(tmp_path):
     log = ShiftCloseLog(str(tmp_path / "state.sqlite3"))
     assert log.last_run_date() is None
@@ -118,6 +147,16 @@ def test_last_run_date_persists(tmp_path):
     assert log.last_run_date() == "2026-09-13"
     log.set_last_run_date("2026-09-14")
     assert log.last_run_date() == "2026-09-14"
+
+
+def test_is_skipped_round_trips_and_is_idempotent(tmp_path):
+    log = ShiftCloseLog(str(tmp_path / "skip.sqlite3"))
+    assert log.is_skipped("s1") is False
+    log.mark_skipped("s1")
+    assert log.is_skipped("s1") is True
+    assert log.is_skipped("s2") is False
+    log.mark_skipped("s1")  # marking twice must not raise
+    assert log.is_skipped("s1") is True
 
 
 def test_one_country_failing_to_list_shifts_does_not_abort_the_others(tmp_path):
