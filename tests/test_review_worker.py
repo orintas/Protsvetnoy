@@ -2,6 +2,7 @@ import json
 
 from sync_service.error_log import ErrorLog
 from sync_service.http import ApiError
+from sync_service.review_rules import ReviewRulesStore
 from sync_service.review_worker import (
     DECLINED_REACTION,
     ERROR_REACTION,
@@ -12,8 +13,10 @@ from sync_service.review_worker import (
     _format_received_at,
     _handle_reaction,
     _handle_reply,
+    _handle_rules_command,
     _is_relevant,
     _is_relevant_reaction,
+    _parse_rules_command,
     _poll_ozon_reviews,
     _poll_yandex_questions,
     _poll_yandex_reviews,
@@ -154,7 +157,7 @@ class FakeTelegram:
         pass
 
 
-def _install_fakes(monkeypatch, *, telegram=None, ozon=None, yandex=None, moysklad=None, llm=None):
+def _install_fakes(monkeypatch, *, telegram=None, ozon=None, yandex=None, moysklad=None, llm=None, rules_store=None):
     import sync_service.review_worker as mod
     if telegram is not None:
         monkeypatch.setattr(mod, "TelegramClient", lambda **kwargs: telegram)
@@ -166,6 +169,8 @@ def _install_fakes(monkeypatch, *, telegram=None, ozon=None, yandex=None, moyskl
         monkeypatch.setattr(mod, "MoySkladClient", lambda **kwargs: moysklad)
     if llm is not None:
         monkeypatch.setattr(mod, "YandexGPTClient", lambda **kwargs: llm)
+    if rules_store is not None:
+        monkeypatch.setattr(mod, "ReviewRulesStore", lambda **kwargs: rules_store)
 
 
 # --- _poll_ozon_reviews ---------------------------------------------------
@@ -173,11 +178,12 @@ def _install_fakes(monkeypatch, *, telegram=None, ozon=None, yandex=None, moyskl
 def test_poll_ozon_reviews_drafts_and_sends_new_reviews(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "Отлично!", "rating": 5, "published_at": "2026-10-14T02:55:35.014683Z"}])
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо за высокую оценку!")
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert len(telegram.messages) == 1
     assert "SKU111" in telegram.messages[0]["text"] or "Товар 111" in telegram.messages[0]["text"]
@@ -197,12 +203,13 @@ def test_poll_ozon_reviews_drafts_and_sends_new_reviews(tmp_path):
 def test_poll_ozon_reviews_skips_a_review_already_drafted(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     log.add("draft_sent", "success", "already drafted", "ozon:review:r1", {"message_id": 1})
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "Отлично!", "rating": 5}])
     telegram = FakeTelegram()
     llm = FakeLLM()
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert telegram.messages == []  # nothing new sent — r1 was already drafted
 
@@ -210,12 +217,13 @@ def test_poll_ozon_reviews_skips_a_review_already_drafted(tmp_path):
 def test_poll_ozon_reviews_caps_at_max_drafts_per_tick(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     reviews = [{"id": f"r{i}", "sku": 1, "text": "ok", "rating": 5} for i in range(MAX_DRAFTS_PER_TICK + 10)]
     ozon = FakeOzon(reviews=reviews)
     telegram = FakeTelegram()
     llm = FakeLLM()
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert len(telegram.messages) == MAX_DRAFTS_PER_TICK
 
@@ -223,6 +231,7 @@ def test_poll_ozon_reviews_caps_at_max_drafts_per_tick(tmp_path):
 def test_poll_ozon_reviews_logs_an_error_and_continues_when_the_llm_fails(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[
         {"id": "bad", "sku": 111, "text": "boom", "rating": 1},
         {"id": "good", "sku": 111, "text": "ok", "rating": 5},
@@ -230,7 +239,7 @@ def test_poll_ozon_reviews_logs_an_error_and_continues_when_the_llm_fails(tmp_pa
     telegram = FakeTelegram()
     llm = FakeLLM(reply="ok", fail_for={"boom"})
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert len(telegram.messages) == 1  # only the good one got drafted
     kinds = [e["kind"] for e in log.recent()]
@@ -241,11 +250,12 @@ def test_poll_ozon_reviews_logs_an_error_and_continues_when_the_llm_fails(tmp_pa
 def test_poll_ozon_reviews_auto_marks_a_textless_review_processed_without_drafting(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "", "rating": 5}])  # rating-only, no text
     telegram = FakeTelegram()
     llm = FakeLLM()
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert telegram.messages == []  # never sent for approval
     assert llm.calls == []  # never asked to draft
@@ -259,12 +269,13 @@ def test_poll_ozon_reviews_auto_marks_a_textless_review_processed_without_drafti
 def test_poll_ozon_reviews_does_not_retry_a_review_already_auto_processed(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     log.add("auto_processed", "success", "already handled", "ozon:review:r1")
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "", "rating": 5}])
     telegram = FakeTelegram()
     llm = FakeLLM()
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert ozon.marked_processed == []  # not re-marked
     assert telegram.messages == []
@@ -273,6 +284,7 @@ def test_poll_ozon_reviews_does_not_retry_a_review_already_auto_processed(tmp_pa
 def test_poll_ozon_reviews_ignores_reviews_received_before_the_cutoff(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[
         {"id": "old", "sku": 111, "text": "Было давно", "rating": 5, "published_at": "2026-10-13T12:00:00+03:00"},
         {"id": "new", "sku": 111, "text": "Недавно", "rating": 5, "published_at": "2026-10-14T01:00:00+03:00"},
@@ -280,7 +292,7 @@ def test_poll_ozon_reviews_ignores_reviews_received_before_the_cutoff(tmp_path):
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо!")
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert len(telegram.messages) == 1  # only the one on/after the cutoff
     entries = log.recent()
@@ -288,11 +300,26 @@ def test_poll_ozon_reviews_ignores_reviews_received_before_the_cutoff(tmp_path):
     assert ozon.marked_processed == []  # the old one is just ignored, not marked processed either
 
 
+def test_poll_ozon_reviews_passes_the_review_rulebook_into_the_draft_prompt(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Никогда не упоминай акции")
+    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "Отлично!", "rating": 5}])
+    telegram = FakeTelegram()
+    llm = FakeLLM()
+
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
+
+    assert "Никогда не упоминай акции" in llm.calls[0]
+
+
 # --- _poll_yandex_reviews / _poll_yandex_questions ------------------------
 
 def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_text(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     yandex = FakeYandex(feedbacks=[{
         "feedbackId": 42,
         "identifiers": {"offerId": "MG2445e"},
@@ -304,7 +331,7 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо за тёплый отзыв!")
 
-    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert len(telegram.messages) == 1
     assert "Towards desires" in telegram.messages[0]["text"]
@@ -318,6 +345,7 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
 def test_poll_yandex_reviews_ignores_feedback_received_before_the_cutoff(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     yandex = FakeYandex(feedbacks=[
         {"feedbackId": 1, "identifiers": {"offerId": "X"}, "description": {"comment": "давно"}, "statistics": {"rating": 5}, "createdAt": "2026-10-13T12:00:00+03:00"},
         {"feedbackId": 2, "identifiers": {"offerId": "X"}, "description": {"comment": "недавно"}, "statistics": {"rating": 5}, "createdAt": "2026-10-14T01:00:00+03:00"},
@@ -326,7 +354,7 @@ def test_poll_yandex_reviews_ignores_feedback_received_before_the_cutoff(tmp_pat
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо!")
 
-    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     entries = log.recent()
     assert {e["external_id"] for e in entries} == {"yandex_market:review:2"}
@@ -335,6 +363,7 @@ def test_poll_yandex_reviews_ignores_feedback_received_before_the_cutoff(tmp_pat
 def test_poll_yandex_reviews_uses_a_canned_reply_without_calling_the_llm_when_there_is_no_text(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     yandex = FakeYandex(feedbacks=[{
         "feedbackId": 42,
         "identifiers": {"offerId": "MG2445e"},
@@ -345,7 +374,7 @@ def test_poll_yandex_reviews_uses_a_canned_reply_without_calling_the_llm_when_th
     telegram = FakeTelegram()
     llm = FakeLLM()
 
-    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert llm.calls == []  # never asked to draft — no text to respond to
     assert len(telegram.messages) == 1
@@ -355,12 +384,13 @@ def test_poll_yandex_reviews_uses_a_canned_reply_without_calling_the_llm_when_th
 def test_poll_yandex_questions_falls_back_to_offer_id_when_product_unknown(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     yandex = FakeYandex(questions=[{"questionIdentifiers": {"id": 7, "offerId": "UNKNOWN1"}, "text": "Какой размер?"}])
     moysklad = FakeMoySklad(products={})  # nothing resolves
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Уточните в описании товара.")
 
-    _poll_yandex_questions(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_yandex_questions(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert "UNKNOWN1" in telegram.messages[0]["text"]
     entries = log.recent()
@@ -373,11 +403,12 @@ def test_poll_yandex_questions_falls_back_to_offer_id_when_product_unknown(tmp_p
 def test_poll_ozon_reviews_omits_the_received_line_when_no_timestamp_is_given(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "ok", "rating": 4}])  # no published_at
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо!")
 
-    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors, rules_store=rules_store)
 
     assert "Получено" not in telegram.messages[0]["text"]
 
@@ -465,6 +496,65 @@ def test_handle_reply_posts_the_staff_edited_text_instead_of_the_draft(tmp_path)
     entries = [e for e in log.recent() if e["kind"] == "posted"]
     payload = json.loads(entries[0]["payload"])
     assert payload["edited"] is True
+
+
+def test_handle_reply_updates_the_rulebook_when_the_staff_edit_is_generalizable(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Черновик")
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="- Никогда не упоминай акции")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    message = {"text": "Спасибо, напишите нам в поддержку.", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None, llm=llm, rules_store=rules_store)
+
+    assert rules_store.get("review") == "- Никогда не упоминай акции"
+    assert any("Свод правил обновлён" in m["text"] for m in telegram.messages)
+
+
+def test_handle_reply_does_not_touch_the_rulebook_when_the_edit_has_no_lesson(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Черновик")
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Старое правило")
+    llm = FakeLLM(reply="- Старое правило")  # model decided nothing generalizable changed
+    message = {"text": "Спасибо, напишите нам в поддержку.", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None, llm=llm, rules_store=rules_store)
+
+    assert rules_store.get("review") == "- Старое правило"
+    assert not any("Свод правил обновлён" in m["text"] for m in telegram.messages)
+
+
+def test_handle_reply_skips_rule_learning_without_an_edit(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Спасибо за отзыв!")
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="- Правило, которого быть не должно")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    message = {"text": "да", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None, llm=llm, rules_store=rules_store)
+
+    assert llm.calls == []  # plain approval — nothing to learn from
+    assert rules_store.get("review") == ""
+
+
+def test_handle_reply_skips_rule_learning_without_an_llm_configured(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Черновик")
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    message = {"text": "Отредактированный текст", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None, llm=None, rules_store=rules_store)  # must not raise
+
+    assert not any("Свод правил" in m["text"] for m in telegram.messages)
 
 
 def test_handle_reply_declines_without_posting(tmp_path):
@@ -629,16 +719,132 @@ def test_reply_run_once_handles_a_thumbs_up_reaction_update(tmp_path, monkeypatc
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Спасибо!")
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
     ozon = FakeOzon()
     telegram = FakeTelegram()
     telegram._updates = [{"update_id": 90, "message_reaction": {"chat": {"id": -100999}, "message_id": 501, "new_reaction": [{"type": "emoji", "emoji": "👍"}]}}]
     _install_fakes(monkeypatch, telegram=telegram, ozon=ozon)
 
-    reply_run_once(settings, offset_store, log, errors)
+    reply_run_once(settings, offset_store, log, errors, rules_store)
 
     assert ozon.comments_created == [{"review_id": "r1", "text": "Спасибо!"}]
     assert offset_store.get() == 90
+
+
+# --- _parse_rules_command / _handle_rules_command (the "правила" command) --
+
+def test_parse_rules_command_returns_none_for_an_unrelated_message():
+    assert _parse_rules_command("да") is None
+    assert _parse_rules_command("Спасибо за отзыв!") is None
+
+
+def test_parse_rules_command_plain_has_no_kind_and_no_instruction():
+    assert _parse_rules_command("правила") == (None, "")
+    assert _parse_rules_command("Правила") == (None, "")
+
+
+def test_parse_rules_command_extracts_kind_keyword():
+    assert _parse_rules_command("правила отзывы") == ("review", "")
+    assert _parse_rules_command("правила вопросы") == ("question", "")
+
+
+def test_parse_rules_command_extracts_kind_and_instruction():
+    kind, instruction = _parse_rules_command("правила отзывы: не используй слово акция")
+    assert kind == "review"
+    assert instruction == "не используй слово акция"
+
+
+def test_handle_rules_command_returns_false_for_a_normal_message():
+    telegram = FakeTelegram()
+    rules_store = None  # must not even be touched
+    message = {"text": "Спасибо за отзыв!", "message_id": 600}
+    assert _handle_rules_command(message, rules_store=rules_store, llm=None, telegram=telegram, chat_id="-100999") is False
+    assert telegram.messages == []
+
+
+def test_handle_rules_command_shows_both_rulebooks_when_given_no_kind(tmp_path):
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Правило про отзывы")
+    rules_store.set("question", "- Правило про вопросы")
+    telegram = FakeTelegram()
+    message = {"text": "правила", "message_id": 600}
+
+    handled = _handle_rules_command(message, rules_store=rules_store, llm=None, telegram=telegram, chat_id="-100999")
+
+    assert handled is True
+    assert "Правило про отзывы" in telegram.messages[0]["text"]
+    assert "Правило про вопросы" in telegram.messages[0]["text"]
+
+
+def test_handle_rules_command_shows_only_the_requested_kind(tmp_path):
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Правило про отзывы")
+    rules_store.set("question", "- Правило про вопросы")
+    telegram = FakeTelegram()
+    message = {"text": "правила отзывы", "message_id": 600}
+
+    _handle_rules_command(message, rules_store=rules_store, llm=None, telegram=telegram, chat_id="-100999")
+
+    assert "Правило про отзывы" in telegram.messages[0]["text"]
+    assert "Правило про вопросы" not in telegram.messages[0]["text"]
+
+
+def test_handle_rules_command_applies_an_edit_instruction_to_the_named_kind(tmp_path):
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Старое правило")
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="- Новое правило")
+    message = {"text": "правила отзывы: добавь правило не упоминать акции", "message_id": 600}
+
+    handled = _handle_rules_command(message, rules_store=rules_store, llm=llm, telegram=telegram, chat_id="-100999")
+
+    assert handled is True
+    assert rules_store.get("review") == "- Новое правило"
+    assert "Отзывы" in telegram.messages[0]["text"]
+    assert "Новое правило" in telegram.messages[0]["text"]
+
+
+def test_handle_rules_command_asks_to_specify_a_kind_when_editing_without_one(tmp_path):
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="не должно быть вызвано")
+    message = {"text": "правила: добавь правило", "message_id": 600}
+
+    _handle_rules_command(message, rules_store=rules_store, llm=llm, telegram=telegram, chat_id="-100999")
+
+    assert llm.calls == []
+    assert "Уточните" in telegram.messages[0]["text"]
+
+
+def test_handle_rules_command_reports_when_llm_is_not_configured(tmp_path):
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    telegram = FakeTelegram()
+    message = {"text": "правила отзывы: добавь правило", "message_id": 600}
+
+    _handle_rules_command(message, rules_store=rules_store, llm=None, telegram=telegram, chat_id="-100999")
+
+    assert rules_store.get("review") == ""
+    assert "не настроен" in telegram.messages[0]["text"]
+
+
+def test_reply_run_once_handles_the_rules_command_instead_of_falling_through_to_handle_reply(tmp_path, monkeypatch):
+    from sync_service.telegram_qa_worker import UpdateOffset
+
+    settings = FakeSettings()
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Правило про отзывы")
+    offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
+    telegram = FakeTelegram()
+    telegram._updates = [{"update_id": 95, "message": {"chat": {"id": -100999}, "from": {"is_bot": False}, "text": "правила отзывы", "message_id": 601}}]
+    _install_fakes(monkeypatch, telegram=telegram)
+
+    reply_run_once(settings, offset_store, log, errors, rules_store)
+
+    assert "Правило про отзывы" in telegram.messages[0]["text"]
+    assert offset_store.get() == 95
 
 
 # --- _is_relevant / _is_relevant_reaction -----------------------------------
@@ -675,6 +881,7 @@ def test_poll_once_does_nothing_without_a_yandexgpt_key(tmp_path, monkeypatch):
     settings.yandexgpt_api_key = ""
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
 
     def _boom(**kwargs):
         raise AssertionError("no client should be constructed")
@@ -685,13 +892,14 @@ def test_poll_once_does_nothing_without_a_yandexgpt_key(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "YandexMarketClient", _boom)
     monkeypatch.setattr(mod, "YandexGPTClient", _boom)
 
-    poll_once(settings, log, errors)  # must return early, not raise
+    poll_once(settings, log, errors, rules_store)  # must return early, not raise
 
 
 def test_poll_once_drafts_from_both_platforms(tmp_path, monkeypatch):
     settings = FakeSettings()
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     ozon = FakeOzon(reviews=[{"id": "r1", "sku": 1, "text": "ok", "rating": 5}])
     yandex = FakeYandex(feedbacks=[{"feedbackId": 1, "identifiers": {"offerId": "X"}, "description": {}, "statistics": {"rating": 4}}])
     moysklad = FakeMoySklad()
@@ -699,7 +907,7 @@ def test_poll_once_drafts_from_both_platforms(tmp_path, monkeypatch):
     llm = FakeLLM()
     _install_fakes(monkeypatch, telegram=telegram, ozon=ozon, yandex=yandex, moysklad=moysklad, llm=llm)
 
-    poll_once(settings, log, errors)
+    poll_once(settings, log, errors, rules_store)
 
     kinds_and_ids = {(e["kind"], e["external_id"]) for e in log.recent()}
     assert ("draft_sent", "ozon:review:r1") in kinds_and_ids
@@ -712,12 +920,13 @@ def test_reply_run_once_advances_the_offset_even_on_an_irrelevant_message(tmp_pa
     settings = FakeSettings()
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
     offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
     telegram = FakeTelegram()
     telegram._updates = [{"update_id": 77, "message": {"chat": {"id": -1}, "from": {"is_bot": False}, "text": "hi"}}]
     _install_fakes(monkeypatch, telegram=telegram)
 
-    reply_run_once(settings, offset_store, log, errors)
+    reply_run_once(settings, offset_store, log, errors, rules_store)
 
     assert offset_store.get() == 77
 
@@ -731,8 +940,9 @@ def test_draft_question_returns_false_without_drafting_when_already_sent(tmp_pat
     moysklad = FakeMoySklad()
     telegram = FakeTelegram()
     llm = FakeLLM()
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
 
-    sent = _draft_question(question, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999")
+    sent = _draft_question(question, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", rules_store=rules_store)
 
     assert sent is False
     assert telegram.messages == []
@@ -744,13 +954,28 @@ def test_draft_question_drafts_and_returns_true_for_a_new_question(tmp_path):
     moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Размер 40x50 см.")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
 
-    sent = _draft_question(question, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999")
+    sent = _draft_question(question, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", rules_store=rules_store)
 
     assert sent is True
     assert len(telegram.messages) == 1
     assert "Towards desires" in telegram.messages[0]["text"]
     assert log.recent()[0]["external_id"] == "yandex_market:question:8"
+
+
+def test_draft_question_passes_the_question_rulebook_into_the_draft_prompt(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    question = {"questionIdentifiers": {"id": 8, "offerId": "MG2445e"}, "text": "Какой размер?"}
+    moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="Размер 40x50 см.")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("question", "- Отвечай одним предложением")
+
+    _draft_question(question, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", rules_store=rules_store)
+
+    assert "Отвечай одним предложением" in llm.calls[0]
 
 
 def test_handle_new_question_fetches_by_id_and_drafts(tmp_path, monkeypatch):
@@ -761,7 +986,8 @@ def test_handle_new_question_fetches_by_id_and_drafts(tmp_path, monkeypatch):
     moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Размер 40x50 см.")
-    _install_fakes(monkeypatch, telegram=telegram, yandex=yandex, moysklad=moysklad, llm=llm)
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    _install_fakes(monkeypatch, telegram=telegram, yandex=yandex, moysklad=moysklad, llm=llm, rules_store=rules_store)
 
     handle_new_question(question_id=9, settings=settings, log=log)
 
@@ -775,7 +1001,8 @@ def test_handle_new_question_does_nothing_when_the_question_is_gone(tmp_path, mo
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     yandex = FakeYandex(question_by_id_result=None)
     telegram = FakeTelegram()
-    _install_fakes(monkeypatch, telegram=telegram, yandex=yandex, moysklad=FakeMoySklad(), llm=FakeLLM())
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    _install_fakes(monkeypatch, telegram=telegram, yandex=yandex, moysklad=FakeMoySklad(), llm=FakeLLM(), rules_store=rules_store)
 
     handle_new_question(question_id=404, settings=settings, log=log)  # must not raise
 

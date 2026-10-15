@@ -66,11 +66,63 @@ def canned_review_reply(*, rating: int | None) -> str:
     return _NO_TEXT_REVIEW_REPLY_POSITIVE
 
 
-def generate_review_reply(*, client: LLMClient, platform: str, product_name: str, rating: int | None, review_text: str) -> str:
+def _with_rules(context: str, rules: str) -> str:
+    if not rules.strip():
+        return context
+    return f"Свод правил от сотрудников магазина (обязательно учитывай при ответе):\n{rules.strip()}\n\n{context}"
+
+
+def generate_review_reply(*, client: LLMClient, platform: str, product_name: str, rating: int | None, review_text: str, rules: str = "") -> str:
     context = f"Площадка: {PLATFORM_NAMES.get(platform, platform)}\nТовар: {product_name or '(название неизвестно)'}\nОценка: {rating if rating is not None else '(нет)'}\nТекст отзыва: {review_text.strip() or '(покупатель не оставил текст)'}"
+    context = _with_rules(context, rules)
     return client.complete(system=REVIEW_SYSTEM_PROMPT, user_message=context)[:MAX_REPLY_CHARS]
 
 
-def generate_question_reply(*, client: LLMClient, platform: str, product_name: str, question_text: str) -> str:
+def generate_question_reply(*, client: LLMClient, platform: str, product_name: str, question_text: str, rules: str = "") -> str:
     context = f"Площадка: {PLATFORM_NAMES.get(platform, platform)}\nТовар: {product_name or '(название неизвестно)'}\nВопрос: {question_text.strip()}"
+    context = _with_rules(context, rules)
     return client.complete(system=QUESTION_SYSTEM_PROMPT, user_message=context)[:MAX_REPLY_CHARS]
+
+
+# Caps how long the rulebook can grow — generous for "a few dozen concise
+# bullet points", but prevents an unbounded blob from eating the whole
+# prompt budget if the merge/edit step ever goes off the rails.
+MAX_RULES_CHARS = 4000
+
+RULES_UPDATE_SYSTEM_PROMPT = """Ты поддерживаешь свод правил о том, как магазин «Varvikas | Цветной» должен отвечать покупателям на отзывы или вопросы о товарах. Тебе показывают текущий свод правил, черновик ответа, который написала модель, и финальный текст, который сотрудник магазина реально опубликовал вместо этого черновика.
+
+Твоя задача — понять ОБЩУЮ, обобщаемую причину правки (не частность конкретно этого отзыва) и обновить свод правил так, чтобы впредь модель сама писала ближе к тому, как правит сотрудник.
+
+Правила:
+- Если правка — стилистическая мелочь или специфична только для этого конкретного случая (конкретный товар, конкретная деталь, опечатка) и не содержит обобщаемого урока — верни текущий свод правил БЕЗ ИЗМЕНЕНИЙ, дословно, слово в слово.
+- Если правка действительно показывает предпочтение (тон, структура ответа, что нельзя обещать, как обращаться к покупателю и т.п.) — добавь или измени соответствующий пункт.
+- Не дублируй пункты, близкие по смыслу — переформулируй и объедини вместо того, чтобы добавлять ещё один похожий.
+- Следи, чтобы свод не раздувался: если пунктов становится много и часть пересекается — сократи и объедини несколько пунктов в один, сохранив смысл каждого.
+- Свод правил — это короткие, конкретные пункты списком (каждый с новой строки, начинается с "- "), не общие фразы и не вода.
+- Верни ТОЛЬКО финальный текст свода правил целиком, без пояснений от себя, без markdown-заголовков."""
+
+
+def update_rules_from_edit(*, client: LLMClient, current_rules: str, product_name: str, customer_text: str, rating: int | None, draft_text: str, final_text: str) -> str:
+    """Distills a staff edit (draft_text -> final_text) into the persistent
+    rulebook, or returns current_rules unchanged if the edit doesn't carry a
+    generalizable lesson. Called only when final_text actually differs from
+    draft_text — see review_worker._approve_and_post."""
+    context = (
+        f"Текущий свод правил:\n{current_rules.strip() or '(пока пусто)'}\n\n"
+        f"Товар: {product_name or '(название неизвестно)'}\n"
+        f"Оценка: {rating if rating is not None else '(нет)'}\n"
+        f"Текст от покупателя: {customer_text.strip() or '(покупатель не оставил текст)'}\n\n"
+        f"Черновик модели:\n{draft_text}\n\n"
+        f"Финальный текст, который реально опубликовал сотрудник:\n{final_text}"
+    )
+    return client.complete(system=RULES_UPDATE_SYSTEM_PROMPT, user_message=context, max_tokens=1500).strip()[:MAX_RULES_CHARS]
+
+
+RULES_EDIT_SYSTEM_PROMPT = """Ты редактируешь свод правил о том, как магазин «Varvikas | Цветной» отвечает покупателям на отзывы или вопросы о товарах. Сотрудник магазина прислал текущий свод правил и инструкцию, что в нём поменять (добавить правило, убрать, переформулировать, сократить и объединить похожие пункты и т.п.). Выполни инструкцию и верни ТОЛЬКО обновлённый свод правил целиком — короткими конкретными пунктами списком (каждый с новой строки, начинается с "- "), без пояснений от себя."""
+
+
+def edit_rules_by_instruction(*, client: LLMClient, current_rules: str, instruction: str) -> str:
+    """Applies a staff member's natural-language instruction to the
+    rulebook — the "правила <кого>: <инструкция>" chat command."""
+    context = f"Текущий свод правил:\n{current_rules.strip() or '(пока пусто)'}\n\nИнструкция сотрудника:\n{instruction.strip()}"
+    return client.complete(system=RULES_EDIT_SYSTEM_PROMPT, user_message=context, max_tokens=1500).strip()[:MAX_RULES_CHARS]
