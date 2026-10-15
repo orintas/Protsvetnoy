@@ -7,8 +7,10 @@ from sync_service.review_worker import (
     _draft_question,
     _find_pending_draft,
     _format_received_at,
+    _handle_reaction,
     _handle_reply,
     _is_relevant,
+    _is_relevant_reaction,
     _poll_ozon_reviews,
     _poll_yandex_questions,
     _poll_yandex_reviews,
@@ -539,7 +541,95 @@ def test_handle_reply_ignores_a_duplicate_reply_after_already_posted(tmp_path):
     assert telegram.messages == []
 
 
-# --- _is_relevant ----------------------------------------------------------
+# --- _handle_reaction (👍ing a draft message approves it) ------------------
+
+def test_handle_reaction_approves_and_posts_the_draft_as_is(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Спасибо за отзыв!")
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    reaction = {"chat": {"id": -100999}, "message_id": 501, "new_reaction": [{"type": "emoji", "emoji": "👍"}]}
+
+    _handle_reaction(reaction, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None)
+
+    assert ozon.comments_created == [{"review_id": "r1", "text": "Спасибо за отзыв!"}]
+    kinds = [e["kind"] for e in log.recent()]
+    assert "posted" in kinds
+    assert "Опубликовано" in telegram.messages[0]["text"]
+
+
+def test_handle_reaction_ignores_a_reaction_that_is_not_thumbs_up(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501)
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    reaction = {"chat": {"id": -100999}, "message_id": 501, "new_reaction": [{"type": "emoji", "emoji": "🔥"}]}
+
+    _handle_reaction(reaction, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None)
+
+    assert ozon.comments_created == []
+    assert telegram.messages == []
+
+
+def test_handle_reaction_ignores_a_reaction_being_removed(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501)
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    # Telegram also sends a message_reaction update when a reaction is
+    # removed — new_reaction is empty in that case.
+    reaction = {"chat": {"id": -100999}, "message_id": 501, "old_reaction": [{"type": "emoji", "emoji": "👍"}], "new_reaction": []}
+
+    _handle_reaction(reaction, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None)
+
+    assert ozon.comments_created == []
+
+
+def test_handle_reaction_ignores_a_reaction_on_an_unrelated_message(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    telegram = FakeTelegram()
+    reaction = {"chat": {"id": -100999}, "message_id": 12345, "new_reaction": [{"type": "emoji", "emoji": "👍"}]}
+
+    _handle_reaction(reaction, log=log, telegram=telegram, chat_id="-100999", ozon=None, yandex=None)
+
+    assert telegram.messages == []
+    assert log.recent() == []
+
+
+def test_handle_reaction_ignores_a_duplicate_after_already_posted(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501)
+    log.add("posted", "success", "posted", "ozon:review:r1", {"final_text": "Спасибо!"})
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    reaction = {"chat": {"id": -100999}, "message_id": 501, "new_reaction": [{"type": "emoji", "emoji": "👍"}]}
+
+    _handle_reaction(reaction, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None)
+
+    assert ozon.comments_created == []
+    assert telegram.messages == []
+
+
+def test_reply_run_once_handles_a_thumbs_up_reaction_update(tmp_path, monkeypatch):
+    from sync_service.telegram_qa_worker import UpdateOffset
+
+    settings = FakeSettings()
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Спасибо!")
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    offset_store = UpdateOffset(str(tmp_path / "offset.sqlite3"))
+    ozon = FakeOzon()
+    telegram = FakeTelegram()
+    telegram._updates = [{"update_id": 90, "message_reaction": {"chat": {"id": -100999}, "message_id": 501, "new_reaction": [{"type": "emoji", "emoji": "👍"}]}}]
+    _install_fakes(monkeypatch, telegram=telegram, ozon=ozon)
+
+    reply_run_once(settings, offset_store, log, errors)
+
+    assert ozon.comments_created == [{"review_id": "r1", "text": "Спасибо!"}]
+    assert offset_store.get() == 90
+
+
+# --- _is_relevant / _is_relevant_reaction -----------------------------------
 
 def test_is_relevant_accepts_a_human_message_in_the_reviews_chat():
     message = {"chat": {"id": -100999}, "from": {"is_bot": False}}
@@ -554,6 +644,16 @@ def test_is_relevant_rejects_messages_from_bots():
 def test_is_relevant_rejects_another_chat():
     message = {"chat": {"id": -1}, "from": {"is_bot": False}}
     assert _is_relevant(message, FakeSettings()) is False
+
+
+def test_is_relevant_reaction_accepts_the_reviews_chat():
+    reaction = {"chat": {"id": -100999}}
+    assert _is_relevant_reaction(reaction, FakeSettings()) is True
+
+
+def test_is_relevant_reaction_rejects_another_chat():
+    reaction = {"chat": {"id": -1}}
+    assert _is_relevant_reaction(reaction, FakeSettings()) is False
 
 
 # --- poll_once / reply_run_once wiring --------------------------------------

@@ -100,7 +100,7 @@ def _format_draft_message(*, platform: str, kind: str, product_name: str, produc
     lines.append("Черновик ответа:")
     lines.append(draft)
     lines.append("")
-    lines.append('Ответьте «да» — опубликовать как есть; своим текстом — опубликовать с правкой; «нет» — пропустить.')
+    lines.append('Ответьте «да» или поставьте 👍 на это сообщение — опубликовать как есть; своим текстом — опубликовать с правкой; «нет» — пропустить.')
     return "\n".join(lines)
 
 
@@ -307,6 +307,22 @@ def _is_relevant(message: dict[str, Any], settings: Settings) -> bool:
     return bool(settings.telegram_reviews_chat_id) and chat_id == str(settings.telegram_reviews_chat_id)
 
 
+def _is_relevant_reaction(reaction: dict[str, Any], settings: Settings) -> bool:
+    if not isinstance(reaction, dict):
+        return False
+    # Telegram never sends a message_reaction update for a bot's own
+    # reaction, so there's no is_bot check to make here (unlike _is_relevant).
+    chat_id = str((reaction.get("chat") or {}).get("id", ""))
+    return bool(settings.telegram_reviews_chat_id) and chat_id == str(settings.telegram_reviews_chat_id)
+
+
+APPROVE_EMOJI = "👍"
+
+
+def _has_thumbs_up(reactions: list[dict[str, Any]] | None) -> bool:
+    return any(isinstance(r, dict) and r.get("type") == "emoji" and r.get("emoji") == APPROVE_EMOJI for r in (reactions or []))
+
+
 def _find_pending_draft(log: YandexMarketSyncLog, message_id: int) -> dict[str, Any] | None:
     """Reverse lookup, same shape as YandexMarketSyncLog.find_by_label_message_id
     but scoped to kind='draft_sent' and across every platform/kind this
@@ -356,6 +372,23 @@ def _post_reply(*, platform: str, kind: str, item_id: str, text: str, ozon: Ozon
     return "Опубликовано ✅"
 
 
+def _approve_and_post(draft: dict[str, Any], *, final_text: str, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None, reply_to_message_id: int | None) -> None:
+    """Shared tail end of both approval paths (a "да"/text reply, or a 👍
+    reaction) once a pending draft and its final text are known: post it,
+    log the outcome, and tell the chat what happened."""
+    external_id = draft["external_id"]
+    label = f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}"
+    try:
+        confirmation = _post_reply(platform=draft["platform"], kind=draft["kind"], item_id=draft["item_id"], text=final_text, ozon=ozon, yandex=yandex)
+    except Exception as error:
+        log.add("post_error", "error", f"{label}: ошибка публикации: {error}", external_id)
+        telegram.send_message(chat_id=chat_id, text=f"Не удалось опубликовать: {error}", reply_to_message_id=reply_to_message_id)
+        return
+
+    log.add("posted", "success", f"{label}: ответ опубликован", external_id, {"final_text": final_text, "edited": final_text != draft["draft_text"]})
+    telegram.send_message(chat_id=chat_id, text=confirmation, reply_to_message_id=reply_to_message_id)
+
+
 def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> None:
     reply_to = message.get("reply_to_message")
     if not isinstance(reply_to, dict) or not reply_to.get("message_id"):
@@ -363,27 +396,34 @@ def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram
     draft = _find_pending_draft(log, reply_to["message_id"])
     if draft is None:
         return
-    external_id = draft["external_id"]
     reply_text = str(message.get("text") or "").strip()
     lowered = reply_text.lower()
 
     if lowered in DECLINE_WORDS:
-        log.add("declined", "success", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: отклонено сотрудником", external_id)
+        log.add("declined", "success", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: отклонено сотрудником", draft["external_id"])
         telegram.send_message(chat_id=chat_id, text="Принято, публиковать не буду.", reply_to_message_id=message.get("message_id"))
         return
 
     final_text = draft["draft_text"] if (not reply_text or lowered in APPROVE_WORDS) else reply_text
     final_text = final_text[:MAX_REPLY_CHARS]
+    _approve_and_post(draft, final_text=final_text, log=log, telegram=telegram, chat_id=chat_id, ozon=ozon, yandex=yandex, reply_to_message_id=message.get("message_id"))
 
-    try:
-        confirmation = _post_reply(platform=draft["platform"], kind=draft["kind"], item_id=draft["item_id"], text=final_text, ozon=ozon, yandex=yandex)
-    except Exception as error:
-        log.add("post_error", "error", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: ошибка публикации: {error}", external_id)
-        telegram.send_message(chat_id=chat_id, text=f"Не удалось опубликовать: {error}", reply_to_message_id=message.get("message_id"))
+
+def _handle_reaction(reaction: dict[str, Any], *, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> None:
+    """A 👍 reaction on a draft message approves it as-is — same effect as
+    replying "да", just without typing anything. Any other reaction (or a
+    reaction being removed, which also arrives as a message_reaction update
+    with no 👍 in new_reaction) is ignored."""
+    if not _has_thumbs_up(reaction.get("new_reaction")):
         return
-
-    log.add("posted", "success", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: ответ опубликован", external_id, {"final_text": final_text, "edited": final_text != draft["draft_text"]})
-    telegram.send_message(chat_id=chat_id, text=confirmation, reply_to_message_id=message.get("message_id"))
+    message_id = reaction.get("message_id")
+    if not isinstance(message_id, int):
+        return
+    draft = _find_pending_draft(log, message_id)
+    if draft is None:
+        return
+    final_text = draft["draft_text"][:MAX_REPLY_CHARS]
+    _approve_and_post(draft, final_text=final_text, log=log, telegram=telegram, chat_id=chat_id, ozon=ozon, yandex=yandex, reply_to_message_id=message_id)
 
 
 def reply_run_once(settings: Settings, offset_store: UpdateOffset, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
@@ -394,12 +434,15 @@ def reply_run_once(settings: Settings, offset_store: UpdateOffset, log: YandexMa
     yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id) if settings.yandex_market_api_key else None
     try:
         last_offset = offset_store.get()
-        updates = telegram.get_updates(offset=(last_offset + 1) if last_offset is not None else None, timeout=POLL_REPLY_TIMEOUT_SECONDS, allowed_updates=["message"])
+        updates = telegram.get_updates(offset=(last_offset + 1) if last_offset is not None else None, timeout=POLL_REPLY_TIMEOUT_SECONDS, allowed_updates=["message", "message_reaction"])
         for update in updates:
             message = update.get("message")
+            reaction = update.get("message_reaction")
             try:
-                if _is_relevant(message, settings):
+                if message is not None and _is_relevant(message, settings):
                     _handle_reply(message, log=log, telegram=telegram, chat_id=settings.telegram_reviews_chat_id, ozon=ozon, yandex=yandex)
+                elif reaction is not None and _is_relevant_reaction(reaction, settings):
+                    _handle_reaction(reaction, log=log, telegram=telegram, chat_id=settings.telegram_reviews_chat_id, ozon=ozon, yandex=yandex)
             except Exception as error:
                 errors.log_exception("review_worker", error, context=f"Ошибка обработки ответа Telegram update_id={update.get('update_id')}")
             finally:
