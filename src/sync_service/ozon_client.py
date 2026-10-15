@@ -85,3 +85,56 @@ class OzonClient:
         """Registered push-notification subscriptions — confirmed live shape:
         {"urls": [{"url", "enable", "availability_status" (GREEN/YELLOW/RED), ...}], "total_count", ...}."""
         return self._client.post("/v1/notification/list", {})
+
+    def unprocessed_reviews(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Reviews with status UNPROCESSED, newest first, paginated via
+        last_id/has_next (confirmed live shape). `limit` is per OZON's own
+        page-size bound of [20, 100] — values outside that range are clamped
+        rather than left to fail the request."""
+        page_size = max(20, min(limit, 100))
+        reviews: list[dict[str, Any]] = []
+        last_id = ""
+        while True:
+            body: dict[str, Any] = {"status": "UNPROCESSED", "limit": page_size, "sort_dir": "DESC"}
+            if last_id:
+                body["last_id"] = last_id
+            payload = self._client.post("/v1/review/list", body)
+            reviews.extend(payload.get("reviews") or [])
+            if not payload.get("has_next"):
+                return reviews
+            last_id = payload.get("last_id") or ""
+            if not last_id:
+                return reviews
+
+    def product_names_by_sku(self, skus: list[int]) -> dict[int, dict[str, str]]:
+        """{sku: {"offer_id", "name"}} for a batch of OZON SKUs, via
+        /v3/product/info/list. The response doesn't echo the queried sku on
+        the item itself — it's nested under `sources[].sku` instead (every
+        source sku maps to the same offer_id/name) — confirmed live
+        2026-10-14."""
+        if not skus:
+            return {}
+        payload = self._client.post("/v3/product/info/list", {"sku": skus})
+        result: dict[int, dict[str, str]] = {}
+        for item in payload.get("items") or []:
+            offer_id = item.get("offer_id") or ""
+            name = item.get("name") or ""
+            for source in item.get("sources") or []:
+                sku = source.get("sku")
+                if sku is not None:
+                    result[sku] = {"offer_id": offer_id, "name": name}
+        return result
+
+    def create_review_comment(self, *, review_id: str, text: str, mark_review_as_processed: bool = True) -> str:
+        """Posts a top-level seller reply on a review (no parent_comment_id —
+        that's only for replying to an existing comment thread, which this
+        service never does). Returns the new comment_id. Field names per
+        OZON's own help-center walkthrough and the community Go client's
+        matching struct — not yet confirmed against a live response, unlike
+        every other method here; verify on the first real send."""
+        payload = self._client.post("/v1/review/comment/create", {
+            "review_id": review_id,
+            "text": text,
+            "mark_review_as_processed": mark_review_as_processed,
+        })
+        return str(payload.get("comment_id") or "")

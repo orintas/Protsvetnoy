@@ -161,3 +161,74 @@ class YandexMarketClient:
         if page_token:
             params["page_token"] = page_token
         return self._client.get(f"/v2/campaigns/{campaign_id}/returns", params=params)
+
+    def feedbacks_needing_reaction(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Product reviews still waiting for a seller reply (reactionStatus
+        NEED_REACTION), paginated via paging.nextPageToken — confirmed live
+        shape 2026-10-14 against /v2/businesses/{id}/goods-feedback."""
+        feedbacks: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            body: dict[str, Any] = {"reactionStatus": "NEED_REACTION", "limit": limit}
+            if page_token:
+                body["pageToken"] = page_token
+            payload = self._client.post(f"/v2/businesses/{self._business_id}/goods-feedback", body)
+            result = payload.get("result") or {}
+            feedbacks.extend(result.get("feedbacks") or [])
+            page_token = (result.get("paging") or {}).get("nextPageToken")
+            if not page_token:
+                return feedbacks
+
+    def comment_on_feedback(self, *, feedback_id: int, text: str) -> dict[str, Any]:
+        """Posts a new top-level seller reply on a review (no parentId — that's
+        only for replying to an existing comment, which this service never
+        does). Per the official reference (updateGoodsFeedbackComment)."""
+        payload = self._client.post(
+            f"/v2/businesses/{self._business_id}/goods-feedback/comments/update",
+            {"feedbackId": feedback_id, "comment": {"text": text}},
+        )
+        record(service="yandex_market", entity_type="feedback.comment", entity_id=str(feedback_id), action="create", after={"text": text})
+        return payload.get("result") or {}
+
+    def unanswered_questions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Product questions with no seller answer yet, paginated via
+        paging.nextPageToken — confirmed live shape 2026-10-14 against
+        /v1/businesses/{id}/goods-questions. The filter field is `needAnswer`
+        (per the official reference) — not `answered`, which the endpoint
+        silently ignores rather than rejecting."""
+        questions: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            body: dict[str, Any] = {"needAnswer": True, "limit": limit}
+            if page_token:
+                body["pageToken"] = page_token
+            payload = self._client.post(f"/v1/businesses/{self._business_id}/goods-questions", body)
+            result = payload.get("result") or {}
+            questions.extend(result.get("questions") or [])
+            page_token = (result.get("paging") or {}).get("nextPageToken")
+            if not page_token:
+                return questions
+
+    def question_by_id(self, question_id: int) -> dict[str, Any] | None:
+        """One specific question by id — used by the QUESTION_CREATED
+        push-notification fast path (see review_worker.handle_new_question)
+        to fetch just that question instead of pulling the whole
+        needs-answer list. Per the official reference, filtering by
+        `questionIds` is the documented way to resolve a webhook's bare id
+        into the full question."""
+        payload = self._client.post(f"/v1/businesses/{self._business_id}/goods-questions", {"questionIds": [question_id]})
+        questions = (payload.get("result") or {}).get("questions") or []
+        return questions[0] if questions else None
+
+    def answer_question(self, *, question_id: int, text: str) -> dict[str, Any]:
+        """Creates the seller's answer to a product question. Per the
+        official reference (updateGoodsQuestionTextEntity) — that endpoint is
+        flagged deprecated in the reference docs with no replacement named,
+        but it's still the one the current step-by-step guide points to
+        (checked 2026-10-14); revisit if Yandex ever publishes a successor."""
+        payload = self._client.post(
+            f"/v1/businesses/{self._business_id}/goods-questions/update",
+            {"operationType": "CREATE", "parentEntityId": {"id": question_id, "type": "QUESTION"}, "text": text},
+        )
+        record(service="yandex_market", entity_type="question.answer", entity_id=str(question_id), action="create", after={"text": text})
+        return payload.get("result") or {}

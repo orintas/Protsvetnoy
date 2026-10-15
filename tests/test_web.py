@@ -108,6 +108,77 @@ def test_planfix_webhook_responds_400_for_a_non_company_contact(tmp_path, monkey
     assert captured["headers"]["error"] == "Это не компания"
 
 
+def _planfix_new_goods_environ(fields: dict[str, str]) -> dict:
+    from urllib.parse import urlencode
+
+    body = urlencode(fields).encode()
+    return {
+        "PATH_INFO": "/api/planfix/webhook/new-goods", "QUERY_STRING": "", "REQUEST_METHOD": "POST",
+        "CONTENT_LENGTH": str(len(body)), "wsgi.input": io.BytesIO(body),
+    }
+
+
+def test_planfix_new_goods_webhook_calls_launch_and_returns_created_ids(monkeypatch):
+    monkeypatch.setattr(web_module, "PlanFixClient", lambda **kwargs: _FakeClosableClient())
+    captured_call = {}
+
+    def _fake_launch(planfix, *, task_id, log):
+        captured_call["task_id"] = task_id
+        return [555, 556]
+
+    monkeypatch.setattr(web_module, "launch_new_product_tasks", _fake_launch)
+    environ = _planfix_new_goods_environ({"task_id": "7230"})
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    body = b"".join(application(environ, start_response))
+
+    assert captured["status"] == "200 OK"
+    assert json.loads(body) == {"created": [555, 556]}
+    assert captured_call["task_id"] == 7230
+
+
+def test_planfix_new_goods_webhook_rejects_missing_task_id():
+    environ = _planfix_new_goods_environ({})
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    application(environ, start_response)
+    assert captured["status"] == "400 Bad Request"
+
+
+def test_planfix_new_goods_webhook_rejects_a_non_numeric_task_id():
+    environ = _planfix_new_goods_environ({"task_id": "not-a-number"})
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    application(environ, start_response)
+    assert captured["status"] == "400 Bad Request"
+
+
+def test_planfix_new_goods_webhook_returns_500_when_launch_raises(monkeypatch):
+    monkeypatch.setattr(web_module, "PlanFixClient", lambda **kwargs: _FakeClosableClient())
+
+    def _raise(planfix, *, task_id, log):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(web_module, "launch_new_product_tasks", _raise)
+    environ = _planfix_new_goods_environ({"task_id": "7230"})
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+
+    application(environ, start_response)
+    assert captured["status"] == "500 Internal Server Error"
+
+
 def _sample_moysklad_product(code: str = "ABC1", name: str = "Test product") -> dict:
     return {
         "id": "prod-1",

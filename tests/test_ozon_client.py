@@ -140,3 +140,74 @@ def test_notification_list_returns_raw_payload():
     client = _client_with_handler(handler)
     result = client.notification_list()
     assert result["urls"][0]["availability_status"] == "GREEN"
+
+
+def test_unprocessed_reviews_paginates_via_last_id():
+    requests: list[httpx.Request] = []
+    pages = [
+        {"reviews": [{"id": "r1"}, {"id": "r2"}], "last_id": "cursor-2", "has_next": True},
+        {"reviews": [{"id": "r3"}], "last_id": "", "has_next": False},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=pages[len(requests) - 1])
+
+    client = _client_with_handler(handler)
+    reviews = client.unprocessed_reviews()
+
+    assert [r["id"] for r in reviews] == ["r1", "r2", "r3"]
+    assert requests[0].url.path == "/v1/review/list"
+    assert b'"status":"UNPROCESSED"' in requests[0].content.replace(b" ", b"")
+    assert b'"last_id":"cursor-2"' in requests[1].content.replace(b" ", b"")
+
+
+def test_unprocessed_reviews_clamps_limit_to_ozons_allowed_range():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"reviews": [], "last_id": "", "has_next": False})
+
+    client = _client_with_handler(handler)
+    client.unprocessed_reviews(limit=5)  # below OZON's allowed [20, 100]
+    body = requests[0].content.replace(b" ", b"")
+    assert b'"limit":20' in body
+
+    client.unprocessed_reviews(limit=500)  # above the allowed range
+    body = requests[1].content.replace(b" ", b"")
+    assert b'"limit":100' in body
+
+
+def test_product_names_by_sku_maps_via_nested_sources():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v3/product/info/list"
+        return httpx.Response(200, json={"items": [
+            {"offer_id": "LE148", "name": "Алмазная мозаика Коты", "sources": [{"sku": 1536499166}]},
+            {"offer_id": "MC1148", "name": "Карты таро", "sources": [{"sku": 2142887836}]},
+        ]})
+
+    client = _client_with_handler(handler)
+    names = client.product_names_by_sku([1536499166, 2142887836])
+
+    assert names[1536499166] == {"offer_id": "LE148", "name": "Алмазная мозаика Коты"}
+    assert names[2142887836] == {"offer_id": "MC1148", "name": "Карты таро"}
+
+
+def test_product_names_by_sku_skips_request_for_empty_list():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should not be called for an empty sku list")
+
+    client = _client_with_handler(handler)
+    assert client.product_names_by_sku([]) == {}
+
+
+def test_create_review_comment_posts_expected_body_and_returns_comment_id():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/review/comment/create"
+        return httpx.Response(200, json={"comment_id": "comment-1"})
+
+    client = _client_with_handler(handler)
+    comment_id = client.create_review_comment(review_id="review-1", text="Спасибо за отзыв!")
+
+    assert comment_id == "comment-1"

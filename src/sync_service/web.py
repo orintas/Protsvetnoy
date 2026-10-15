@@ -21,6 +21,8 @@ from .ozon_order_sync import PendingPostings, handle_webhook_notification
 from .planfix_client import PlanFixClient
 from .planfix_contact_sync import NotACompany, sync_contact
 from .planfix_log import PlanFixSyncLog
+from .planfix_new_goods import launch_new_product_tasks
+from .review_worker import handle_new_question
 from .shift_closer import ShiftCloseLog, list_open_shifts
 from .shopify_order_sync import process_new_order as process_new_shopify_order
 from .shopify_order_sync import verify_webhook_signature as verify_shopify_webhook_signature
@@ -81,7 +83,10 @@ def _yandex_market_webhook(environ, start_response):
     order, confirms assembly, and sends the shipping label to Telegram
     (see _handle_new_order / process_new_order); ORDER_STATUS_UPDATED mirrors
     the delivery status onto the MoySklad order's state (see
-    _handle_order_status_update / sync_order_delivery_state).
+    _handle_order_status_update / sync_order_delivery_state); QUESTION_CREATED
+    drafts and sends that one question to the reviews approval chat right
+    away instead of waiting for review_worker's next ~30-min poll tick (see
+    _handle_new_question / review_worker.handle_new_question).
     """
     if not is_allowed_ip(_client_ip(environ)):
         start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
@@ -102,6 +107,8 @@ def _yandex_market_webhook(environ, start_response):
             _handle_new_order(notification, log)
         elif notification.get("notificationType") == "ORDER_STATUS_UPDATED":
             _handle_order_status_update(notification, log)
+        elif notification.get("notificationType") == "QUESTION_CREATED":
+            _handle_new_question(notification)
     except Exception as error:
         ErrorLog().log_exception("yandex_market_webhook", error, context=f"Ошибка обработки уведомления {notification.get('notificationType')}")
         payload = dumps({"error": {"type": "UNKNOWN", "message": "internal error"}}, ensure_ascii=False).encode("utf-8")
@@ -193,6 +200,16 @@ def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) ->
         yandex.close()
         if telegram is not None:
             telegram.close()
+
+
+def _handle_new_question(notification: dict) -> None:
+    """Uses the reviews journal (data/review_sync.sqlite3), not the orders
+    one this webhook otherwise logs into — review_worker's poll/reply
+    workers and this fast path share that file so the same draft_sent dedup
+    applies regardless of which one drafted a given question first."""
+    settings = Settings.from_env()
+    log = YandexMarketSyncLog("data/review_sync.sqlite3")
+    handle_new_question(question_id=int(notification["questionId"]), settings=settings, log=log)
 
 
 def _shopify_order_webhook(environ, start_response):
@@ -314,6 +331,47 @@ def _planfix_webhook(environ, start_response):
     log.add("contact_sync", "success", f"Контакт перенесён в МойСклад: {result.get('CompanyName') or result.get('MoySkladID')}", contact_id, result)
     start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
     return [dumps(result, ensure_ascii=False, default=str).encode("utf-8")]
+
+
+def _planfix_new_goods_webhook(environ, start_response):
+    """Receives a PlanFix "Действие" (automation action — "Послать
+    HTTP-запрос") configured on the Task object's "Стандартный" process,
+    under "Автоматические операции" — replaces the "Запуск подзадач с
+    новинками" Make.com scenario (launch_new_product_tasks does the actual
+    work). Posted as application/x-www-form-urlencoded (no signature, same
+    as the contact-sync button) with one field: task_id — the batch task's
+    own id (PlanFix's {{Задача.Идентификатор}}). Only task_id is read; any
+    other parameter the action sends (e.g. a flattened "goods" list) is
+    ignored — the task's "Товары" field is re-read live via get_task
+    instead, so it reflects the field's state at the moment this fires
+    rather than whatever the trigger happened to template into the request.
+    """
+    log = PlanFixSyncLog()
+    form = _read_form_body(environ)
+    task_id_raw = form.get("task_id", "")
+    if not task_id_raw:
+        ErrorLog().log_exception("planfix_new_goods_webhook", ValueError("missing task_id"), context="Запрос PlanFix без task_id")
+        start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": "missing task_id"}, ensure_ascii=False).encode("utf-8")]
+    try:
+        task_id = int(task_id_raw)
+    except ValueError:
+        ErrorLog().log_exception("planfix_new_goods_webhook", ValueError(f"invalid task_id: {task_id_raw!r}"), context="Некорректный task_id от PlanFix")
+        start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": "invalid task_id"}, ensure_ascii=False).encode("utf-8")]
+
+    settings = Settings.from_env()
+    planfix = PlanFixClient(base_url=settings.planfix_base_url, api_key=settings.planfix_api_key)
+    try:
+        created_ids = launch_new_product_tasks(planfix, task_id=task_id, log=log)
+    except Exception as error:
+        ErrorLog().log_exception("planfix_new_goods_webhook", error, context=f"Ошибка запуска подзадач с новинками для задачи {task_id}")
+        start_response("500 Internal Server Error", [("Content-Type", "application/json; charset=utf-8")])
+        return [dumps({"error": "internal error"}, ensure_ascii=False).encode("utf-8")]
+    finally:
+        planfix.close()
+    start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+    return [dumps({"created": created_ids}, ensure_ascii=False).encode("utf-8")]
 
 
 def _ndjson_line(payload: dict) -> bytes:
@@ -942,6 +1000,8 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
         return _ozon_webhook(environ, start_response)
     if path == "/api/planfix/webhook" and environ.get("REQUEST_METHOD") == "POST":
         return _planfix_webhook(environ, start_response)
+    if path == "/api/planfix/webhook/new-goods" and environ.get("REQUEST_METHOD") == "POST":
+        return _planfix_new_goods_webhook(environ, start_response)
     if path == "/api/planfix-sync-log":
         query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
         entries = PlanFixSyncLog().search(query) if query else PlanFixSyncLog().recent()

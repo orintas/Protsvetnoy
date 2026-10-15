@@ -62,5 +62,66 @@ class PlanFixClient:
             self._contact_field_ids = {f["name"]: str(f["id"]) for f in fields if isinstance(f, dict) and "name" in f and "id" in f}
         return self._contact_field_ids.get(field_name)
 
+    def get_task(self, task_id: int, *, field_ids: list[int] = ()) -> dict[str, Any]:
+        """A task by id, with system fields plus whichever custom field ids
+        were asked for. A custom field's resolved value comes back under
+        `customFieldData` — a list of `{"field": {"id", "name", "type", ...},
+        "stringValue", "value"}` entries, one per field that was both
+        requested AND actually has a value set. For a "Directory entry"
+        field (type 9) `value` is `{"id": <directory entry key>, "value":
+        <display text>}`; for "Set of directory values" (type 15) it's
+        presumably the same shape per element of an array — confirmed live
+        for the single-entry case (2026-10-15), not yet for the array one,
+        since every real task found already had it cleared by the time it
+        was inspected; verify against the first live webhook delivery.
+
+        Like get_contact, custom field ids must be requested by their own
+        bare numeric id in `fields=` — there's no generic "customData"/
+        "customFieldData" keyword that pulls all of them at once.
+        """
+        fields = ",".join(("id", "name", "parent", "project", *(str(f) for f in field_ids)))
+        payload = self._client.get(f"/task/{task_id}", params={"fields": fields})
+        return payload["task"]
+
+    def create_task(
+        self,
+        *,
+        name: str,
+        template_id: int | None = None,
+        parent_id: int | None = None,
+        project_id: int | None = None,
+        status: str | None = None,
+        description: str = "",
+        custom_data: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Creates a task, returns its new id.
+
+        `custom_data`: `[{"field": {"id": <field id>}, "value": {"id": <directory
+        entry key>}}, ...]` for Directory-entry-typed fields (the only kind
+        this service sets). `status` is a plain string (e.g. "ACCEPTED"), not
+        an id reference — matches the enum PlanFix's own UI uses.
+
+        Endpoint/body shape ported from a published, actively-used
+        community REST v2 client (github.com/popstas/planfix-mcp-server,
+        src/tools/planfix_create_sell_task_ids.ts) rather than from
+        PlanFix's own docs (their reference site wouldn't render for
+        automated fetching) — not yet confirmed against a live response from
+        this account; verify on the first real send, per this project's own
+        rule for every other integration here.
+        """
+        body: dict[str, Any] = {"name": name, "description": description}
+        if template_id is not None:
+            body["template"] = {"id": template_id}
+        if parent_id is not None:
+            body["parent"] = {"id": parent_id}
+        if project_id is not None:
+            body["project"] = {"id": project_id}
+        if status:
+            body["status"] = status
+        if custom_data:
+            body["customFieldData"] = custom_data
+        payload = self._client.post("/task/", body)
+        return int(payload["id"])
+
     def close(self) -> None:
         self._client.close()

@@ -128,3 +128,90 @@ def test_get_order_label_returns_raw_pdf_bytes():
     pdf = client.get_order_label(123, campaign_id="21924355")
     assert pdf == b"%PDF-1.4 fake label"
     assert requests[0].url.path == "/v2/campaigns/21924355/orders/123/delivery/labels"
+
+
+def test_feedbacks_needing_reaction_filters_and_paginates():
+    requests: list[httpx.Request] = []
+    pages = [
+        {"status": "OK", "result": {"feedbacks": [{"feedbackId": 1}], "paging": {"nextPageToken": "next-1"}}},
+        {"status": "OK", "result": {"feedbacks": [{"feedbackId": 2}], "paging": {}}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=pages[len(requests) - 1])
+
+    client = _client_with_handler(handler)
+    feedbacks = client.feedbacks_needing_reaction()
+
+    assert [f["feedbackId"] for f in feedbacks] == [1, 2]
+    assert requests[0].url.path == "/v2/businesses/939642/goods-feedback"
+    assert b'"reactionStatus":"NEED_REACTION"' in requests[0].content.replace(b" ", b"")
+    assert b"next-1" in requests[1].content
+
+
+def test_comment_on_feedback_posts_top_level_reply_without_parent_id():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/businesses/939642/goods-feedback/comments/update"
+        body = request.content.replace(b" ", b"")
+        assert b'"feedbackId":123' in body
+        assert b'"parentId"' not in body
+        return httpx.Response(200, json={"status": "OK", "result": {"id": 999, "status": "UNMODERATED"}})
+
+    client = _client_with_handler(handler)
+    result = client.comment_on_feedback(feedback_id=123, text="Спасибо за отзыв!")
+    assert result["id"] == 999
+
+
+def test_unanswered_questions_uses_need_answer_filter_and_paginates():
+    requests: list[httpx.Request] = []
+    pages = [
+        {"status": "OK", "result": {"questions": [{"questionIdentifiers": {"id": 1}}], "paging": {"nextPageToken": "next-1"}}},
+        {"status": "OK", "result": {"questions": [{"questionIdentifiers": {"id": 2}}], "paging": {}}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=pages[len(requests) - 1])
+
+    client = _client_with_handler(handler)
+    questions = client.unanswered_questions()
+
+    assert [q["questionIdentifiers"]["id"] for q in questions] == [1, 2]
+    assert requests[0].url.path == "/v1/businesses/939642/goods-questions"
+    body = requests[0].content.replace(b" ", b"")
+    assert b'"needAnswer":true' in body
+
+
+def test_answer_question_posts_create_with_question_as_parent():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/businesses/939642/goods-questions/update"
+        body = request.content.replace(b" ", b"")
+        assert b'"operationType":"CREATE"' in body
+        assert b'"parentEntityId":{"id":456,"type":"QUESTION"}' in body
+        return httpx.Response(200, json={"status": "OK", "result": {"entity": {"id": 456, "type": "QUESTION"}}})
+
+    client = _client_with_handler(handler)
+    result = client.answer_question(question_id=456, text="Размер 40x50 см.")
+    assert result["entity"]["id"] == 456
+
+
+def test_question_by_id_filters_by_question_ids_and_returns_the_single_match():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/businesses/939642/goods-questions"
+        body = request.content.replace(b" ", b"")
+        assert b'"questionIds":[789]' in body
+        return httpx.Response(200, json={"status": "OK", "result": {"questions": [{"questionIdentifiers": {"id": 789, "offerId": "MG2445e"}, "text": "Какой размер?"}], "paging": {}}})
+
+    client = _client_with_handler(handler)
+    question = client.question_by_id(789)
+    assert question["questionIdentifiers"]["id"] == 789
+    assert question["text"] == "Какой размер?"
+
+
+def test_question_by_id_returns_none_when_not_found():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK", "result": {"questions": [], "paging": {}}})
+
+    client = _client_with_handler(handler)
+    assert client.question_by_id(999) is None

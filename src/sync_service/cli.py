@@ -36,6 +36,8 @@ def main() -> None:
     subparsers.add_parser("moysklad-shift-close-worker")
     subparsers.add_parser("health-check-worker")
     subparsers.add_parser("telegram-qa-worker")
+    subparsers.add_parser("review-poll-worker")
+    subparsers.add_parser("review-reply-worker")
     backfill = subparsers.add_parser(
         "novicloud-shift-backfill",
         description="Split the Novicloud stores' receipts back into one MoySklad shift per day (dry run unless --apply).",
@@ -88,6 +90,14 @@ def main() -> None:
     if args.command == "telegram-qa-worker":
         from .telegram_qa_worker import worker as telegram_qa_worker
         telegram_qa_worker()
+        return
+    if args.command == "review-poll-worker":
+        from .review_worker import poll_worker as review_poll_worker
+        review_poll_worker()
+        return
+    if args.command == "review-reply-worker":
+        from .review_worker import reply_worker as review_reply_worker
+        review_reply_worker()
         return
     if args.command == "novicloud-shift-backfill":
         from zoneinfo import ZoneInfo
