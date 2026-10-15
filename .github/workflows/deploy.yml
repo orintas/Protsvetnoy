@@ -48,6 +48,7 @@ jobs:
             grep -q '^TELEGRAM_REVIEWS_BOT_TOKEN=' .env || echo 'TELEGRAM_REVIEWS_BOT_TOKEN=' >> .env
             sed -i "s#^TELEGRAM_REVIEWS_BOT_TOKEN=.*#TELEGRAM_REVIEWS_BOT_TOKEN=${{ secrets.TELEGRAM_REVIEWS_BOT_TOKEN }}#" .env
             grep -q '^TELEGRAM_REVIEWS_CHAT_ID=' .env || echo 'TELEGRAM_REVIEWS_CHAT_ID=' >> .env
+            sed -i "s#^TELEGRAM_REVIEWS_CHAT_ID=.*#TELEGRAM_REVIEWS_CHAT_ID=${{ secrets.TELEGRAM_REVIEWS_CHAT_ID }}#" .env
             grep -q '^YANDEXGPT_API_KEY=' .env || echo 'YANDEXGPT_API_KEY=' >> .env
             sed -i "s#^YANDEXGPT_API_KEY=.*#YANDEXGPT_API_KEY=${{ secrets.YANDEXGPT_API_KEY }}#" .env
             grep -q '^YANDEXGPT_FOLDER_ID=' .env || echo 'YANDEXGPT_FOLDER_ID=' >> .env
