@@ -211,3 +211,15 @@ def test_create_review_comment_posts_expected_body_and_returns_comment_id():
     comment_id = client.create_review_comment(review_id="review-1", text="Спасибо за отзыв!")
 
     assert comment_id == "comment-1"
+
+
+def test_mark_review_processed_posts_expected_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/review/change-status"
+        body = request.content.replace(b" ", b"")
+        assert b'"review_ids":["review-1"]' in body
+        assert b'"status":"PROCESSED"' in body
+        return httpx.Response(200, json={})
+
+    client = _client_with_handler(handler)
+    client.mark_review_processed("review-1")

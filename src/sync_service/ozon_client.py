@@ -128,13 +128,26 @@ class OzonClient:
     def create_review_comment(self, *, review_id: str, text: str, mark_review_as_processed: bool = True) -> str:
         """Posts a top-level seller reply on a review (no parent_comment_id —
         that's only for replying to an existing comment thread, which this
-        service never does). Returns the new comment_id. Field names per
-        OZON's own help-center walkthrough and the community Go client's
-        matching struct — not yet confirmed against a live response, unlike
-        every other method here; verify on the first real send."""
+        service never does). Returns the new comment_id. Field names
+        confirmed live 2026-10-15 — a request against a real review_id
+        returned a clean semantic 400 ("cannot comment on empty review"),
+        not a schema error, so the shape itself is right.
+
+        OZON refuses this outright for a review with no text at all (just a
+        star rating) — there is nothing to attach a reply to. Use
+        mark_review_processed for those instead of calling this.
+        """
         payload = self._client.post("/v1/review/comment/create", {
             "review_id": review_id,
             "text": text,
             "mark_review_as_processed": mark_review_as_processed,
         })
         return str(payload.get("comment_id") or "")
+
+    def mark_review_processed(self, review_id: str) -> None:
+        """Marks a review as processed without posting a comment — the only
+        way to clear a text-less (rating-only) review from the unprocessed
+        queue, since create_review_comment rejects those outright. Confirmed
+        live 2026-10-15: /v1/review/change-status, body
+        {"review_ids": [...], "status": "PROCESSED"|"UNPROCESSED"}."""
+        self._client.post("/v1/review/change-status", {"review_ids": [review_id], "status": "PROCESSED"})

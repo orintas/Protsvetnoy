@@ -1,6 +1,7 @@
 import json
 
 from sync_service.error_log import ErrorLog
+from sync_service.http import ApiError
 from sync_service.review_worker import (
     MAX_DRAFTS_PER_TICK,
     _draft_question,
@@ -35,9 +36,11 @@ class FakeSettings:
 
 
 class FakeOzon:
-    def __init__(self, reviews=None):
+    def __init__(self, reviews=None, empty_review_error_for=None):
         self._reviews = reviews or []
         self.comments_created = []
+        self.marked_processed = []
+        self._empty_review_error_for = empty_review_error_for or set()
 
     def unprocessed_reviews(self):
         return self._reviews
@@ -46,8 +49,16 @@ class FakeOzon:
         return {sku: {"offer_id": f"SKU{sku}", "name": f"Товар {sku}"} for sku in skus}
 
     def create_review_comment(self, *, review_id, text, mark_review_as_processed=True):
+        if review_id in self._empty_review_error_for:
+            raise ApiError(
+                'POST https://api-seller.ozon.ru/v1/review/comment/create failed with HTTP 400: '
+                '{"code":3, "message":"createComment: cannot comment on empty review"}'
+            )
         self.comments_created.append({"review_id": review_id, "text": text})
         return "comment-1"
+
+    def mark_review_processed(self, review_id):
+        self.marked_processed.append(review_id)
 
     def close(self):
         pass
@@ -217,6 +228,56 @@ def test_poll_ozon_reviews_logs_an_error_and_continues_when_the_llm_fails(tmp_pa
     assert "draft_sent" in kinds
 
 
+def test_poll_ozon_reviews_auto_marks_a_textless_review_processed_without_drafting(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "", "rating": 5}])  # rating-only, no text
+    telegram = FakeTelegram()
+    llm = FakeLLM()
+
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    assert telegram.messages == []  # never sent for approval
+    assert llm.calls == []  # never asked to draft
+    assert ozon.marked_processed == ["r1"]
+    entries = log.recent()
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "auto_processed"
+    assert entries[0]["external_id"] == "ozon:review:r1"
+
+
+def test_poll_ozon_reviews_does_not_retry_a_review_already_auto_processed(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    log.add("auto_processed", "success", "already handled", "ozon:review:r1")
+    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "", "rating": 5}])
+    telegram = FakeTelegram()
+    llm = FakeLLM()
+
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    assert ozon.marked_processed == []  # not re-marked
+    assert telegram.messages == []
+
+
+def test_poll_ozon_reviews_ignores_reviews_received_before_the_cutoff(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    ozon = FakeOzon(reviews=[
+        {"id": "old", "sku": 111, "text": "Было давно", "rating": 5, "published_at": "2026-10-13T12:00:00+03:00"},
+        {"id": "new", "sku": 111, "text": "Недавно", "rating": 5, "published_at": "2026-10-14T01:00:00+03:00"},
+    ])
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="Спасибо!")
+
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    assert len(telegram.messages) == 1  # only the one on/after the cutoff
+    entries = log.recent()
+    assert {e["external_id"] for e in entries} == {"ozon:review:new"}
+    assert ozon.marked_processed == []  # the old one is just ignored, not marked processed either
+
+
 # --- _poll_yandex_reviews / _poll_yandex_questions ------------------------
 
 def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_text(tmp_path):
@@ -227,7 +288,7 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
         "identifiers": {"offerId": "MG2445e"},
         "description": {"comment": "Хорошее качество", "advantages": "яркие цвета"},
         "statistics": {"rating": 5},
-        "createdAt": "2026-10-07T00:47:09.951+03:00",
+        "createdAt": "2026-10-15T00:47:09.951+03:00",
     }])
     moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
     telegram = FakeTelegram()
@@ -239,9 +300,26 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
     assert "Towards desires" in telegram.messages[0]["text"]
     assert "Хорошее качество" in llm.calls[0]
     assert "яркие цвета" in llm.calls[0]
-    assert "Получено: 07.10.2026 00:47 (мск)" in telegram.messages[0]["text"]
+    assert "Получено: 15.10.2026 00:47 (мск)" in telegram.messages[0]["text"]
     entries = log.recent()
     assert entries[0]["external_id"] == "yandex_market:review:42"
+
+
+def test_poll_yandex_reviews_ignores_feedback_received_before_the_cutoff(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    yandex = FakeYandex(feedbacks=[
+        {"feedbackId": 1, "identifiers": {"offerId": "X"}, "description": {"comment": "давно"}, "statistics": {"rating": 5}, "createdAt": "2026-10-13T12:00:00+03:00"},
+        {"feedbackId": 2, "identifiers": {"offerId": "X"}, "description": {"comment": "недавно"}, "statistics": {"rating": 5}, "createdAt": "2026-10-14T01:00:00+03:00"},
+    ])
+    moysklad = FakeMoySklad()
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="Спасибо!")
+
+    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    entries = log.recent()
+    assert {e["external_id"] for e in entries} == {"yandex_market:review:2"}
 
 
 def test_poll_yandex_questions_falls_back_to_offer_id_when_product_unknown(tmp_path):
@@ -383,6 +461,23 @@ def test_handle_reply_routes_yandex_market_question_to_answer_question(tmp_path)
     _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=None, yandex=yandex)
 
     assert yandex.question_answers == [{"question_id": 7, "text": "Размер 40x50 см."}]
+
+
+def test_handle_reply_falls_back_to_mark_processed_when_ozon_rejects_an_empty_review(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Спасибо за отзыв!")
+    ozon = FakeOzon(empty_review_error_for={"r1"})
+    telegram = FakeTelegram()
+    message = {"text": "да", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=ozon, yandex=None)
+
+    assert ozon.comments_created == []  # never actually commented
+    assert ozon.marked_processed == ["r1"]
+    kinds = [e["kind"] for e in log.recent()]
+    assert "posted" in kinds  # still recorded as resolved, not an error
+    assert "post_error" not in kinds
+    assert "помет" in telegram.messages[0]["text"]  # distinct from the plain "Опубликовано ✅"
 
 
 def test_handle_reply_reports_a_post_error_without_marking_posted(tmp_path):

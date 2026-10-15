@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .config import Settings
 from .error_log import ErrorLog
+from .http import ApiError
 from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
 from .review_assistant import MAX_REPLY_CHARS, generate_question_reply, generate_review_reply
@@ -43,6 +44,26 @@ def _ratings_stars(rating: int | None) -> str:
     if not rating:
         return ""
     return "★" * rating + "☆" * (5 - rating)
+
+
+# Switching this service on surfaced OZON's entire historical backlog (seen
+# live: 1857 unprocessed reviews, some from long before this service
+# existed) in the very first poll — drafting/sending all of those would
+# flood the approval chat with reviews nobody is going to react to any
+# more. Only reviews/feedback received on or after this cutoff get drafted;
+# anything older is left alone (not drafted, not marked processed — simply
+# ignored by this service, same as before it existed).
+REVIEW_CUTOFF = datetime(2026, 10, 14, tzinfo=MOSCOW)
+
+
+def _is_before_review_cutoff(raw: str | None) -> bool:
+    if not raw:
+        return False
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return dt < REVIEW_CUTOFF
 
 
 def _format_received_at(raw: str | None) -> str | None:
@@ -84,7 +105,7 @@ def _format_draft_message(*, platform: str, kind: str, product_name: str, produc
 
 
 def _already_drafted(log: YandexMarketSyncLog, external_id: str) -> bool:
-    return log.has_success("draft_sent", external_id)
+    return log.has_success("draft_sent", external_id) or log.has_success("auto_processed", external_id)
 
 
 def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, external_id: str, platform: str, kind: str, item_id: str, product_code: str, product_name: str, customer_text: str, rating: int | None, draft: str, received_at: str | None = None) -> None:
@@ -104,6 +125,7 @@ def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_
 
 def _poll_ozon_reviews(*, ozon: OzonClient, log: YandexMarketSyncLog, llm: YandexGPTClient, telegram: TelegramClient, chat_id: str, errors: ErrorLog) -> None:
     reviews = ozon.unprocessed_reviews()
+    reviews = [r for r in reviews if not _is_before_review_cutoff(r.get("published_at"))]
     pending = [r for r in reviews if not _already_drafted(log, f"ozon:review:{r['id']}")][:MAX_DRAFTS_PER_TICK]
     if not pending:
         return
@@ -117,6 +139,17 @@ def _poll_ozon_reviews(*, ozon: OzonClient, log: YandexMarketSyncLog, llm: Yande
         review_text = review.get("text") or ""
         rating = review.get("rating")
         received_at = review.get("published_at")
+        if not review_text.strip():
+            # OZON rejects create_review_comment outright for a review with
+            # no text (just a star rating) — nothing to reply to, so clear
+            # it from the queue via change-status instead of drafting.
+            try:
+                ozon.mark_review_processed(item_id)
+                log.add("auto_processed", "success", f"OZON отзыв {item_id} ({product_name}): без текста, помечен обработанным автоматически", external_id)
+            except Exception as error:
+                errors.log_exception("review_worker", error, context=f"OZON отзыв {item_id}: не удалось автоматически пометить обработанным")
+                log.add("draft_error", "error", f"OZON отзыв {item_id}: ошибка автообработки пустого отзыва: {error}", external_id)
+            continue
         try:
             draft = generate_review_reply(client=llm, platform="ozon", product_name=product_name, rating=rating, review_text=review_text)
             _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="ozon", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft, received_at=received_at)
@@ -127,6 +160,7 @@ def _poll_ozon_reviews(*, ozon: OzonClient, log: YandexMarketSyncLog, llm: Yande
 
 def _poll_yandex_reviews(*, yandex: YandexMarketClient, moysklad: MoySkladClient, log: YandexMarketSyncLog, llm: YandexGPTClient, telegram: TelegramClient, chat_id: str, errors: ErrorLog) -> None:
     feedbacks = yandex.feedbacks_needing_reaction()
+    feedbacks = [f for f in feedbacks if not _is_before_review_cutoff(f.get("createdAt"))]
     pending = [f for f in feedbacks if not _already_drafted(log, f"yandex_market:review:{f['feedbackId']}")][:MAX_DRAFTS_PER_TICK]
     for feedback in pending:
         item_id = str(feedback["feedbackId"])
@@ -290,11 +324,22 @@ def _find_pending_draft(log: YandexMarketSyncLog, message_id: int) -> dict[str, 
         return {"external_id": external_id, **payload}
 
 
-def _post_reply(*, platform: str, kind: str, item_id: str, text: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> None:
+def _post_reply(*, platform: str, kind: str, item_id: str, text: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> str:
     if platform == "ozon":
         if ozon is None:
             raise RuntimeError("OZON не настроен")
-        ozon.create_review_comment(review_id=item_id, text=text)
+        try:
+            ozon.create_review_comment(review_id=item_id, text=text)
+        except ApiError as error:
+            # A draft can get stuck pointing at a review that turned out to
+            # have no text (e.g. one drafted before the poll-time skip
+            # above existed) — OZON rejects a comment on it outright.
+            # Clear it the same way the poller now does instead of erroring.
+            if "cannot comment on empty review" not in str(error):
+                raise
+            ozon.mark_review_processed(item_id)
+            return "Отзыв без текста — публиковать ответ нельзя, просто пометил обработанным ✅"
+        return "Опубликовано ✅"
     elif platform == "yandex_market" and kind == "review":
         if yandex is None:
             raise RuntimeError("Яндекс.Маркет не настроен")
@@ -305,6 +350,7 @@ def _post_reply(*, platform: str, kind: str, item_id: str, text: str, ozon: Ozon
         yandex.answer_question(question_id=int(item_id), text=text)
     else:
         raise RuntimeError(f"Неизвестная площадка/тип: {platform}/{kind}")
+    return "Опубликовано ✅"
 
 
 def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None) -> None:
@@ -327,14 +373,14 @@ def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram
     final_text = final_text[:MAX_REPLY_CHARS]
 
     try:
-        _post_reply(platform=draft["platform"], kind=draft["kind"], item_id=draft["item_id"], text=final_text, ozon=ozon, yandex=yandex)
+        confirmation = _post_reply(platform=draft["platform"], kind=draft["kind"], item_id=draft["item_id"], text=final_text, ozon=ozon, yandex=yandex)
     except Exception as error:
         log.add("post_error", "error", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: ошибка публикации: {error}", external_id)
         telegram.send_message(chat_id=chat_id, text=f"Не удалось опубликовать: {error}", reply_to_message_id=message.get("message_id"))
         return
 
     log.add("posted", "success", f"{PLATFORM_LABELS.get(draft['platform'], draft['platform'])} {KIND_LABELS.get(draft['kind'], draft['kind']).lower()} {draft['item_id']}: ответ опубликован", external_id, {"final_text": final_text, "edited": final_text != draft["draft_text"]})
-    telegram.send_message(chat_id=chat_id, text="Опубликовано ✅", reply_to_message_id=message.get("message_id"))
+    telegram.send_message(chat_id=chat_id, text=confirmation, reply_to_message_id=message.get("message_id"))
 
 
 def reply_run_once(settings: Settings, offset_store: UpdateOffset, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
