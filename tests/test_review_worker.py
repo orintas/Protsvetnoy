@@ -5,6 +5,7 @@ from sync_service.review_worker import (
     MAX_DRAFTS_PER_TICK,
     _draft_question,
     _find_pending_draft,
+    _format_received_at,
     _handle_reply,
     _is_relevant,
     _poll_ozon_reviews,
@@ -151,7 +152,7 @@ def _install_fakes(monkeypatch, *, telegram=None, ozon=None, yandex=None, moyskl
 def test_poll_ozon_reviews_drafts_and_sends_new_reviews(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
-    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "Отлично!", "rating": 5}])
+    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "Отлично!", "rating": 5, "published_at": "2026-10-14T02:55:35.014683Z"}])
     telegram = FakeTelegram()
     llm = FakeLLM(reply="Спасибо за высокую оценку!")
 
@@ -160,6 +161,7 @@ def test_poll_ozon_reviews_drafts_and_sends_new_reviews(tmp_path):
     assert len(telegram.messages) == 1
     assert "SKU111" in telegram.messages[0]["text"] or "Товар 111" in telegram.messages[0]["text"]
     assert "Спасибо за высокую оценку!" in telegram.messages[0]["text"]
+    assert "Получено: 14.10.2026 05:55 (мск)" in telegram.messages[0]["text"]  # UTC+3
     entries = log.recent()
     assert len(entries) == 1
     assert entries[0]["kind"] == "draft_sent"
@@ -168,6 +170,7 @@ def test_poll_ozon_reviews_drafts_and_sends_new_reviews(tmp_path):
     assert payload["draft_text"] == "Спасибо за высокую оценку!"
     assert payload["message_id"] == 501  # FakeTelegram's first assigned id
     assert payload["platform"] == "ozon" and payload["kind"] == "review"
+    assert payload["received_at"] == "2026-10-14T02:55:35.014683Z"
 
 
 def test_poll_ozon_reviews_skips_a_review_already_drafted(tmp_path):
@@ -224,6 +227,7 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
         "identifiers": {"offerId": "MG2445e"},
         "description": {"comment": "Хорошее качество", "advantages": "яркие цвета"},
         "statistics": {"rating": 5},
+        "createdAt": "2026-10-07T00:47:09.951+03:00",
     }])
     moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
     telegram = FakeTelegram()
@@ -235,6 +239,7 @@ def test_poll_yandex_reviews_resolves_product_name_from_moysklad_and_combines_te
     assert "Towards desires" in telegram.messages[0]["text"]
     assert "Хорошее качество" in llm.calls[0]
     assert "яркие цвета" in llm.calls[0]
+    assert "Получено: 07.10.2026 00:47 (мск)" in telegram.messages[0]["text"]
     entries = log.recent()
     assert entries[0]["external_id"] == "yandex_market:review:42"
 
@@ -255,6 +260,34 @@ def test_poll_yandex_questions_falls_back_to_offer_id_when_product_unknown(tmp_p
     payload = json.loads(entries[0]["payload"])
     assert payload["kind"] == "question"
     assert payload["rating"] is None
+
+
+def test_poll_ozon_reviews_omits_the_received_line_when_no_timestamp_is_given(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    ozon = FakeOzon(reviews=[{"id": "r1", "sku": 111, "text": "ok", "rating": 4}])  # no published_at
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="Спасибо!")
+
+    _poll_ozon_reviews(ozon=ozon, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    assert "Получено" not in telegram.messages[0]["text"]
+
+
+# --- _format_received_at ----------------------------------------------------
+
+def test_format_received_at_converts_utc_z_suffix_to_moscow_time():
+    assert _format_received_at("2026-10-14T02:55:35.014683Z") == "14.10.2026 05:55"
+
+
+def test_format_received_at_handles_an_explicit_offset():
+    assert _format_received_at("2026-10-07T00:47:09.951+03:00") == "07.10.2026 00:47"
+
+
+def test_format_received_at_returns_none_for_missing_or_unparsable_input():
+    assert _format_received_at(None) is None
+    assert _format_received_at("") is None
+    assert _format_received_at("not-a-date") is None
 
 
 # --- _find_pending_draft / _handle_reply ----------------------------------

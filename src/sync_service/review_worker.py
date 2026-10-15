@@ -45,11 +45,34 @@ def _ratings_stars(rating: int | None) -> str:
     return "★" * rating + "☆" * (5 - rating)
 
 
-def _format_draft_message(*, platform: str, kind: str, product_name: str, product_code: str, customer_text: str, rating: int | None, draft: str) -> str:
+def _format_received_at(raw: str | None) -> str | None:
+    """Formats a platform's own timestamp (OZON's published_at, Yandex
+    Market's createdAt) as a Moscow-time "дд.мм.гггг чч:мм" string. Both
+    platforms give ISO-8601 with either a "Z" suffix or an explicit offset
+    (e.g. "2026-10-14T02:55:35.014683Z", "2026-10-07T00:47:09.951+03:00") —
+    datetime.fromisoformat handles the offset form natively but not a bare
+    "Z" on the Python versions this project has run on before, hence the
+    replace. Returns None on anything unparsable rather than raising, since
+    this is just a display nicety."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.astimezone(MOSCOW).strftime("%d.%m.%Y %H:%M")
+
+
+def _format_draft_message(*, platform: str, kind: str, product_name: str, product_code: str, customer_text: str, rating: int | None, draft: str, received_at: str | None) -> str:
     header = f"{PLATFORM_LABELS.get(platform, platform)} · {KIND_LABELS.get(kind, kind)}"
     if kind == "review" and rating:
         header += f" · {_ratings_stars(rating)} ({rating})"
-    lines = [header, f"Товар: {product_name} ({product_code})", ""]
+    lines = [header]
+    formatted_received_at = _format_received_at(received_at)
+    if formatted_received_at:
+        lines.append(f"Получено: {formatted_received_at} (мск)")
+    lines.append(f"Товар: {product_name} ({product_code})")
+    lines.append("")
     label = "Отзыв" if kind == "review" else "Вопрос"
     lines.append(f"{label}: «{customer_text or '(без текста)'}»")
     lines.append("")
@@ -64,8 +87,8 @@ def _already_drafted(log: YandexMarketSyncLog, external_id: str) -> bool:
     return log.has_success("draft_sent", external_id)
 
 
-def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, external_id: str, platform: str, kind: str, item_id: str, product_code: str, product_name: str, customer_text: str, rating: int | None, draft: str) -> None:
-    message = _format_draft_message(platform=platform, kind=kind, product_name=product_name, product_code=product_code, customer_text=customer_text, rating=rating, draft=draft)
+def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, external_id: str, platform: str, kind: str, item_id: str, product_code: str, product_name: str, customer_text: str, rating: int | None, draft: str, received_at: str | None = None) -> None:
+    message = _format_draft_message(platform=platform, kind=kind, product_name=product_name, product_code=product_code, customer_text=customer_text, rating=rating, draft=draft, received_at=received_at)
     sent = telegram.send_message(chat_id=chat_id, text=message)
     log.add(
         "draft_sent", "success",
@@ -74,6 +97,7 @@ def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_
         {
             "platform": platform, "kind": kind, "item_id": item_id, "product_code": product_code, "product_name": product_name,
             "customer_text": customer_text, "rating": rating, "draft_text": draft, "message_id": sent["result"]["message_id"],
+            "received_at": received_at,
         },
     )
 
@@ -92,9 +116,10 @@ def _poll_ozon_reviews(*, ozon: OzonClient, log: YandexMarketSyncLog, llm: Yande
         product_code = product.get("offer_id") or str(review.get("sku") or "")
         review_text = review.get("text") or ""
         rating = review.get("rating")
+        received_at = review.get("published_at")
         try:
             draft = generate_review_reply(client=llm, platform="ozon", product_name=product_name, rating=rating, review_text=review_text)
-            _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="ozon", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft)
+            _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="ozon", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft, received_at=received_at)
         except Exception as error:
             errors.log_exception("review_worker", error, context=f"OZON отзыв {item_id}: не удалось подготовить черновик")
             log.add("draft_error", "error", f"OZON отзыв {item_id}: ошибка подготовки черновика: {error}", external_id)
@@ -114,9 +139,10 @@ def _poll_yandex_reviews(*, yandex: YandexMarketClient, moysklad: MoySkladClient
         if parts:
             review_text = (review_text + "\n" + " / ".join(parts)).strip()
         rating = (feedback.get("statistics") or {}).get("rating")
+        received_at = feedback.get("createdAt")
         try:
             draft = generate_review_reply(client=llm, platform="yandex_market", product_name=product_name, rating=rating, review_text=review_text)
-            _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="yandex_market", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft)
+            _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="yandex_market", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft, received_at=received_at)
         except Exception as error:
             errors.log_exception("review_worker", error, context=f"Я.Маркет отзыв {item_id}: не удалось подготовить черновик")
             log.add("draft_error", "error", f"Я.Маркет отзыв {item_id}: ошибка подготовки черновика: {error}", external_id)
@@ -138,8 +164,9 @@ def _draft_question(question: dict[str, Any], *, moysklad: MoySkladClient, log: 
     product_code = str(identifiers.get("offerId") or "")
     product_name = _product_name(moysklad, product_code) or product_code or "(товар неизвестен)"
     question_text = question.get("text") or ""
+    received_at = question.get("createdAt")
     draft = generate_question_reply(client=llm, platform="yandex_market", product_name=product_name, question_text=question_text)
-    _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="yandex_market", kind="question", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=question_text, rating=None, draft=draft)
+    _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="yandex_market", kind="question", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=question_text, rating=None, draft=draft, received_at=received_at)
     return True
 
 
