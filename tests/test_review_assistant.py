@@ -2,6 +2,7 @@ from sync_service.review_assistant import (
     MAX_REPLY_CHARS,
     QUESTION_SYSTEM_PROMPT,
     REVIEW_SYSTEM_PROMPT,
+    canned_review_reply,
     generate_question_reply,
     generate_review_reply,
 )
@@ -42,6 +43,17 @@ def test_generate_review_reply_truncates_an_overlong_model_response():
     llm = FakeLLM(reply="x" * (MAX_REPLY_CHARS + 500))
     reply = generate_review_reply(client=llm, platform="ozon", product_name="Товар", rating=3, review_text="норм")
     assert len(reply) == MAX_REPLY_CHARS
+
+
+def test_canned_review_reply_is_positive_for_a_high_or_missing_rating():
+    assert "Спасибо" in canned_review_reply(rating=5)
+    assert "Спасибо" in canned_review_reply(rating=None)
+
+
+def test_canned_review_reply_is_apologetic_for_a_low_rating():
+    reply = canned_review_reply(rating=2)
+    assert "Жаль" in reply
+    assert "поддержки" in reply
 
 
 def test_generate_question_reply_uses_the_question_system_prompt():

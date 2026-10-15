@@ -322,6 +322,26 @@ def test_poll_yandex_reviews_ignores_feedback_received_before_the_cutoff(tmp_pat
     assert {e["external_id"] for e in entries} == {"yandex_market:review:2"}
 
 
+def test_poll_yandex_reviews_uses_a_canned_reply_without_calling_the_llm_when_there_is_no_text(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    yandex = FakeYandex(feedbacks=[{
+        "feedbackId": 42,
+        "identifiers": {"offerId": "MG2445e"},
+        "description": {},  # no comment, no advantages/disadvantages — rating only
+        "statistics": {"rating": 5},
+    }])
+    moysklad = FakeMoySklad(products={"MG2445e": {"name": "Towards desires"}})
+    telegram = FakeTelegram()
+    llm = FakeLLM()
+
+    _poll_yandex_reviews(yandex=yandex, moysklad=moysklad, log=log, llm=llm, telegram=telegram, chat_id="-100999", errors=errors)
+
+    assert llm.calls == []  # never asked to draft — no text to respond to
+    assert len(telegram.messages) == 1
+    assert "Спасибо" in telegram.messages[0]["text"]
+
+
 def test_poll_yandex_questions_falls_back_to_offer_id_when_product_unknown(tmp_path):
     log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))

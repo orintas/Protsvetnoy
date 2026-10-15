@@ -11,7 +11,7 @@ from .error_log import ErrorLog
 from .http import ApiError
 from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
-from .review_assistant import MAX_REPLY_CHARS, generate_question_reply, generate_review_reply
+from .review_assistant import MAX_REPLY_CHARS, canned_review_reply, generate_question_reply, generate_review_reply
 from .telegram_client import TelegramClient
 from .telegram_qa_worker import UpdateOffset
 from .yandex_gpt_client import YandexGPTClient
@@ -175,7 +175,10 @@ def _poll_yandex_reviews(*, yandex: YandexMarketClient, moysklad: MoySkladClient
         rating = (feedback.get("statistics") or {}).get("rating")
         received_at = feedback.get("createdAt")
         try:
-            draft = generate_review_reply(client=llm, platform="yandex_market", product_name=product_name, rating=rating, review_text=review_text)
+            if review_text.strip():
+                draft = generate_review_reply(client=llm, platform="yandex_market", product_name=product_name, rating=rating, review_text=review_text)
+            else:
+                draft = canned_review_reply(rating=rating)  # no customer text — skip the LLM call entirely
             _draft_and_send(log=log, telegram=telegram, chat_id=chat_id, external_id=external_id, platform="yandex_market", kind="review", item_id=item_id, product_code=product_code, product_name=product_name, customer_text=review_text, rating=rating, draft=draft, received_at=received_at)
         except Exception as error:
             errors.log_exception("review_worker", error, context=f"Я.Маркет отзыв {item_id}: не удалось подготовить черновик")

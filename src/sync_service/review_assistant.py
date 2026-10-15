@@ -50,6 +50,22 @@ QUESTION_SYSTEM_PROMPT = """Ты отвечаешь от имени магази
 - Обычный текст, без markdown-разметки."""
 
 
+# A rating-only review (no text at all) has nothing in it for the LLM to
+# actually respond to — the system prompt's own instruction for that case
+# ("короткая благодарность без выдумывания деталей") already reduces to a
+# fixed template, so skip the API call entirely and use one directly.
+_NO_TEXT_REVIEW_REPLY_POSITIVE = "Спасибо за отзыв и оценку! Рады, что вам понравилось — будем стараться и дальше."
+_NO_TEXT_REVIEW_REPLY_NEGATIVE = "Жаль, что не всё понравилось. Напишите, пожалуйста, в чат поддержки площадки — обязательно разберёмся в ситуации."
+
+
+def canned_review_reply(*, rating: int | None) -> str:
+    """Non-LLM fallback for a review with no text, just a star rating —
+    see the module comment above for why this skips the model entirely."""
+    if rating is not None and rating <= 3:
+        return _NO_TEXT_REVIEW_REPLY_NEGATIVE
+    return _NO_TEXT_REVIEW_REPLY_POSITIVE
+
+
 def generate_review_reply(*, client: LLMClient, platform: str, product_name: str, rating: int | None, review_text: str) -> str:
     context = f"Площадка: {PLATFORM_NAMES.get(platform, platform)}\nТовар: {product_name or '(название неизвестно)'}\nОценка: {rating if rating is not None else '(нет)'}\nТекст отзыва: {review_text.strip() or '(покупатель не оставил текст)'}"
     return client.complete(system=REVIEW_SYSTEM_PROMPT, user_message=context)[:MAX_REPLY_CHARS]
