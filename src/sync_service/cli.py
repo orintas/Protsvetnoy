@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from datetime import datetime
 
 from .config import Settings
@@ -50,6 +51,21 @@ def main() -> None:
     )
     assign_slots.add_argument("--order", dest="orders", action="append", required=True, help="Order id (UUID) or order number; can be repeated")
     args = parser.parse_args()
+
+    if args.command.endswith("-worker"):
+        # Every worker container restarts at once on each deploy
+        # (docker compose up -d --build --remove-orphans). Confirmed live
+        # 2026-10-16: right after that, docker0's bridge port for the
+        # freshly-created container briefly cycles disabled->blocking->
+        # forwarding (a few seconds) before the container's own networking
+        # is actually usable — a worker whose very first loop iteration
+        # makes an HTTP call in that window gets a transient "Temporary
+        # failure in name resolution", not a real DNS/infra problem (the
+        # host's own resolver was fine throughout). Each worker's own loop
+        # already recovers from that on its own, but giving every worker a
+        # few seconds of startup grace avoids it ever happening in the
+        # first place, instead of logging it as an error every deploy.
+        time.sleep(5)
 
     if args.command == "web-server":
         from .web import main as web_main
