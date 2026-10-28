@@ -1,6 +1,7 @@
 services:
   caddy:
     image: caddy:2-alpine
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
@@ -19,6 +20,7 @@ services:
     restart: unless-stopped
   web:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["web-server"]
@@ -28,6 +30,7 @@ services:
       - telegram-proxy
   worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["sync-worker"]
@@ -35,6 +38,7 @@ services:
       - sync-data:/app/data
   yandex-market-stock-sync-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["yandex-market-stock-sync-worker"]
@@ -42,6 +46,7 @@ services:
       - sync-data:/app/data
   ozon-order-sync-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["ozon-order-sync-worker"]
@@ -51,6 +56,7 @@ services:
       - telegram-proxy
   shopify-catalog-sync-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["shopify-catalog-sync-worker"]
@@ -58,6 +64,7 @@ services:
       - sync-data:/app/data
   shopify-stock-sync-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["shopify-stock-sync-worker"]
@@ -65,6 +72,7 @@ services:
       - sync-data:/app/data
   moysklad-shift-close-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["moysklad-shift-close-worker"]
@@ -72,6 +80,7 @@ services:
       - sync-data:/app/data
   health-check-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["health-check-worker"]
@@ -79,6 +88,7 @@ services:
       - sync-data:/app/data
   telegram-qa-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["telegram-qa-worker"]
@@ -88,6 +98,7 @@ services:
       - telegram-proxy
   review-poll-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["review-poll-worker"]
@@ -97,6 +108,7 @@ services:
       - telegram-proxy
   review-reply-worker:
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     command: ["review-reply-worker"]
