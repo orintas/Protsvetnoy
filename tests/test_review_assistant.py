@@ -77,7 +77,7 @@ def test_canned_review_reply_is_positive_for_a_high_or_missing_rating():
 def test_canned_review_reply_is_apologetic_for_a_low_rating():
     reply = canned_review_reply(rating=2)
     assert "Жаль" in reply
-    assert "поддержки" in reply
+    assert "упаковке" in reply
 
 
 def test_generate_question_reply_uses_the_question_system_prompt():

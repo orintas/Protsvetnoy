@@ -1,10 +1,28 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+# How long after a long-running worker's own process starts a failure still
+# counts as "probably just the deploy restart settling" rather than a real
+# problem. Confirmed live 2026-10-16: every worker container restarts at
+# once on each deploy, and the first network call or two afterward can hit
+# a transient "Temporary failure in name resolution" or "Connection reset
+# by peer" while Docker's networking for the fresh container finishes
+# settling — not a real failure, and not worth treating as one every single
+# deploy. A worker hitting the very same error well after this window has
+# passed is a real problem and still logged at the normal "error" level.
+STARTUP_GRACE_SECONDS = 30.0
+
+
+def level_for_startup_grace(started_at: float, *, grace_seconds: float = STARTUP_GRACE_SECONDS) -> str:
+    """`started_at` is a time.monotonic() timestamp taken once, right when
+    the worker's own loop began (after any deliberate startup delay)."""
+    return "info" if time.monotonic() - started_at < grace_seconds else "error"
 
 
 class ErrorLog:
@@ -43,11 +61,11 @@ class ErrorLog:
                 (datetime.now(timezone.utc).isoformat(), source, message, details, level),
             )
 
-    def log_exception(self, source: str, error: BaseException, context: str = "") -> None:
+    def log_exception(self, source: str, error: BaseException, context: str = "", *, level: str = "error") -> None:
         """Record an exception with its full traceback as the detail payload."""
         details = "".join(traceback.format_exception(type(error), error, error.__traceback__))
         message = f"{context}: {error}" if context else str(error)
-        self.add(source, message, details)
+        self.add(source, message, details, level=level)
 
     def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -56,8 +74,11 @@ class ErrorLog:
             return [dict(row) for row in db.execute("SELECT * FROM error_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
 
     def unread_count(self) -> int:
+        """Excludes "info"-level rows — a recovery/benign notice shouldn't
+        trip the "Есть ошибки" indicator the way an actual unresolved
+        failure does."""
         with sqlite3.connect(self.path) as db:
-            row = db.execute("SELECT COUNT(*) FROM error_log WHERE read_at IS NULL").fetchone()
+            row = db.execute("SELECT COUNT(*) FROM error_log WHERE read_at IS NULL AND (level IS NULL OR level != 'info')").fetchone()
             return int(row[0])
 
     def mark_all_read(self) -> None:

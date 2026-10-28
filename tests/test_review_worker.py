@@ -1025,3 +1025,44 @@ def test_handle_new_question_does_nothing_without_reviews_bot_configured(tmp_pat
     monkeypatch.setattr(mod, "TelegramClient", _boom)
 
     handle_new_question(question_id=1, settings=settings, log=log)  # must return early, not raise
+
+
+def test_parse_rules_command_accepts_singular_pravilo():
+    assert _parse_rules_command("правило: пиши короче") == (None, "пиши короче")
+    assert _parse_rules_command("правильно") is None
+
+
+def test_handle_rules_command_as_reply_to_draft_infers_kind_and_redrafts(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Черновик")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Старое правило")
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="- Старое правило\n- Предлагай контакт с упаковки")
+    message = {"text": "правило: предлагай контакт с упаковки", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    handled = _handle_rules_command(message, rules_store=rules_store, llm=llm, telegram=telegram, chat_id="-100999", log=log)
+
+    assert handled is True
+    assert rules_store.get("review") == "- Старое правило\n- Предлагай контакт с упаковки"
+    assert "➕ - Предлагай контакт с упаковки" in telegram.messages[0]["text"]
+    assert "➖" not in telegram.messages[0]["text"]
+    assert "Черновик ответа:" in telegram.messages[1]["text"]
+    new_message_id = telegram._next_message_id  # the redraft is the last message sent
+    redraft = _find_pending_draft(log, new_message_id)
+    assert redraft is not None
+    assert redraft["external_id"] == "ozon:review:r1"
+
+
+def test_learn_from_edit_shows_removed_rules(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "reviews.sqlite3"))
+    _seed_draft(log, external_id="ozon:review:r1", message_id=501, draft_text="Черновик")
+    rules_store = ReviewRulesStore(str(tmp_path / "rules.sqlite3"))
+    rules_store.set("review", "- Пиши про упаковку\n- Без эмодзи")
+    telegram = FakeTelegram()
+    llm = FakeLLM(reply="- Без эмодзи")
+    message = {"text": "Другой текст", "message_id": 600, "reply_to_message": {"message_id": 501}}
+
+    _handle_reply(message, log=log, telegram=telegram, chat_id="-100999", ozon=FakeOzon(), yandex=None, llm=llm, rules_store=rules_store)
+
+    assert any("➖ - Пиши про упаковку" in m["text"] for m in telegram.messages)

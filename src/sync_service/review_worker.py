@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .error_log import ErrorLog
+from .error_log import ErrorLog, level_for_startup_grace
 from .http import ApiError
 from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
@@ -117,7 +117,7 @@ def _format_draft_message(*, platform: str, kind: str, product_name: str, produc
     lines.append("Черновик ответа:")
     lines.append(draft)
     lines.append("")
-    lines.append('Ответьте «да» или поставьте 👍 на это сообщение — опубликовать как есть; своим текстом — опубликовать с правкой; «нет» — пропустить.')
+    lines.append('Ответьте «да» или поставьте 👍 на это сообщение — опубликовать как есть; своим текстом — опубликовать с правкой; «нет» — пропустить; «правило: ...» — поправить свод правил и переписать черновик.')
     return "\n".join(lines)
 
 
@@ -125,16 +125,22 @@ def _already_drafted(log: YandexMarketSyncLog, external_id: str) -> bool:
     return log.has_success("draft_sent", external_id) or log.has_success("auto_processed", external_id)
 
 
-def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, external_id: str, platform: str, kind: str, item_id: str, product_code: str, product_name: str, customer_text: str, rating: int | None, draft: str, received_at: str | None = None) -> None:
+def _draft_and_send(*, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, external_id: str, platform: str, kind: str, item_id: str, product_code: str, product_name: str, customer_text: str, rating: int | None, draft: str, received_at: str | None = None, redraft: bool = False) -> None:
     message = _format_draft_message(platform=platform, kind=kind, product_name=product_name, product_code=product_code, customer_text=customer_text, rating=rating, draft=draft, received_at=received_at)
     sent = telegram.send_message(chat_id=chat_id, text=message)
+    message_id = sent["result"]["message_id"]
+    # sync_log is unique on (kind, external_id), so a rewritten draft for an
+    # item that already has one gets its own row key; the real external_id
+    # rides in the payload, which _find_pending_draft prefers.
+    log_external_id = f"{external_id}#redraft:{message_id}" if redraft else external_id
     log.add(
         "draft_sent", "success",
-        f"{PLATFORM_LABELS.get(platform, platform)} {KIND_LABELS.get(kind, kind).lower()} {item_id} ({product_name}): черновик отправлен на согласование",
-        external_id,
+        f"{PLATFORM_LABELS.get(platform, platform)} {KIND_LABELS.get(kind, kind).lower()} {item_id} ({product_name}): {'черновик переписан по новым правилам' if redraft else 'черновик отправлен на согласование'}",
+        log_external_id,
         {
+            "external_id": external_id,
             "platform": platform, "kind": kind, "item_id": item_id, "product_code": product_code, "product_name": product_name,
-            "customer_text": customer_text, "rating": rating, "draft_text": draft, "message_id": sent["result"]["message_id"],
+            "customer_text": customer_text, "rating": rating, "draft_text": draft, "message_id": message_id,
             "received_at": received_at,
         },
     )
@@ -308,12 +314,13 @@ def poll_worker() -> None:
     log = YandexMarketSyncLog("data/review_sync.sqlite3")
     errors = ErrorLog()
     rules_store = ReviewRulesStore()
+    started_at = time.monotonic()
     while True:
         if _within_poll_window():
             try:
                 poll_once(settings, log, errors, rules_store)
             except Exception as error:
-                errors.log_exception("review_worker", error, context="Ошибка опроса отзывов/вопросов")
+                errors.log_exception("review_worker", error, context="Ошибка опроса отзывов/вопросов", level=level_for_startup_grace(started_at))
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
@@ -347,18 +354,32 @@ def _has_thumbs_up(reactions: list[dict[str, Any]] | None) -> bool:
 #   "правила"                       -> show both rulebooks
 #   "правила отзывы"                -> show just the review rulebook
 #   "правила вопросы: отвечай короче, без эмодзи" -> edit the question rulebook
-RULES_COMMAND_PREFIX = "правила"
+# Sent as a reply to a pending draft, the kind comes from that draft
+# ("правило: не предлагай чат площадки") and the draft is then rewritten
+# under the updated rules, so the effect of the new rule is visible at once.
+RULES_COMMAND_RE = re.compile(r"^правил[оа]\b", re.IGNORECASE)
 RULES_KIND_LABELS = {"review": "Отзывы", "question": "Вопросы"}
+
+
+def _rules_diff(old: str, new: str) -> str:
+    """Added/removed rule lines, so a change to the rulebook (especially a
+    rule silently dropped by the model) is visible in the chat instead of
+    buried in a full re-print."""
+    old_lines = [line.strip() for line in old.splitlines() if line.strip()]
+    new_lines = [line.strip() for line in new.splitlines() if line.strip()]
+    removed = [f"➖ {line}" for line in old_lines if line not in new_lines]
+    added = [f"➕ {line}" for line in new_lines if line not in old_lines]
+    return "\n".join(removed + added) or "(без изменений)"
 
 
 def _parse_rules_command(text: str) -> tuple[str | None, str] | None:
     """Returns (kind_or_None, instruction) if `text` is a "правила ..."
     command, else None. kind is None when no "отзывы"/"вопросы" keyword was
     given (ambiguous for an edit, means "both" for a plain view)."""
-    lowered = text.strip().lower()
-    if not lowered.startswith(RULES_COMMAND_PREFIX):
+    match = RULES_COMMAND_RE.match(text.strip())
+    if match is None:
         return None
-    rest = text.strip()[len(RULES_COMMAND_PREFIX):].strip()
+    rest = text.strip()[match.end():].strip()
     kind: str | None = None
     if re.match(r"^отзыв", rest, re.IGNORECASE):
         kind = "review"
@@ -370,7 +391,7 @@ def _parse_rules_command(text: str) -> tuple[str | None, str] | None:
     return kind, rest
 
 
-def _handle_rules_command(message: dict[str, Any], *, rules_store: ReviewRulesStore, llm: YandexGPTClient | None, telegram: TelegramClient, chat_id: str) -> bool:
+def _handle_rules_command(message: dict[str, Any], *, rules_store: ReviewRulesStore, llm: YandexGPTClient | None, telegram: TelegramClient, chat_id: str, log: YandexMarketSyncLog | None = None) -> bool:
     """Handles a "правила ..." message (view or natural-language edit of the
     rulebook) if `message` is one. Returns whether it was — so the caller
     knows whether to fall through to draft-reply handling instead."""
@@ -380,6 +401,13 @@ def _handle_rules_command(message: dict[str, Any], *, rules_store: ReviewRulesSt
         return False
     kind, instruction = parsed
     reply_to_message_id = message.get("message_id")
+
+    draft = None
+    reply_to = message.get("reply_to_message")
+    if log is not None and isinstance(reply_to, dict) and reply_to.get("message_id"):
+        draft = _find_pending_draft(log, reply_to["message_id"])
+        if draft is not None and kind is None:
+            kind = "review" if draft["kind"] == "review" else "question"
 
     if not instruction:
         kinds = [kind] if kind else ["review", "question"]
@@ -394,10 +422,33 @@ def _handle_rules_command(message: dict[str, Any], *, rules_store: ReviewRulesSt
         telegram.send_message(chat_id=chat_id, text='Уточните, какой свод правил менять: "правила отзывы: ..." или "правила вопросы: ...".', reply_to_message_id=reply_to_message_id)
         return True
 
-    updated = edit_rules_by_instruction(client=llm, current_rules=rules_store.get(kind), instruction=instruction)
+    current = rules_store.get(kind)
+    updated = edit_rules_by_instruction(client=llm, current_rules=current, instruction=instruction)
     rules_store.set(kind, updated)
-    telegram.send_message(chat_id=chat_id, text=f"📘 {RULES_KIND_LABELS[kind]} — свод правил обновлён:\n{updated}", reply_to_message_id=reply_to_message_id)
+    telegram.send_message(chat_id=chat_id, text=f"📘 {RULES_KIND_LABELS[kind]} — свод правил обновлён:\n{_rules_diff(current, updated)}\n\nЦеликом — «правила {RULES_KIND_LABELS[kind].lower()}».", reply_to_message_id=reply_to_message_id)
+
+    if draft is not None and log is not None:
+        _redraft(draft, llm=llm, rules_store=rules_store, log=log, telegram=telegram, chat_id=chat_id)
     return True
+
+
+def _redraft(draft: dict[str, Any], *, llm: YandexGPTClient, rules_store: ReviewRulesStore, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str) -> None:
+    """Rewrites a pending draft under the just-updated rulebook and sends it
+    as a new draft message. The old message stays approvable too — both
+    share one external_id, so whichever gets approved first wins and the
+    other turns into a no-op (see _find_pending_draft)."""
+    customer_text = draft.get("customer_text") or ""
+    if draft["kind"] == "question":
+        text = generate_question_reply(client=llm, platform=draft["platform"], product_name=draft.get("product_name", ""), question_text=customer_text, rules=rules_store.get("question"))
+    elif customer_text.strip():
+        text = generate_review_reply(client=llm, platform=draft["platform"], product_name=draft.get("product_name", ""), rating=draft.get("rating"), review_text=customer_text, rules=rules_store.get("review"))
+    else:
+        text = canned_review_reply(rating=draft.get("rating"))
+    _draft_and_send(
+        log=log, telegram=telegram, chat_id=chat_id, external_id=draft["external_id"], platform=draft["platform"], kind=draft["kind"],
+        item_id=draft["item_id"], product_code=draft.get("product_code", ""), product_name=draft.get("product_name", ""),
+        customer_text=customer_text, rating=draft.get("rating"), draft=text, received_at=draft.get("received_at"), redraft=True,
+    )
 
 
 def _find_pending_draft(log: YandexMarketSyncLog, message_id: int) -> dict[str, Any] | None:
@@ -414,7 +465,7 @@ def _find_pending_draft(log: YandexMarketSyncLog, message_id: int) -> dict[str, 
             continue
         if payload.get("message_id") != message_id:
             continue
-        external_id = entry.get("external_id")
+        external_id = payload.get("external_id") or entry.get("external_id")
         if not external_id or log.has_success("posted", external_id) or log.has_success("declined", external_id):
             return None  # already resolved — don't act on a late/duplicate reply
         return {"external_id": external_id, **payload}
@@ -491,7 +542,7 @@ def _learn_from_edit(draft: dict[str, Any], *, final_text: str, llm: YandexGPTCl
     if updated_rules.strip() == current_rules.strip():
         return  # nothing generalizable in this particular edit
     rules_store.set(rules_kind, updated_rules)
-    telegram.send_message(chat_id=chat_id, text="📘 Свод правил обновлён на основе этой правки.", reply_to_message_id=reply_to_message_id)
+    telegram.send_message(chat_id=chat_id, text=f"📘 Свод правил обновлён на основе этой правки:\n{_rules_diff(current_rules, updated_rules)}\n\nЕсли что-то не так — «правила {RULES_KIND_LABELS[rules_kind].lower()}: <что поменять>».", reply_to_message_id=reply_to_message_id)
 
 
 def _handle_reply(message: dict[str, Any], *, log: YandexMarketSyncLog, telegram: TelegramClient, chat_id: str, ozon: OzonClient | None, yandex: YandexMarketClient | None, llm: YandexGPTClient | None = None, rules_store: ReviewRulesStore | None = None) -> None:
@@ -551,7 +602,7 @@ def reply_run_once(settings: Settings, offset_store: UpdateOffset, log: YandexMa
             reaction = update.get("message_reaction")
             try:
                 if message is not None and _is_relevant(message, settings):
-                    if not _handle_rules_command(message, rules_store=rules_store, llm=llm, telegram=telegram, chat_id=settings.telegram_reviews_chat_id):
+                    if not _handle_rules_command(message, rules_store=rules_store, llm=llm, telegram=telegram, chat_id=settings.telegram_reviews_chat_id, log=log):
                         _handle_reply(message, log=log, telegram=telegram, chat_id=settings.telegram_reviews_chat_id, ozon=ozon, yandex=yandex, llm=llm, rules_store=rules_store)
                 elif reaction is not None and _is_relevant_reaction(reaction, settings):
                     _handle_reaction(reaction, log=log, telegram=telegram, chat_id=settings.telegram_reviews_chat_id, ozon=ozon, yandex=yandex, llm=llm, rules_store=rules_store)
@@ -575,17 +626,18 @@ def reply_worker() -> None:
     log = YandexMarketSyncLog("data/review_sync.sqlite3")
     errors = ErrorLog()
     rules_store = ReviewRulesStore()
+    started_at = time.monotonic()
     if settings.telegram_reviews_bot_token:
         client = TelegramClient(bot_token=settings.telegram_reviews_bot_token, proxy=settings.telegram_proxy_url)
         try:
             client.delete_webhook()
         except Exception as error:
-            errors.log_exception("review_worker", error, context="Не удалось снять регистрацию вебхука Telegram (отзывы)")
+            errors.log_exception("review_worker", error, context="Не удалось снять регистрацию вебхука Telegram (отзывы)", level=level_for_startup_grace(started_at))
         finally:
             client.close()
     while True:
         try:
             reply_run_once(settings, offset_store, log, errors, rules_store)
         except Exception as error:
-            errors.log_exception("review_worker", error, context="Ошибка воркера ответов на отзывы/вопросы")
+            errors.log_exception("review_worker", error, context="Ошибка воркера ответов на отзывы/вопросы", level=level_for_startup_grace(started_at))
             time.sleep(5)
