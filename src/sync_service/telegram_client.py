@@ -173,6 +173,11 @@ class TelegramClient:
                     time.sleep(RETRY_BACKOFF_SECONDS * attempt)
                     continue
                 raise
+            # Telegram's own front occasionally answers 502 Bad Gateway
+            # (confirmed live 2026-10-27) — as transient as a reset.
+            if response.status_code >= 500 and attempt <= MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                continue
             break
         if response.is_error:
             raise RuntimeError(f"Telegram getUpdates failed with HTTP {response.status_code}: {response.text[:500]}")

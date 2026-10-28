@@ -47,11 +47,18 @@ class ShopifySyncLog:
                 (datetime.now(timezone.utc).isoformat(), kind, external_id, status, message, json.dumps(payload, ensure_ascii=False, default=str)),
             )
 
-    def recent(self, limit: int = 2000, *, days: int = 3) -> list[dict[str, Any]]:
+    def recent(self, limit: int = 2000, *, days: int = 3, kind: str | None = None) -> list[dict[str, Any]]:
+        """`kind` filters in SQL, before LIMIT — filtering the last N rows of
+        every kind afterwards lets one stock run's dozens of "stock_sync"
+        rows push the single nightly "catalog_run" row out of the window."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.path) as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute("SELECT * FROM sync_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))]
+            if kind is not None:
+                rows = db.execute("SELECT * FROM sync_log WHERE created_at >= ? AND kind = ? ORDER BY id DESC LIMIT ?", (cutoff, kind, limit))
+            else:
+                rows = db.execute("SELECT * FROM sync_log WHERE created_at >= ? ORDER BY id DESC LIMIT ?", (cutoff, limit))
+            return [dict(row) for row in rows]
 
     def search(self, query: str, limit: int = 200) -> list[dict[str, Any]]:
         like = f"%{query}%"

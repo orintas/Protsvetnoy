@@ -10,6 +10,7 @@ from sync_service.health_check import (
     check_ozon_webhook,
     check_shift_closer,
     check_shopify_catalog,
+    check_shopify_stock,
     check_shopify_webhook,
     check_yandex_market_stock,
     run_once,
@@ -265,3 +266,32 @@ def test_run_once_returns_a_result_per_check(tmp_path, monkeypatch):
     # no Shopify/OZON credentials configured in FakeSettings — those two checks are simply not applicable
     assert next(r for r in results if r.name == "shopify_webhook").applicable is False
     assert next(r for r in results if r.name == "ozon_webhook").applicable is False
+
+
+def test_check_ozon_webhook_skips_a_tick_on_rate_limit():
+    client = FakeOzonClient(raise_error=RuntimeError('POST https://api-seller.ozon.ru/v1/notification/list failed with HTTP 429: {"code":8, "message":"You have reached request rate limit per second"}'))
+    result = check_ozon_webhook(client)
+    assert result.applicable is False
+
+
+def test_check_ozon_webhook_still_fails_on_other_api_errors():
+    client = FakeOzonClient(raise_error=RuntimeError("POST /v1/notification/list failed with HTTP 403: forbidden"))
+    result = check_ozon_webhook(client)
+    assert result.applicable is True
+    assert result.ok is False
+
+
+def test_check_shopify_catalog_finds_the_run_behind_many_stock_rows(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    log.add("catalog_run", "success", "Синхронизация каталога завершена: проверено 50, изменилось 0")
+    for i in range(200):
+        log.add("stock_sync", "success", f"SKU{i}: остаток 1→2", f"SKU{i}")
+    result = check_shopify_catalog(log, datetime.now(timezone.utc))
+    assert result.ok is True
+
+
+def test_check_shopify_stock_gives_the_first_morning_run_time_to_happen(tmp_path):
+    log = ShopifySyncLog(str(tmp_path / "shopify.sqlite3"))
+    morning = datetime(2026, 10, 28, 6, 18, tzinfo=timezone.utc)  # 9:18 Moscow, last run was last night
+    assert check_shopify_stock(log, morning).ok is True
+    assert check_shopify_stock(log, morning + timedelta(minutes=30)).ok is False  # 9:48, still nothing

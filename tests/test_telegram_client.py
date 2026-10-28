@@ -216,6 +216,22 @@ def test_get_updates_raises_after_exhausting_retries_on_transport_error(monkeypa
         client.get_updates()
 
 
+def test_get_updates_retries_on_5xx_then_succeeds(monkeypatch):
+    import sync_service.telegram_client as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+    attempts = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 2:
+            return httpx.Response(502, json={"ok": False, "error_code": 502, "description": "Bad Gateway"})
+        return httpx.Response(200, json={"ok": True, "result": []})
+
+    client = _client_with_handler(handler)
+    assert client.get_updates() == []
+    assert attempts["count"] == 2
+
+
 def test_set_message_reaction_posts_the_emoji_as_a_single_item_array():
     import json
     from urllib.parse import parse_qs

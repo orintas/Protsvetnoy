@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .error_log import ErrorLog
+from .error_log import ErrorLog, OutageTracker
 from .moysklad import MoySkladClient
 from .order_assistant import (
     DEFAULT_QUESTION,
@@ -160,9 +160,12 @@ def worker() -> None:
             errors.log_exception("telegram_qa_worker", error, context="Не удалось снять регистрацию вебхука Telegram")
         finally:
             client.close()
+    outage = OutageTracker(errors, "telegram_qa_worker")
     while True:
         try:
             run_once(settings, offset_store, errors)
         except Exception as error:
-            errors.log_exception("telegram_qa_worker", error, context="Ошибка воркера Telegram Q&A")
+            outage.failed(error, context="Ошибка воркера Telegram Q&A")
             time.sleep(5)  # avoid a tight error loop when get_updates itself keeps failing
+        else:
+            outage.succeeded()

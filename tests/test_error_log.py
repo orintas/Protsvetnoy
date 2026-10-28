@@ -1,4 +1,7 @@
-from sync_service.error_log import ErrorLog
+import httpx
+
+import sync_service.error_log as error_log_module
+from sync_service.error_log import ErrorLog, OutageTracker, is_transient_network_error
 
 
 def test_error_log_tracks_unread_count(tmp_path):
@@ -51,3 +54,55 @@ def test_log_exception_captures_traceback(tmp_path):
     assert "ValueError: boom" in entry["details"]
     assert "Traceback" in entry["details"]
     assert entry["read_at"] is None
+
+
+def test_is_transient_network_error():
+    assert is_transient_network_error(httpx.ConnectError("[Errno 104] Connection reset by peer"))
+    assert is_transient_network_error(httpx.ConnectTimeout("_ssl.c:993: The handshake operation timed out"))
+    assert is_transient_network_error(RuntimeError('Telegram getUpdates failed with HTTP 502: {"ok":false}'))
+    assert not is_transient_network_error(RuntimeError("Telegram getUpdates failed with HTTP 409: Conflict"))
+    assert not is_transient_network_error(KeyError("update_id"))
+
+
+def test_outage_tracker_folds_a_short_outage_into_one_info_row(tmp_path, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(error_log_module.time, "monotonic", lambda: clock["now"])
+    log = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    tracker = OutageTracker(log, "telegram_qa_worker", threshold_seconds=300)
+
+    for _ in range(5):
+        tracker.failed(httpx.ConnectError("Connection reset by peer"), context="Ошибка воркера")
+        clock["now"] += 5
+    tracker.succeeded()
+
+    entries = log.recent()
+    assert len(entries) == 1
+    assert entries[0]["level"] == "info"
+    assert log.unread_count() == 0
+
+
+def test_outage_tracker_escalates_a_long_outage_once_then_logs_recovery(tmp_path, monkeypatch):
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(error_log_module.time, "monotonic", lambda: clock["now"])
+    log = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    tracker = OutageTracker(log, "telegram_qa_worker", threshold_seconds=300)
+
+    for _ in range(100):  # 500 s of failures every 5 s
+        tracker.failed(httpx.ConnectError("Connection reset by peer"), context="Ошибка воркера")
+        clock["now"] += 5
+    tracker.succeeded()
+
+    levels = [e["level"] for e in reversed(log.recent())]
+    assert levels == ["info", "error", "info"]
+    assert "восстановилась" in log.recent()[0]["message"]
+    assert log.unread_count() == 1
+
+
+def test_outage_tracker_logs_non_network_errors_every_time(tmp_path):
+    log = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    tracker = OutageTracker(log, "telegram_qa_worker")
+
+    tracker.failed(ValueError("bad payload"), context="Ошибка воркера")
+    tracker.failed(ValueError("bad payload"), context="Ошибка воркера")
+
+    assert [e["level"] for e in log.recent()] == ["error", "error"]

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 # How long after a long-running worker's own process starts a failure still
 # counts as "probably just the deploy restart settling" rather than a real
@@ -23,6 +26,60 @@ def level_for_startup_grace(started_at: float, *, grace_seconds: float = STARTUP
     """`started_at` is a time.monotonic() timestamp taken once, right when
     the worker's own loop began (after any deliberate startup delay)."""
     return "info" if time.monotonic() - started_at < grace_seconds else "error"
+
+
+# How long a network outage may last before it counts as a real failure.
+# Confirmed live 2026-10-25..28: the Telegram VLESS tunnel drops every
+# connection every 6 hours sharp (xx:59:20 UTC) plus the odd SSL EOF /
+# handshake timeout / Telegram 502 in between, and recovers on its own
+# within seconds to a minute — every one of those used to land in the
+# journal as an "error" from both Telegram workers at once (54% of all
+# rows), while no message was ever lost (the update offset is persisted).
+TRANSIENT_OUTAGE_SECONDS = 300.0
+
+
+def is_transient_network_error(error: BaseException) -> bool:
+    """Connection-level failure (reset, timeout, SSL EOF) or an HTTP 5xx
+    from the remote end — the kind that self-heals without anyone acting."""
+    if isinstance(error, httpx.TransportError):
+        return True
+    return re.search(r"HTTP 5\d\d\b", str(error)) is not None
+
+
+class OutageTracker:
+    """Folds a run of transient network failures in a polling loop into at
+    most three journal rows instead of one per failed iteration: an "info"
+    row when the outage starts, one "error" row if it is still ongoing after
+    `threshold_seconds`, and an "info" recovery row if that error was
+    logged. Anything that isn't a transient network error is logged as a
+    normal error every time, exactly as before."""
+
+    def __init__(self, errors: ErrorLog, source: str, *, threshold_seconds: float = TRANSIENT_OUTAGE_SECONDS) -> None:
+        self._errors = errors
+        self._source = source
+        self._threshold_seconds = threshold_seconds
+        self._failing_since: float | None = None
+        self._escalated = False
+
+    def failed(self, error: BaseException, *, context: str) -> None:
+        if not is_transient_network_error(error):
+            self._errors.log_exception(self._source, error, context=context)
+            return
+        now = time.monotonic()
+        if self._failing_since is None:
+            self._failing_since = now
+            self._errors.log_exception(self._source, error, context=f"{context} (временный сбой сети, повторяем)", level="info")
+        elif not self._escalated and now - self._failing_since >= self._threshold_seconds:
+            self._escalated = True
+            minutes = (now - self._failing_since) / 60
+            self._errors.log_exception(self._source, error, context=f"{context} (сеть недоступна уже {minutes:.0f} мин)")
+
+    def succeeded(self) -> None:
+        if self._escalated and self._failing_since is not None:
+            minutes = (time.monotonic() - self._failing_since) / 60
+            self._errors.add(self._source, f"Связь восстановилась после {minutes:.0f} мин сбоя", level="info")
+        self._failing_since = None
+        self._escalated = False
 
 
 class ErrorLog:

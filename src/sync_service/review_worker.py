@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .error_log import ErrorLog, level_for_startup_grace
+from .error_log import ErrorLog, OutageTracker, level_for_startup_grace
 from .http import ApiError
 from .moysklad import MoySkladClient
 from .ozon_client import OzonClient
@@ -635,9 +635,12 @@ def reply_worker() -> None:
             errors.log_exception("review_worker", error, context="Не удалось снять регистрацию вебхука Telegram (отзывы)", level=level_for_startup_grace(started_at))
         finally:
             client.close()
+    outage = OutageTracker(errors, "review_worker")
     while True:
         try:
             reply_run_once(settings, offset_store, log, errors, rules_store)
         except Exception as error:
-            errors.log_exception("review_worker", error, context="Ошибка воркера ответов на отзывы/вопросы", level=level_for_startup_grace(started_at))
+            outage.failed(error, context="Ошибка воркера ответов на отзывы/вопросы")
             time.sleep(5)
+        else:
+            outage.succeeded()

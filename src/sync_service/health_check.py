@@ -103,14 +103,20 @@ def check_shopify_catalog(log: ShopifySyncLog, now: datetime) -> CheckResult:
     individual catalog_created/catalog_update/catalog_error rows — those can
     legitimately be zero on a quiet night (nothing changed) or, the gap this
     replaces, all failures, which used to still count as "it ran"."""
-    entries = [e for e in log.recent(limit=40) if e["kind"] == "catalog_run"]
+    entries = log.recent(limit=1, kind="catalog_run")
     return _heartbeat_check("shopify_catalog", "Каталог Shopify", applicable=True, entries=entries, now=now, max_age_minutes=26 * 60)
 
 
 def check_shopify_stock(log: ShopifySyncLog, now: datetime) -> CheckResult:
+    """The stock worker sleeps 30 min between ticks from whenever it was
+    started, so its first run of the day can land as late as ~9:30 — until
+    then the last run is legitimately last night's (confirmed live
+    2026-10-28: "689 мин назад" at 9:18, recovered by itself at 9:48). The
+    staleness clock therefore starts at the window opening, not overnight."""
     now_moscow = now.astimezone(MOSCOW)
     applicable = 9 <= now_moscow.hour < 22
-    entries = [e for e in log.recent(limit=40) if e["kind"] == "stock_run"]
+    window_start = now_moscow.replace(hour=9, minute=0, second=0, microsecond=0)
+    entries = log.recent(limit=1, kind="stock_run") + [{"created_at": window_start.isoformat()}]
     return _heartbeat_check("shopify_stock", "Остатки Shopify", applicable=applicable, entries=entries, now=now, max_age_minutes=40)
 
 
@@ -149,6 +155,14 @@ def check_ozon_webhook(client: OzonClient | None) -> CheckResult:
     try:
         result = client.notification_list()
     except Exception as error:
+        # OZON's per-second rate limit is shared with every other worker on
+        # the same Client-Id, so this check alone kept tripping it (HTTP 429
+        # still after JsonClient's retries, 13 false failure/recovery pairs
+        # in 3 days, confirmed live 2026-10-28) while the webhook itself was
+        # fine. Not knowing this tick isn't the same as knowing it's broken:
+        # skip, keep the previous state, and try again next tick.
+        if "HTTP 429" in str(error):
+            return CheckResult(name, label, applicable=False, ok=True, detail="")
         return CheckResult(name, label, applicable=True, ok=False, detail=f"{label}: не удалось проверить — {error}")
     matching = [u for u in result.get("urls", []) if "/api/ozon/webhook/notifications" in (u.get("url") or "")]
     if not matching:
