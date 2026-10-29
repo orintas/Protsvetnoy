@@ -100,7 +100,7 @@ def _order(offer_id="RGL02", count=1, price=361300.0, order_id=999, campaign_id=
 
 
 def test_known_campaigns_have_a_store_mapping():
-    assert set(CAMPAIGN_STORES) == {"149179204", "149179258", "149179260", "149179270"}
+    assert set(CAMPAIGN_STORES) == {"149179204", "149179258", "149179260", "149179270", "149312579"}
 
 
 def test_skips_entirely_when_order_and_label_already_done(tmp_path):
@@ -553,3 +553,77 @@ def test_retry_label_stops_after_max_attempts(tmp_path):
     errors = [e for e in log.recent() if e["kind"] == "label_retry_error"]
     assert len(errors) == MAX_LABEL_RETRIES
     assert not log.has_success("label_sent", "999")
+
+
+
+class FakeMoySkladWithLink(FakeMoySklad):
+    """Behaves like the real API: the order created earlier in the same
+    pipeline run is found by externalCode afterwards."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.link_updates = []
+
+    def create_customer_order(self, **kwargs):
+        result = super().create_customer_order(**kwargs)
+        self.existing_order = result
+        return result
+
+    def update_customer_order_link_attribute(self, order_id, attribute_id, url):
+        self.link_updates.append((order_id, attribute_id, url))
+
+
+def _label_link_campaign(monkeypatch):
+    from sync_service import yandex_market_order_sync
+
+    monkeypatch.setattr(yandex_market_order_sync, "LABEL_LINK_CAMPAIGNS", {"149179260"})
+
+
+def test_label_link_campaign_links_label_in_moysklad_instead_of_telegram(tmp_path, monkeypatch):
+    from sync_service.yandex_market_order_sync import LABEL_LINK_ATTRIBUTE_ID, label_link_url
+
+    _label_link_campaign(monkeypatch)
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySkladWithLink(products={"RGL02": {"meta": {"href": "x"}}})
+    yandex = FakeYandex(order=_order())
+    telegram = FakeTelegram()
+
+    process_new_order(order_id=999, campaign_id=149179260, moysklad=moysklad, yandex=yandex, telegram=telegram, telegram_chat_id="chat", log=log, label_link_secret="key")
+
+    assert moysklad.created is not None
+    assert yandex.status_calls == [(999, "149179260", "PROCESSING", "READY_TO_SHIP")]
+    assert telegram.sent == []
+    assert yandex.label_calls == []  # fetched live when the link is opened, not now
+    assert moysklad.link_updates == [("new-order", LABEL_LINK_ATTRIBUTE_ID, label_link_url(149179260, 999, "key"))]
+    assert log.has_success("label_sent", "999")
+
+
+def test_label_link_signature_depends_on_order_campaign_and_secret():
+    from sync_service.yandex_market_order_sync import label_link_signature
+
+    base = label_link_signature(1, 999, "key")
+    assert len(base) == 32
+    assert base != label_link_signature(1, 998, "key")
+    assert base != label_link_signature(2, 999, "key")
+    assert base != label_link_signature(1, 999, "other")
+
+
+def test_label_link_campaign_cancellation_skips_telegram_and_is_not_repeated(tmp_path, monkeypatch):
+    _label_link_campaign(monkeypatch)
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    moysklad = FakeMoySklad(existing_order={"id": "ms-1", "name": "999"})
+    telegram = FakeTelegram()
+
+    for _ in range(2):  # Market redelivers the same webhook
+        handle_order_cancelled(order_id=999, campaign_id=149179260, substatus="USER_CHANGED_MIND", moysklad=moysklad, telegram=telegram, telegram_chat_id="chat", log=log)
+
+    assert moysklad.state_updates == [("ms-1", CANCELLED_STATE_ID)]
+    assert telegram.messages == []
+
+
+def test_label_link_campaign_gets_no_courier_notice(tmp_path, monkeypatch):
+    _label_link_campaign(monkeypatch)
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    telegram = FakeTelegram()
+    notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=telegram, telegram_chat_id="chat", log=log)
+    assert telegram.messages == []

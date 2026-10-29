@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+import re
 import threading
 from datetime import datetime, timezone
 from html import escape
@@ -32,7 +34,7 @@ from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
 from .yandex_market import YandexMarketClient
-from .yandex_market_order_sync import handle_order_cancelled, notify_courier_arrived, process_new_order, retry_label_if_missing, sync_order_delivery_state
+from .yandex_market_order_sync import LABEL_LINK_CAMPAIGNS, handle_order_cancelled, label_link_signature, notify_courier_arrived, process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
 from .yandex_market_webhook import handle_notification, is_allowed_ip
 
@@ -73,6 +75,33 @@ def _client_ip(environ) -> str:
     if forwarded:
         return forwarded.split(",")[-1].strip()
     return environ.get("REMOTE_ADDR", "")
+
+
+LABEL_PATH_PATTERN = re.compile(r"/labels/(\d+)/(\d+)/([0-9a-f]{32})\.pdf")
+
+
+def _yandex_market_label(path, start_response):
+    """The label PDF linked from a MoySklad order (see
+    yandex_market_order_sync.LABEL_LINK_CAMPAIGNS), fetched from Market on
+    every open rather than stored here. Only signed links for those
+    campaigns are served — this route has no other auth."""
+    settings = Settings.from_env()
+    match = LABEL_PATH_PATTERN.fullmatch(path)
+    if (
+        match is None
+        or match.group(1) not in LABEL_LINK_CAMPAIGNS
+        or not hmac.compare_digest(match.group(3), label_link_signature(match.group(1), match.group(2), settings.yandex_market_api_key))
+    ):
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not found"]
+    campaign_id, order_id = match.group(1), match.group(2)
+    yandex = YandexMarketClient(base_url=settings.yandex_market_base_url, api_key=settings.yandex_market_api_key, business_id=settings.yandex_market_business_id)
+    try:
+        label_pdf = yandex.get_order_label(int(order_id), campaign_id=campaign_id)
+    finally:
+        yandex.close()
+    start_response("200 OK", [("Content-Type", "application/pdf"), ("Content-Disposition", f'inline; filename="{order_id}.pdf"')])
+    return [label_pdf]
 
 
 def _yandex_market_webhook(environ, start_response):
@@ -137,6 +166,7 @@ def _handle_new_order(notification: dict, log: YandexMarketSyncLog) -> None:
             telegram=telegram,
             telegram_chat_id=settings.telegram_label_chat_id,
             log=log,
+            label_link_secret=settings.yandex_market_api_key,
         )
     finally:
         moysklad.close()
@@ -195,6 +225,7 @@ def _handle_order_status_update(notification: dict, log: YandexMarketSyncLog) ->
             telegram=telegram,
             telegram_chat_id=settings.telegram_label_chat_id,
             log=log,
+            label_link_secret=settings.yandex_market_api_key,
         )
     finally:
         moysklad.close()
@@ -965,6 +996,8 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]
+    if path.startswith("/labels/"):
+        return _yandex_market_label(path, start_response)
     if path == "/api/yandex-market/webhook/notification" and environ.get("REQUEST_METHOD") == "POST":
         return _yandex_market_webhook(environ, start_response)
     if path == "/api/shopify/webhook/orders" and environ.get("REQUEST_METHOD") == "POST":

@@ -200,6 +200,20 @@ class MoySkladClient:
                before=previous_description, after=description, link=result.get("meta", {}).get("uuidHref"))
         return result
 
+    def update_customer_order_link_attribute(self, order_id: str, attribute_id: str, url: str) -> dict[str, Any]:
+        attribute = {
+            "meta": {
+                "href": f"{self._client.base_url}/entity/customerorder/metadata/attributes/{attribute_id}",
+                "type": "attributemetadata",
+                "mediaType": "application/json",
+            },
+            "value": url,
+        }
+        result = self._client.put(f"/entity/customerorder/{order_id}", {"attributes": [attribute]})
+        record(service="moysklad", entity_type="customerorder.attribute", entity_id=result.get("name") or order_id, action="update",
+               after={attribute_id: url}, link=result.get("meta", {}).get("uuidHref"))
+        return result
+
     def _state_meta(self, state_id: str) -> dict[str, Any]:
         return {
             "meta": {

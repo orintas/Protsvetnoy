@@ -69,8 +69,8 @@ def test_sync_warehouse_stock_refreshes_stale_cache_and_pushes_zero_for_missing_
 
 def test_known_warehouses_map_to_the_same_stores_yandex_market_uses(tmp_path):
     from sync_service.yandex_market_order_sync import CAMPAIGN_STORES
-    mall_store_ids = set(OZON_WAREHOUSES.values()) & set(CAMPAIGN_STORES.values())
-    assert len(mall_store_ids) == 4  # the 4 shared malls; the 5th OZON warehouse (main) has no Yandex counterpart
+    shared_store_ids = set(OZON_WAREHOUSES.values()) & set(CAMPAIGN_STORES.values())
+    assert len(shared_store_ids) == 5  # the 4 malls plus the main warehouse (Yandex's "Склад ТМ Цветной")
 
 
 def test_sync_warehouse_stock_reports_changes_against_previous_run(tmp_path):

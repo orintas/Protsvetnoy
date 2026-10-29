@@ -65,8 +65,14 @@ class AssortmentCache:
         return datetime.now(timezone.utc) - datetime.fromisoformat(row[0]) > ASSORTMENT_TTL
 
     def replace(self, campaign_id: str, offer_ids: list[str]) -> None:
+        """Also forgets the campaign's last-pushed counts, so the daily
+        assortment refresh doubles as a full baseline push. The diff-only
+        sync otherwise never corrects a count something else overwrote on
+        Market's side — confirmed live 2026-10-29: the K50-Ecom Ozon
+        integration was overwriting every mall's stock nightly at 03:30."""
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.path) as db:
+            db.execute("DELETE FROM stock_state WHERE campaign_id=?", (campaign_id,))
             db.execute("DELETE FROM campaign_offers WHERE campaign_id=?", (campaign_id,))
             db.executemany(
                 "INSERT INTO campaign_offers(campaign_id, offer_id, refreshed_at) VALUES (?,?,?)",

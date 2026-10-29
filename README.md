@@ -219,7 +219,7 @@ Configuration (`.env`):
   (Настройки → API и модули);
 - `YANDEX_MARKET_BUSINESS_ID` — business/cabinet id (`GET /campaigns`);
 - `YANDEX_MARKET_CAMPAIGN_ID` — comma-separated campaign (storefront) ids to
-  sync, e.g. `149179204,149179258,149179260,149179270`. Order fetching is
+  sync, e.g. `149179204,149179258,149179260,149179270,149312579`. Order fetching is
   business-wide (`GET /campaigns` → `/v1/businesses/{id}/orders`) and already
   covers every campaign in one call; this list is only consulted by the
   per-campaign write endpoints (`update_order_status`, `update_stocks`,
@@ -254,7 +254,8 @@ dry-run:
    several similarly-named counterparties in this account; this is the one
    confirmed by INN), sales channel "Яндекс Маркет FBS", and the store
    mapped from `campaignId` in `CAMPAIGN_STORES` (one physical shop per
-   campaign — ТЦ Авиапарк/Саларис/Ривьера/Мега Химки).
+   campaign — ТЦ Авиапарк/Саларис/Ривьера/Мега Химки, plus «Склад ТМ Цветной»
+   → «Основной склад», the regular-FBS warehouse store added 2026-10-29).
 4. Confirm assembly: `update_order_status(status=PROCESSING,
    substatus=READY_TO_SHIP)` — per Market's own docs, this substatus means
    "assembled and ready to ship". Must be `PUT`, not `POST` — `POST` on this
@@ -322,6 +323,20 @@ confirm the endpoint is live; repeated failures on real notifications back
 off from retrying every minute up to hourly, and disable the integration
 after 14 days of being unreachable.
 
+Campaigns listed in `LABEL_LINK_CAMPAIGNS` (`yandex_market_order_sync.py`)
+go through the same pipeline, but send nothing to Telegram (no label, no
+courier or cancellation notices). Instead the MoySklad order's "Ссылка на
+этикетку" field (the same one TopSeller used) links to
+`https://protsvetnoy.us/labels/<campaign>/<order>/<signature>.pdf`, which
+`web` serves by fetching the label from Market on every open — nothing is
+stored. The web interface has no auth, so the HMAC signature (keyed on
+`YANDEX_MARKET_API_KEY`) is what keeps labels (buyer data) from being opened
+by guessing order ids. Market's own label link (`/v2/reports/documents/
+labels/generate`) can't be used instead: it's a presigned S3 URL that
+expires after an hour (confirmed live). This is for the
+main-warehouse store (regular FBS, not express), which prints its labels
+from MoySklad rather than the malls' Telegram chat.
+
 `offerId` in Yandex Market orders matches the MoySklad product `article`/
 `code` directly, so no extra SKU mapping table is required.
 
@@ -380,6 +395,14 @@ campaign's very first sync (and any newly-listed offer picked up by the
 daily assortment refresh) has nothing to diff against, so those are pushed
 as a full baseline and the entry says so explicitly rather than listing
 every offer as "changed".
+
+The daily assortment refresh also forgets the last-pushed counts, so every
+campaign gets a full baseline push once a day. The diff-only sync can't
+otherwise notice a count something else overwrote on Market's side — which
+happened: until 2026-10-29 the K50-Ecom Ozon integration (Market cabinet →
+Интеграции с маркетплейсами) overwrote every mall's stock nightly at 03:30.
+Its stock loading is now switched off in both cabinets; its products/prices
+import is still on in the new one.
 
 ## OZON synchronization
 

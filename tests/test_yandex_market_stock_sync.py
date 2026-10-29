@@ -113,7 +113,10 @@ def test_sync_campaign_stock_sends_nothing_when_nothing_changed(tmp_path):
     assert len(yandex.calls) == 1
 
 
-def test_sync_campaign_stock_reports_zero_as_before_for_a_newly_added_offer(tmp_path):
+def test_daily_assortment_refresh_pushes_a_full_baseline_again(tmp_path):
+    # Something else on Market's side (the K50-Ecom Ozon integration, live
+    # 2026-10-29) can overwrite counts the diff-only sync thinks are current;
+    # the daily refresh re-sending everything is what corrects that.
     cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
 
     yandex = FakeYandex(offers_by_campaign={"149179260": ["RGL02"]})
@@ -126,7 +129,10 @@ def test_sync_campaign_stock_reports_zero_as_before_for_a_newly_added_offer(tmp_
     count, changes = sync_campaign_stock(moysklad_second, yandex, cache, campaign_id="149179260", store_id="store-1")
 
     assert count == 2
-    assert changes == [{"sku": "NEW_SKU", "before": None, "after": 5}]
+    assert changes is None  # baseline, not a diff
+    campaign_id, items = yandex.calls[-1]
+    assert campaign_id == "149179260"
+    assert sorted(items, key=lambda item: item["sku"]) == [{"sku": "NEW_SKU", "count": 5}, {"sku": "RGL02", "count": 3}]
 
 
 def test_sync_campaign_stock_reuses_fresh_cache_without_refetching_assortment(tmp_path):

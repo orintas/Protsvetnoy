@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -73,6 +75,7 @@ CAMPAIGN_STORES: dict[str, str] = {
     "149179258": "0caf123c-6e09-11f0-0a80-00c900243b0d",  # ТЦ Саларис
     "149179260": "e1222420-16f2-11ed-0a80-010b002a9d1c",  # ТЦ Ривьера
     "149179270": "dc9b7c0e-a66d-11eb-0a80-09b9002a05ad",  # ТЦ Мега Химки
+    "149312579": "689a000c-a14e-11e2-9030-001b21d91495",  # Склад ТМ Цветной -> Основной склад
 }
 
 # campaignId -> the campaign's own display name in the Yandex Market seller
@@ -83,6 +86,7 @@ CAMPAIGN_NAMES: dict[str, str] = {
     "149179258": "ТЦ Саларис",
     "149179260": "ТЦ Ривьера",
     "149179270": "ТЦ МЕГА Химки",
+    "149312579": "Склад ТМ Цветной",
 }
 
 # campaignId -> the FBS warehouse id Yandex Market assigned this shop
@@ -95,7 +99,37 @@ CAMPAIGN_WAREHOUSES: dict[str, int] = {
     "149179258": 2346756,  # ТЦ Саларис
     "149179260": 2346759,  # ТЦ Ривьера
     "149179270": 2346789,  # ТЦ МЕГА Химки
+    "149312579": 2501356,  # Склад ТМ Цветной
 }
+
+# Campaigns whose orders go through the full pipeline (MoySklad order,
+# assembly confirmation, status mirroring, stock sync) but send nothing to
+# Telegram — no label, no courier or cancellation notices. Instead the
+# MoySklad order's "Ссылка на этикетку" field links to web.py's /labels/
+# route, which fetches the label from Market live on every open (nothing is
+# stored here). For the main-warehouse store (regular FBS, not express): the
+# warehouse prints labels from MoySklad, and the Telegram label chat is the
+# malls'. Market's own label link (via /v2/reports/documents/labels) can't
+# be used instead: it's a presigned S3 URL that expires after an hour.
+LABEL_LINK_CAMPAIGNS: set[str] = {"149312579"}  # Склад ТМ Цветной
+
+LABEL_LINK_ATTRIBUTE_ID = "243f718d-4789-11ec-0a80-0041000a7e14"  # customerorder "Ссылка на этикетку"
+LABELS_BASE_URL = "https://protsvetnoy.us/labels"
+
+
+def labels_to_telegram(campaign_id: object) -> bool:
+    return str(campaign_id) not in LABEL_LINK_CAMPAIGNS
+
+
+def label_link_signature(campaign_id: object, order_id: object, secret: str) -> str:
+    """The web interface has no auth, so this is what keeps a buyer's label
+    from being opened by guessing order ids. Keyed on the Yandex Market API
+    key: whoever holds it can fetch labels anyway."""
+    return hmac.new(secret.encode(), f"{campaign_id}:{order_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def label_link_url(campaign_id: object, order_id: object, secret: str) -> str:
+    return f"{LABELS_BASE_URL}/{campaign_id}/{order_id}/{label_link_signature(campaign_id, order_id, secret)}.pdf"
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -138,13 +172,24 @@ def _send_label(
     campaign_id: int,
     items: list[dict[str, Any]],
     yandex: YandexMarketClient,
+    moysklad: MoySkladClient,
     telegram: TelegramClient | None,
     telegram_chat_id: str,
     log: YandexMarketSyncLog,
     external_code: str,
+    label_link_secret: str,
 ) -> bool:
     """Returns whether the label was actually sent (False only for the
-    "Telegram isn't configured" case — a real send failure raises instead)."""
+    "Telegram isn't configured" case — a real send failure raises instead).
+    For LABEL_LINK_CAMPAIGNS "sent" means linked from the MoySklad order."""
+    if not labels_to_telegram(campaign_id):
+        order = moysklad.customer_order_by_external_code(external_code)
+        if order is None:
+            raise RuntimeError("заказ не найден в МойСклад")
+        url = label_link_url(campaign_id, order_id, label_link_secret)
+        moysklad.update_customer_order_link_attribute(str(order["id"]), LABEL_LINK_ATTRIBUTE_ID, url)
+        log.add("label_sent", "success", f"Заказ {order_id}: этикетка сохранена ссылкой в МойСклад", external_code, {"url": url, **moysklad_link_fields(order, f"Заказ {order_id}")})
+        return True
     label_pdf = yandex.get_order_label(order_id, campaign_id=str(campaign_id))
     if telegram is not None and telegram_chat_id:
         store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
@@ -174,6 +219,7 @@ def process_new_order(
     telegram: TelegramClient | None,
     telegram_chat_id: str,
     log: YandexMarketSyncLog,
+    label_link_secret: str = "",
 ) -> None:
     """Create the MoySklad order, confirm assembly, and push the label.
 
@@ -239,7 +285,7 @@ def process_new_order(
             yandex.update_order_status(order_id, campaign_id=str(campaign_id), status="PROCESSING", substatus="READY_TO_SHIP")
             log.add("assembly_confirmed", "success", f"Заказ {order_id}: сборка подтверждена на Яндекс.Маркете", external_code)
 
-        _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+        _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, moysklad=moysklad, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code, label_link_secret=label_link_secret)
 
 
 def retry_label_if_missing(
@@ -251,6 +297,7 @@ def retry_label_if_missing(
     telegram: TelegramClient | None,
     telegram_chat_id: str,
     log: YandexMarketSyncLog,
+    label_link_secret: str = "",
 ) -> None:
     """Best-effort nudge, called alongside every delivery-status update: if
     the order exists in MoySklad but its label was never confirmed sent (the
@@ -280,7 +327,7 @@ def retry_label_if_missing(
             if order is None:
                 raise RuntimeError("не удалось получить заказ из Яндекс.Маркета")
             items = order.get("items") or []
-            sent = _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code)
+            sent = _send_label(order_id=order_id, campaign_id=campaign_id, items=items, yandex=yandex, moysklad=moysklad, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, external_code=external_code, label_link_secret=label_link_secret)
             if not sent:
                 raise RuntimeError("Telegram не настроен")
         except Exception as error:
@@ -354,7 +401,7 @@ def notify_courier_arrived(
     before either send commits, notifying Telegram twice."""
     if substatus != COURIER_ARRIVED_SUBSTATUS:
         return
-    if telegram is None or not telegram_chat_id:
+    if telegram is None or not telegram_chat_id or not labels_to_telegram(campaign_id):
         return
     with yandex_market_order_pipeline:
         external_code = str(order_id)
@@ -436,8 +483,13 @@ def handle_order_cancelled(
     step — every redelivery sent a second cancellation notice.
     """
     external_code = str(order_id)
+    notify = telegram is not None and bool(telegram_chat_id) and labels_to_telegram(campaign_id)
     with yandex_market_order_pipeline:
         if log.has_success("cancel_notified", external_code):
+            return
+        # Without a Telegram notice there's no "cancel_notified" row to
+        # guard a redelivered webhook, so the state change itself is the guard.
+        if not notify and log.has_success("order_cancelled", external_code):
             return
         reason = _cancel_reason_text(substatus)
         order = moysklad.customer_order_by_external_code(external_code)
@@ -451,7 +503,7 @@ def handle_order_cancelled(
             if substatus in SHOP_FAULT_SUBSTATUSES:
                 loss_line = _create_loss_for_cancelled_order(moysklad=moysklad, order=order, campaign_id=campaign_id, order_id=order_id, log=log, external_code=external_code)
 
-        if telegram is not None and telegram_chat_id:
+        if notify:
             store_name = CAMPAIGN_NAMES.get(str(campaign_id), str(campaign_id))
             text = f"❌ Заказ №{order_id} ({store_name}) отменён.\nПричина: {reason}"
             if loss_line:

@@ -391,3 +391,61 @@ def test_compare_stream_reports_a_running_count_as_pages_arrive(monkeypatch):
     assert moysklad_counts == [0, 1, 2]
     assert novicloud_counts == [0, 1, 2, 3]
     assert events[-1]["stage"] == "done"
+
+
+def _get(path):
+    captured = {}
+
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = dict(headers)
+
+    body = b"".join(application({"PATH_INFO": path, "QUERY_STRING": "", "REQUEST_METHOD": "GET"}, start_response))
+    return captured, body
+
+
+
+class _FakeLabelYandex:
+    calls = []
+
+    def __init__(self, **kwargs):
+        pass
+
+    def get_order_label(self, order_id, *, campaign_id):
+        self.calls.append((order_id, campaign_id))
+        return b"%PDF-fake"
+
+    def close(self):
+        pass
+
+
+def _label_route(monkeypatch):
+    from sync_service.yandex_market_order_sync import label_link_url
+
+    monkeypatch.setenv("YANDEX_MARKET_API_KEY", "key")
+    monkeypatch.setattr(web_module, "LABEL_LINK_CAMPAIGNS", {"555"})
+    monkeypatch.setattr(web_module, "YandexMarketClient", _FakeLabelYandex)
+    _FakeLabelYandex.calls = []
+    return label_link_url(555, 999, "key").removeprefix("https://protsvetnoy.us")
+
+
+def test_label_route_fetches_the_label_from_market_for_a_signed_link(monkeypatch):
+    path = _label_route(monkeypatch)
+
+    captured, body = _get(path)
+
+    assert captured["status"] == "200 OK"
+    assert captured["headers"]["Content-Type"] == "application/pdf"
+    assert body == b"%PDF-fake"
+    assert _FakeLabelYandex.calls == [(999, "555")]
+
+
+def test_label_route_rejects_bad_signatures_and_other_campaigns(monkeypatch):
+    from sync_service.yandex_market_order_sync import label_link_url
+
+    path = _label_route(monkeypatch)
+    other_campaign = label_link_url(149179204, 999, "key").removeprefix("https://protsvetnoy.us")
+    for bad in (path.replace("/999/", "/998/"), other_campaign, "/labels/../secret.pdf"):
+        captured, _ = _get(bad)
+        assert captured["status"] == "404 Not Found", bad
+    assert _FakeLabelYandex.calls == []
