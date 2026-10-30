@@ -97,8 +97,10 @@ class AssortmentCache:
 # Market's API lists no offers at all for a campaign still being onboarded,
 # yet onboarding itself waits on stock being sent for those very offers
 # ("Передайте остатки") — confirmed live 2026-10-30 for «Склад ТМ Цветной»,
-# whose stock PUT is accepted while its offer list is still empty. Used
-# only while the campaign's own list is empty.
+# whose stock PUT is accepted while its offer list is still empty. Merged
+# with the campaign's own list rather than used only when that's empty:
+# an offer shows up there as soon as it's been sent stock, so after one
+# push the own list holds just that offer while the rest still wait.
 ASSORTMENT_DONORS: dict[str, str] = {
     "149312579": "149179204",  # Склад ТМ Цветной <- ТМ Авиапарк
 }
@@ -131,8 +133,8 @@ def sync_campaign_stock(
     if cache.is_stale(campaign_id):
         offer_ids = yandex.campaign_offers(campaign_id)
         donor = ASSORTMENT_DONORS.get(campaign_id)
-        if not offer_ids and donor:
-            offer_ids = yandex.campaign_offers(donor)
+        if donor:
+            offer_ids = sorted(set(offer_ids) | set(yandex.campaign_offers(donor)))
         cache.replace(campaign_id, offer_ids)
     offer_ids = cache.offer_ids(campaign_id)
 

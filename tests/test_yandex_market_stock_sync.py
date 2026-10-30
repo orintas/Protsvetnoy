@@ -232,19 +232,24 @@ def test_run_once_logs_a_fresh_entry_every_call_without_being_deduplicated(tmp_p
 
     assert len(log.recent(limit=1000)) == len(CAMPAIGN_STORES) * 2
     # second run reused the now-fresh cache instead of refetching the assortment
-    assert len(yandex.campaign_offers_calls) == len(CAMPAIGN_STORES)
+    # (one extra fetch per campaign that also pulls its donor's assortment)
+    from sync_service.yandex_market_stock_sync import ASSORTMENT_DONORS
+    assert len(yandex.campaign_offers_calls) == len(CAMPAIGN_STORES) + len(ASSORTMENT_DONORS)
 
 
-def test_campaign_with_no_offers_yet_borrows_its_donor_assortment(tmp_path, monkeypatch):
+def test_campaign_with_a_donor_gets_its_own_and_the_donor_assortment(tmp_path, monkeypatch):
     import sync_service.yandex_market_stock_sync as mod
 
     monkeypatch.setattr(mod, "ASSORTMENT_DONORS", {"NEW": "149179204"})
-    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
-    yandex = FakeYandex(offers_by_campaign={"NEW": [], "149179204": ["RGL02"]})
-    moysklad = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 4.0}]})
     monkeypatch.setitem(mod.CAMPAIGN_WAREHOUSES, "NEW", 1)
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+    # Market lists an offer for a not-yet-live campaign only once it's been sent stock
+    yandex = FakeYandex(offers_by_campaign={"NEW": ["LC047"], "149179204": ["LC047", "RGL02"]})
+    moysklad = FakeMoySklad(rows_by_store={"store-1": [{"code": "LC047", "quantity": 30.0}, {"code": "RGL02", "quantity": 4.0}]})
 
     count, _ = sync_campaign_stock(moysklad, yandex, cache, campaign_id="NEW", store_id="store-1")
 
-    assert count == 1
-    assert yandex.calls == [("NEW", [{"sku": "RGL02", "count": 4}])]
+    assert count == 2
+    campaign_id, items = yandex.calls[-1]
+    assert campaign_id == "NEW"
+    assert sorted(items, key=lambda item: item["sku"]) == [{"sku": "LC047", "count": 30}, {"sku": "RGL02", "count": 4}]
