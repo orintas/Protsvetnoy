@@ -93,6 +93,17 @@ class AssortmentCache:
             )
 
 
+# campaignId -> the campaign its assortment was copied from at creation.
+# Market's API lists no offers at all for a campaign still being onboarded,
+# yet onboarding itself waits on stock being sent for those very offers
+# ("Передайте остатки") — confirmed live 2026-10-30 for «Склад ТМ Цветной»,
+# whose stock PUT is accepted while its offer list is still empty. Used
+# only while the campaign's own list is empty.
+ASSORTMENT_DONORS: dict[str, str] = {
+    "149312579": "149179204",  # Склад ТМ Цветной <- ТМ Авиапарк
+}
+
+
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
@@ -118,7 +129,11 @@ def sync_campaign_stock(
     sync, when nothing has been compared yet.
     """
     if cache.is_stale(campaign_id):
-        cache.replace(campaign_id, yandex.campaign_offers(campaign_id))
+        offer_ids = yandex.campaign_offers(campaign_id)
+        donor = ASSORTMENT_DONORS.get(campaign_id)
+        if not offer_ids and donor:
+            offer_ids = yandex.campaign_offers(donor)
+        cache.replace(campaign_id, offer_ids)
     offer_ids = cache.offer_ids(campaign_id)
 
     rows = moysklad.stock_by_store(store_id)
