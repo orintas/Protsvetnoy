@@ -34,6 +34,7 @@ GROUP_ID = "08e6b024-d269-11e4-90a2-8ecb0004d9d2"  # "Основной"
 DELIVERING_STATE_ID = "ea763d96-9bb8-11ed-0a80-0076000cbaed"  # "Доставляется"
 COMPLETED_STATE_ID = "8e499530-ac67-11e4-7a40-e89700075e01"  # "Выполнен"
 CANCELLED_STATE_ID = "ad2312d4-a7f7-11e2-fb80-001b21d91495"  # "Отменен" — stateType "Unsuccessful", releases the reserve automatically
+TO_SHIP_STATE_ID = "dd675d83-a396-11e2-c56e-001b21d91495"  # "Отгружать"
 
 LABEL_RETRY_KIND = "label_retry_error"
 MAX_LABEL_RETRIES = 3
@@ -115,6 +116,14 @@ LABEL_LINK_CAMPAIGNS: set[str] = {"149312579"}  # Склад ТМ Цветной
 
 LABEL_LINK_ATTRIBUTE_ID = "243f718d-4789-11ec-0a80-0041000a7e14"  # customerorder "Ссылка на этикетку"
 LABELS_BASE_URL = "https://protsvetnoy.us/labels"
+
+
+# campaignId -> the MoySklad state a new order starts in (MoySklad's own
+# default, "Новый", otherwise). Per explicit request: warehouse orders go
+# straight to "Отгружать", since assembly is already confirmed on Market.
+CAMPAIGN_INITIAL_STATES: dict[str, str] = {
+    "149312579": TO_SHIP_STATE_ID,  # Склад ТМ Цветной
+}
 
 
 def labels_to_telegram(campaign_id: object) -> bool:
@@ -279,6 +288,7 @@ def process_new_order(
                 sales_channel_id=SALES_CHANNEL_ID,
                 owner_id=OWNER_EMPLOYEE_ID,
                 group_id=GROUP_ID,
+                state_id=CAMPAIGN_INITIAL_STATES.get(str(campaign_id)),
             )
             log.add("order_created", "success", f"Заказ {order_id}: создан в МойСклад ({len(positions)} позиций)", external_code, {**order, **moysklad_link_fields(created_order, f"Заказ {order_id}")})
 

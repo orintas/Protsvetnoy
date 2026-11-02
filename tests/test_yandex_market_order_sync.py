@@ -627,3 +627,13 @@ def test_label_link_campaign_gets_no_courier_notice(tmp_path, monkeypatch):
     telegram = FakeTelegram()
     notify_courier_arrived(order_id=999, campaign_id=149179260, status="PROCESSING", substatus="COURIER_ARRIVED_TO_SENDER", telegram=telegram, telegram_chat_id="chat", log=log)
     assert telegram.messages == []
+
+
+def test_warehouse_order_starts_in_to_ship_state_and_mall_order_in_default(tmp_path):
+    from sync_service.yandex_market_order_sync import TO_SHIP_STATE_ID
+
+    for campaign_id, expected in ((149312579, TO_SHIP_STATE_ID), (149179260, None)):
+        log = YandexMarketSyncLog(str(tmp_path / f"ym-{campaign_id}.sqlite3"))
+        moysklad = FakeMoySkladWithLink(products={"RGL02": {"meta": {"href": "x"}}})
+        process_new_order(order_id=999, campaign_id=campaign_id, moysklad=moysklad, yandex=FakeYandex(order=_order(campaign_id=str(campaign_id))), telegram=None, telegram_chat_id="", log=log, label_link_secret="key")
+        assert moysklad.created["state_id"] == expected
