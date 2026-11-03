@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import gzip
 import hmac
 import re
 import threading
 from datetime import datetime, timezone
 from html import escape
 from json import dumps, loads
+from pathlib import Path
 from socketserver import ThreadingMixIn
 from time import monotonic
 from typing import Any
@@ -33,6 +35,8 @@ from .shopify_sync import ShopifySyncLog
 from .shopify_warehouses import ShopifyWarehouseConfig, available_warehouses
 from .sync_log import SyncLog
 from .telegram_client import TelegramClient
+from .tilda_order_sync import TildaOrderQueue, has_valid_key, is_test_request, order_id_of, parse_webhook_body, process_queued, redact_key
+from .tilda_stock_sync import STOCK_JSON_PATH
 from .yandex_market import YandexMarketClient
 from .yandex_market_order_sync import LABEL_LINK_CAMPAIGNS, handle_order_cancelled, label_link_signature, notify_courier_arrived, process_new_order, retry_label_if_missing, sync_order_delivery_state
 from .yandex_market_sync import YandexMarketSyncLog
@@ -406,6 +410,86 @@ def _planfix_new_goods_webhook(environ, start_response):
     return [dumps({"created": created_ids}, ensure_ascii=False).encode("utf-8")]
 
 
+SITE_ORIGINS = ("https://protsvetnoy.com", "https://www.protsvetnoy.com")
+
+
+def _site_stock_json(environ, start_response):
+    """Per-store availability for the site's own scripts (card "В наличии в
+    магазинах", cart pickup options) — public, like the webhooks. Served
+    from the file the tilda-sync-worker writes every 10 minutes, never from
+    MoySklad per request."""
+    try:
+        body = Path(STOCK_JSON_PATH).read_bytes()
+    except FileNotFoundError:
+        start_response("503 Service Unavailable", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"stock snapshot not ready"]
+    origin = environ.get("HTTP_ORIGIN", "")
+    headers = [
+        ("Content-Type", "application/json; charset=utf-8"),
+        ("Access-Control-Allow-Origin", origin if origin in SITE_ORIGINS else SITE_ORIGINS[0]),
+        ("Cache-Control", "public, max-age=60"),
+        ("Vary", "Origin, Accept-Encoding"),
+    ]
+    if "gzip" in environ.get("HTTP_ACCEPT_ENCODING", ""):
+        body = gzip.compress(body)
+        headers.append(("Content-Encoding", "gzip"))
+    headers.append(("Content-Length", str(len(body))))
+    start_response("200 OK", headers)
+    return [b"" if environ.get("REQUEST_METHOD") == "HEAD" else body]
+
+
+def _tilda_order_webhook(environ, start_response):
+    """Tilda's "Webhook" data receiver on the cart, set to send only after a
+    successful payment — so every order here is already paid and must not
+    be lost: it's queued on disk before Tilda gets its 200 (Tilda wants an
+    answer within 5 s) and processed in a background thread; the
+    tilda-sync-worker retries whatever didn't finish (see tilda_order_sync).
+
+    Tilda's connection test (test=test) is answered 200 without a key check
+    — it has no side effects, and Tilda won't save the receiver otherwise.
+    The field and header names of every request are logged (never their
+    values), to record how Tilda actually passes the API key."""
+    settings = Settings.from_env()
+    log = YandexMarketSyncLog("data/tilda_sync.sqlite3")
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+    except ValueError:
+        length = 0
+    raw_body = environ["wsgi.input"].read(length) if length else b""
+    try:
+        data = parse_webhook_body(raw_body, environ.get("CONTENT_TYPE", ""))
+    except Exception as error:
+        ErrorLog().log_exception("tilda_webhook", error, context="Некорректный запрос вебхука Tilda")
+        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"bad request"]
+    headers = {key: value for key, value in environ.items() if key.startswith("HTTP_")}
+    shape = {"content_type": environ.get("CONTENT_TYPE", ""), "fields": sorted(data), "headers": sorted(headers)}
+    key_ok = has_valid_key(data, headers, settings.tilda_webhook_secret)
+    if is_test_request(data):
+        log.add("webhook_test", "success", "Тестовый запрос Tilda — ответ ok" + ("" if key_ok else " (ключ API в запросе не найден)"), None, {**shape, "key_ok": key_ok})
+        start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"ok"]
+    order_id = order_id_of(data)
+    if not key_ok:
+        message = f"Заказ с сайта {order_id or '?'}: вебхук отклонён — неверный ключ API" + ("" if settings.tilda_webhook_secret else " (TILDA_WEBHOOK_SECRET не задан)")
+        log.add("webhook", "error", message, None, shape)
+        ErrorLog().add("tilda_webhook", message)
+        start_response("401 Unauthorized", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"invalid key"]
+    if not order_id:
+        log.add("webhook", "error", "Вебхук Tilda без payment.orderid — заказ не принят", None, {**shape, "payload": redact_key(data, settings.tilda_webhook_secret)})
+        ErrorLog().add("tilda_webhook", "Вебхук Tilda без payment.orderid — подробности в журнале «Сайт»")
+        start_response("400 Bad Request", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"missing payment.orderid"]
+    queue = TildaOrderQueue()
+    is_new = queue.enqueue(order_id, redact_key(data, settings.tilda_webhook_secret))
+    log.add("webhook", "success", f"Заказ {order_id}: получен с сайта" + ("" if is_new else " повторно"), f"{order_id}" if is_new else None, shape)
+    if is_new:
+        threading.Thread(target=process_queued, args=(order_id, settings, queue, log, ErrorLog()), daemon=True).start()
+    start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8")])
+    return [b"ok"]
+
+
 def _ndjson_line(payload: dict) -> bytes:
     return dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -534,6 +618,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="tab-btn" data-tab="ozon" type="button">OZON</button>
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
+<button class="tab-btn" data-tab="site" type="button">Сайт</button>
 <button class="tab-btn" data-tab="planfix" type="button">PlanFix</button>
 <button class="tab-btn" data-tab="reviews" type="button">Отзывы</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
@@ -615,6 +700,11 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Яндекс.Маркет — журнал синхронизации</h2><p style="margin:0">Заказы обрабатываются по вебхуку в боевом режиме: заказ создаётся в МойСклад, сборка подтверждается на Яндекс.Маркете, этикетка отправляется в Telegram. Остатки синхронизируются каждые 10 минут.</p></div><button class="button secondary" id="refresh-ym-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="ym-log-kind" class="field"><option value="">Все типы</option></select><input id="ym-log-search" class="field" placeholder="Поиск по номеру заказа" style="min-width:220px"></div>
 <div id="ym-sync-log" class="log"></div></section>
+</section>
+<section id="tab-site" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Сайт protsvetnoy.com — журнал</h2><p style="margin:0">Каждые 10 минут, круглосуточно: остатки 5 складов из МойСклад → stock.json для сайта и общий остаток в Tilda (CommerceML). Оплаченные заказы приходят вебхуком Tilda и создаются в МойСклад с резервом; уведомление — в Telegram.</p></div><button class="button secondary" id="refresh-site-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="site-log-kind" class="field"><option value="">Все типы</option></select><input id="site-log-search" class="field" placeholder="Поиск по номеру заказа" style="min-width:220px"></div>
+<div id="site-sync-log" class="log"></div></section>
 </section>
 <section id="tab-planfix" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">PlanFix — журнал</h2><p style="margin:0">Два независимых сценария: кнопка «Отправить в МойСклад» на карточке компании создаёт или обновляет контрагента в МойСклад (поиск по сохранённому MoySkladID, затем по email); автоматизация «Запуск подзадач с новинками» по завершении задачи «Установить артикулы новинок» создаёт по одной подзадаче «Проработка продукта» на каждый товар из поля «Товары».</p></div><button class="button secondary" id="refresh-planfix-log" type="button">Обновить</button></div>
@@ -840,10 +930,12 @@ const shopifyKindLabels={catalog_created:'Товар создан',catalog_updat
 createLogSection({target:'shopify-sync-log',endpoint:'/api/shopify-sync-log',kindSelect:'shopify-log-kind',searchInput:'shopify-log-search',refresh:'refresh-shopify-log',kindLabels:shopifyKindLabels,emptyMessage:'Проверок пока не было.'});
 const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков',webhook:'Уведомление OZON',order_created:'Упаковка подтверждена',order_cancelled:'Отправление отменено',order_pipeline_error:'Ошибка заказа',order_error:'Не удалось получить этикетку',label_sent:'Этикетка отправлена'};
 createLogSection({target:'ozon-sync-log',endpoint:'/api/ozon-sync-log',kindSelect:'ozon-log-kind',searchInput:'ozon-log-search',refresh:'refresh-ozon-log',kindLabels:ozonKindLabels,emptyMessage:'Проверок пока не было.'});
+const siteKindLabels={stock_sync:'Остатки',stock_test:'Пробная выгрузка',webhook:'Вебхук заказа',webhook_test:'Тест вебхука',order_created:'Заказ создан',order_missing_products:'Товар не найден',order_notified:'Уведомление',order_error:'Ошибка заказа'};
+createLogSection({target:'site-sync-log',endpoint:'/api/tilda-sync-log',kindSelect:'site-log-kind',searchInput:'site-log-search',refresh:'refresh-site-log',kindLabels:siteKindLabels,emptyMessage:'Событий пока не было.',rowExtra:e=>e.external_id?' · заказ '+escapeHtml(e.external_id):''});
 let allChangesLogEntries=[];
 let changesSearchResults=null;
 let changesSearchTimer=null;
-const changeServiceLabels={moysklad:'МойСклад',yandex_market:'Яндекс.Маркет',ozon:'OZON',shopify:'Shopify',telegram:'Telegram'};
+const changeServiceLabels={moysklad:'МойСклад',yandex_market:'Яндекс.Маркет',ozon:'OZON',shopify:'Shopify',telegram:'Telegram',tilda:'Tilda'};
 const changeActionLabels={create:'Создано',update:'Изменено',send:'Отправлено'};
 async function loadChangesLog(){const target=document.getElementById('changes-log');try{const response=await fetch('/api/change-log');allChangesLogEntries=await response.json();
 const select=document.getElementById('changes-log-service'), current=select.value, services=[...new Set(allChangesLogEntries.map(e=>e.service))].sort();
@@ -1006,6 +1098,17 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
         return _ozon_webhook(environ, start_response)
     if path == "/api/planfix/webhook" and environ.get("REQUEST_METHOD") == "POST":
         return _planfix_webhook(environ, start_response)
+    if path == "/api/site/stock.json" and environ.get("REQUEST_METHOD") in ("GET", "HEAD"):
+        return _site_stock_json(environ, start_response)
+    if path == "/api/tilda/webhook/orders" and environ.get("REQUEST_METHOD") == "POST":
+        return _tilda_order_webhook(environ, start_response)
+    if path == "/api/tilda-sync-log":
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        tilda_log = YandexMarketSyncLog("data/tilda_sync.sqlite3")
+        entries = tilda_log.search(query) if query else tilda_log.recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
     if path == "/api/planfix/webhook/new-goods" and environ.get("REQUEST_METHOD") == "POST":
         return _planfix_new_goods_webhook(environ, start_response)
     if path == "/api/planfix-sync-log":

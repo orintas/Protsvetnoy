@@ -37,6 +37,13 @@ class Settings:
     planfix_api_key: str
     planfix_base_url: str
     planfix_webhook_secret: str
+    tilda_cml_login: str
+    tilda_cml_password: str
+    tilda_cml_url: str
+    tilda_stock_sync_enabled: bool
+    tilda_webhook_secret: str
+    telegram_site_pickup_chat_id: str
+    telegram_site_delivery_chat_id: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
 
@@ -81,6 +88,14 @@ class Settings:
             planfix_api_key=os.getenv("PLANFIX_API_KEY", ""),
             planfix_base_url=os.getenv("PLANFIX_BASE_URL", "").rstrip("/"),
             planfix_webhook_secret=os.getenv("PLANFIX_WEBHOOK_SECRET", ""),
+            tilda_cml_login=os.getenv("TILDA_CML_LOGIN", ""),
+            tilda_cml_password=os.getenv("TILDA_CML_PASSWORD", ""),
+            tilda_cml_url=os.getenv("TILDA_CML_URL", "https://store.tilda.cc/connectors/commerceml/"),
+            tilda_stock_sync_enabled=os.getenv("TILDA_STOCK_SYNC_ENABLED", "false").lower() in {"1", "true", "yes"},
+            tilda_webhook_secret=os.getenv("TILDA_WEBHOOK_SECRET", ""),
+            # Site orders go to the marketplace-label chat unless a chat of their own is set.
+            telegram_site_pickup_chat_id=os.getenv("TELEGRAM_SITE_PICKUP_CHAT_ID") or os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
+            telegram_site_delivery_chat_id=os.getenv("TELEGRAM_SITE_DELIVERY_CHAT_ID") or os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )

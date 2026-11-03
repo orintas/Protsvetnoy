@@ -4,11 +4,12 @@ Project scaffold for:
 
 - reading sales and product data from Novicloud REST API;
 - reading stock data from MoySklad;
+- synchronizing MoySklad stock and paid Tilda orders for protsvetnoy.com;
 - generating the CSV/XLSX import file used by Novicloud.
 
 The repository is prepared for deployment to a Linux VPS. The current CLI
-commands are read-only; the web button for generating import files can be added
-on top of the same clients without exposing API credentials to the browser.
+includes read-only checks and dedicated workers for production syncs. API
+credentials and integration logic stay server-side.
 
 ## Safety
 
@@ -64,8 +65,36 @@ sync-cli novicloud-sales --from 2026-09-01T00:00:00
 sync-cli moysklad-stocks
 ```
 
-The commands only read data. They print a compact summary and do not create or
+These checks only read data. They print a compact summary and do not create or
 change documents.
+
+## Tilda site ↔ MoySklad
+
+The `tilda-sync-worker` writes a per-store stock snapshot from the five Russian
+MoySklad warehouses every 10 minutes and serves it to the storefront at
+`https://protsvetnoy.us/api/site/stock.json`. Available quantities are
+`stock - reserve`; zero-stock products are omitted. The same worker sends
+CommerceML stock updates to Tilda when enabled. It does not update prices;
+configure Tilda's connector to update stock only.
+
+Before enabling regular stock uploads, set `TILDA_CML_LOGIN` to the Tilda
+project ID and `TILDA_CML_PASSWORD` to the CommerceML connector password, then
+send a one-product test and verify it in Tilda:
+
+```bash
+sync-cli tilda-stock-test --code RB003
+```
+
+Only after that succeeds, set `TILDA_STOCK_SYNC_ENABLED=true`. Stock snapshots
+are written even while CommerceML uploads are disabled.
+
+Configure Tilda's paid-order webhook to send requests to
+`https://protsvetnoy.us/api/tilda/webhook/orders` and set its API key to the
+same value as `TILDA_WEBHOOK_SECRET`. Accepted orders are durably queued,
+created in MoySklad with product reservations, and retried if processing
+fails. Notifications go to the marketplaces' label chat (`TELEGRAM_LABEL_CHAT_ID`);
+`TELEGRAM_SITE_PICKUP_CHAT_ID` / `TELEGRAM_SITE_DELIVERY_CHAT_ID` optionally
+route pickup or delivery orders to another chat. All related events appear in the site's dashboard log.
 
 ## Novicloud sales/returns sync (retaildemand / retailsalesreturn)
 

@@ -71,6 +71,21 @@ class MoySkladClient:
             result.extend(page)
         return result
 
+    def products_by_group(self, group_id: str) -> list[dict[str, Any]]:
+        """Non-archived products owned by one MoySklad group (отдел)."""
+        href = f"{self._client.base_url}/entity/group/{group_id}"
+        payload = self._client.get("/entity/product", params={"filter": f"group={href};archived=false", "limit": 1000})
+        result: list[dict[str, Any]] = []
+        while True:
+            rows = payload.get("rows", [])
+            if not isinstance(rows, list):
+                raise ValueError("MoySklad products response has invalid rows")
+            result.extend(row for row in rows if isinstance(row, dict))
+            next_link = payload.get("meta", {}).get("nextHref") if isinstance(payload.get("meta"), dict) else None
+            if not next_link:
+                return result
+            payload = self._client.get_url(str(next_link))
+
     def products_by_category(self, path_name: str) -> list[dict[str, Any]]:
         """Non-archived products in one category (pathName), with images expanded."""
         payload = self._client.get("/entity/product", params={"filter": f"pathName={path_name}", "limit": 1000, "expand": "images"})
@@ -507,8 +522,39 @@ class MoySkladClient:
         rows = payload.get("rows", [])
         return rows[0] if rows and isinstance(rows[0], dict) else None
 
-    def create_counterparty(self, *, name: str, email: str, phone: str, group_id: str) -> dict[str, Any]:
-        body: dict[str, Any] = {"name": name, "email": email, "phone": phone, "group": self._meta("group", group_id)}
+    def counterparty_by_phone(self, phones: list[str]) -> dict[str, Any] | None:
+        """Exact match on any of the given spellings — MoySklad stores phones
+        as typed (+7…, 7…, 8… all occur in this account), so the caller
+        passes every variant; repeating a field in a filter is an OR."""
+        phones = [phone for phone in phones if phone]
+        if not phones:
+            return None
+        payload = self._client.get("/entity/counterparty", params={"filter": ";".join(f"phone={phone}" for phone in phones), "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def sales_channel_by_name(self, name: str) -> dict[str, Any] | None:
+        payload = self._client.get("/entity/saleschannel", params={"filter": f"name={name}", "limit": 1})
+        rows = payload.get("rows", [])
+        return rows[0] if rows and isinstance(rows[0], dict) else None
+
+    def create_sales_channel(self, *, name: str, channel_type: str) -> dict[str, Any]:
+        result = self._client.post("/entity/saleschannel", {"name": name, "type": channel_type})
+        record(service="moysklad", entity_type="saleschannel", entity_id=name, action="create", after={"name": name, "type": channel_type})
+        return result
+
+    def create_counterparty(
+        self, *, name: str, email: str, phone: str, group_id: str, tags: list[str] | None = None, company_type: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name, "group": self._meta("group", group_id)}
+        if email:
+            body["email"] = email
+        if phone:
+            body["phone"] = phone
+        if tags:
+            body["tags"] = tags
+        if company_type:
+            body["companyType"] = company_type
         result = self._client.post("/entity/counterparty", body)
         record(service="moysklad", entity_type="counterparty", entity_id=name, action="create",
                after={"name": name, "email": email, "phone": phone}, link=result.get("meta", {}).get("uuidHref"))

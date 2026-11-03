@@ -245,7 +245,11 @@ def test_run_once_returns_a_result_per_check(tmp_path, monkeypatch):
     import sync_service.health_check as mod
 
     monkeypatch.setattr(mod, "SyncLog", lambda: SyncLog(str(tmp_path / "sync.sqlite3")))
-    monkeypatch.setattr(mod, "YandexMarketSyncLog", lambda: YandexMarketSyncLog(str(tmp_path / "ym.sqlite3")))
+    monkeypatch.setattr(
+        mod,
+        "YandexMarketSyncLog",
+        lambda path=str(tmp_path / "ym.sqlite3"): YandexMarketSyncLog(path),
+    )
     monkeypatch.setattr(mod, "ShopifySyncLog", lambda: ShopifySyncLog(str(tmp_path / "shopify.sqlite3")))
     monkeypatch.setattr(mod, "ShiftCloseLog", lambda: ShiftCloseLog(str(tmp_path / "shift.sqlite3")))
 
@@ -262,7 +266,7 @@ def test_run_once_returns_a_result_per_check(tmp_path, monkeypatch):
     results = run_once(FakeSettings(), state, errors, now=NOW)
 
     names = {r.name for r in results}
-    assert names == {"novicloud_sales", "yandex_market_stock", "shopify_catalog", "shopify_stock", "shift_closer", "shopify_webhook", "ozon_webhook"}
+    assert names == {"novicloud_sales", "yandex_market_stock", "site_stock", "shopify_catalog", "shopify_stock", "shift_closer", "shopify_webhook", "ozon_webhook"}
     # no Shopify/OZON credentials configured in FakeSettings — those two checks are simply not applicable
     assert next(r for r in results if r.name == "shopify_webhook").applicable is False
     assert next(r for r in results if r.name == "ozon_webhook").applicable is False

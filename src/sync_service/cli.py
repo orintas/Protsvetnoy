@@ -39,6 +39,12 @@ def main() -> None:
     subparsers.add_parser("telegram-qa-worker")
     subparsers.add_parser("review-poll-worker")
     subparsers.add_parser("review-reply-worker")
+    subparsers.add_parser("tilda-sync-worker")
+    tilda_test = subparsers.add_parser(
+        "tilda-stock-test",
+        description="Send a CommerceML package with only the given products to Tilda and print each step's answer.",
+    )
+    tilda_test.add_argument("--code", dest="codes", action="append", required=True, help="MoySklad product code, e.g. RB003; can be repeated")
     backfill = subparsers.add_parser(
         "novicloud-shift-backfill",
         description="Split the Novicloud stores' receipts back into one MoySklad shift per day (dry run unless --apply).",
@@ -114,6 +120,19 @@ def main() -> None:
     if args.command == "review-reply-worker":
         from .review_worker import reply_worker as review_reply_worker
         review_reply_worker()
+        return
+    if args.command == "tilda-sync-worker":
+        from .tilda_stock_sync import worker as tilda_worker
+        tilda_worker()
+        return
+    if args.command == "tilda-stock-test":
+        from .tilda_stock_sync import push_test
+        from .yandex_market_sync import YandexMarketSyncLog
+        settings = Settings.from_env()
+        if not (settings.tilda_cml_login and settings.tilda_cml_password):
+            raise SystemExit("TILDA_CML_LOGIN / TILDA_CML_PASSWORD не заданы в .env")
+        for step in push_test(settings, args.codes, YandexMarketSyncLog("data/tilda_sync.sqlite3")):
+            print(f"{step['step']}: {step['answer']}")
         return
     if args.command == "novicloud-shift-backfill":
         from zoneinfo import ZoneInfo

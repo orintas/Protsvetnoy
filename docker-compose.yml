@@ -86,6 +86,16 @@ services:
     command: ["health-check-worker"]
     volumes:
       - sync-data:/app/data
+  tilda-sync-worker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["tilda-sync-worker"]
+    volumes:
+      - sync-data:/app/data
+    depends_on:
+      - telegram-proxy
   telegram-qa-worker:
     build: .
     restart: unless-stopped

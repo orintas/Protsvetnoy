@@ -97,6 +97,14 @@ def check_yandex_market_stock(log: YandexMarketSyncLog, now: datetime) -> CheckR
     return _heartbeat_check("yandex_market_stock", "Остатки Яндекс.Маркет", applicable=applicable, entries=entries, now=now, max_age_minutes=18)
 
 
+def check_site_stock(log: YandexMarketSyncLog, now: datetime) -> CheckResult:
+    """Round the clock, like the worker itself — the site sells at night.
+    Only successful runs count, for the same reason as the Yandex Market
+    check above."""
+    entries = [e for e in log.recent(limit=40) if e["kind"] == "stock_sync" and e["status"] == "success"]
+    return _heartbeat_check("site_stock", "Остатки сайта (Tilda)", applicable=True, entries=entries, now=now, max_age_minutes=30)
+
+
 def check_shopify_catalog(log: ShopifySyncLog, now: datetime) -> CheckResult:
     """Keys off the nightly "catalog_run" summary (always logged as success
     once the full pass completes, see shopify_sync.sync_catalog) rather than
@@ -191,6 +199,7 @@ def run_once(settings: Settings, state: HealthState, errors: ErrorLog, *, now: d
     results = [
         check_novicloud_sales(SyncLog(), now),
         check_yandex_market_stock(YandexMarketSyncLog(), now),
+        check_site_stock(YandexMarketSyncLog("data/tilda_sync.sqlite3"), now),
         check_shopify_catalog(ShopifySyncLog(), now),
         check_shopify_stock(ShopifySyncLog(), now),
         check_shift_closer(ShiftCloseLog(), now),
