@@ -62,9 +62,12 @@ def test_tilda_connection_test_is_answered_ok_without_a_key(site):
 
 
 def test_order_with_a_wrong_key_is_rejected(site):
-    status, _, _ = _post([("payment[orderid]", "T-1"), ("api_key", "wrong")])
+    status, _, _ = _post([("payment[orderid]", "T-1"), ("payment[amount]", "990"), ("api_key", "wrong")])
     assert status == "401 Unauthorized"
     assert site.started == []
+    # kept in the journal, so a paid order sent without the key isn't lost
+    entry = web_module.YandexMarketSyncLog("data/tilda_sync.sqlite3").recent()[0]
+    assert json.loads(entry["payload"])["payload"]["payment"] == {"orderid": "T-1", "amount": "990"}
 
 
 def test_paid_order_is_queued_once_and_processed_in_the_background(site):

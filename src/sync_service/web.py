@@ -472,7 +472,9 @@ def _tilda_order_webhook(environ, start_response):
     order_id = order_id_of(data)
     if not key_ok:
         message = f"Заказ с сайта {order_id or '?'}: вебхук отклонён — неверный ключ API" + ("" if settings.tilda_webhook_secret else " (TILDA_WEBHOOK_SECRET не задан)")
-        log.add("webhook", "error", message, None, shape)
+        # The order itself is kept: if Tilda ever sends a paid order without
+        # the key (a receiver misconfigured), it can still be entered by hand.
+        log.add("webhook", "error", message, None, {**shape, "payload": redact_key(data, settings.tilda_webhook_secret)})
         ErrorLog().add("tilda_webhook", message)
         start_response("401 Unauthorized", [("Content-Type", "text/plain; charset=utf-8")])
         return [b"invalid key"]
