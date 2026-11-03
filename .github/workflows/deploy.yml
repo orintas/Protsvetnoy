@@ -68,4 +68,7 @@ jobs:
             grep -q '^PLANFIX_WEBHOOK_SECRET=' .env || echo 'PLANFIX_WEBHOOK_SECRET=' >> .env
             sed -i "s#^PLANFIX_WEBHOOK_SECRET=.*#PLANFIX_WEBHOOK_SECRET=${{ secrets.PLANFIX_WEBHOOK_SECRET }}#" .env
             docker compose up -d --build --remove-orphans
+            # The Caddyfile is a single-file bind mount: git replaces the file, so
+            # the running container keeps the old copy until it is restarted.
+            docker compose restart caddy
             docker image prune -f

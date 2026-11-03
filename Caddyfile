@@ -1,3 +1,8 @@
 protsvetnoy.us {
 	reverse_proxy web:8080
 }
+
+# DiamondPaintingProgram (/opt/almazshema), joins this project's network
+almazshema.ru {
+	reverse_proxy almazshema-web:4000
+}
