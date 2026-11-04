@@ -673,3 +673,24 @@ def test_pending_postings_migration_is_a_noop_on_a_second_open(tmp_path):
 
     pending_numbers = {row["posting_number"] for row in queue.pending()}
     assert pending_numbers == {"unrelated-still-pending"}  # nothing re-requeued a second time
+
+
+def test_run_once_tells_the_chat_when_the_label_never_came(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_registration", available_actions=["label_download"])},
+                    fail_label_with={"X-1": 'POST /v2/posting/fbs/package-label failed with HTTP 429: {"code":8}'})
+    telegram = FakeTelegram()
+    _patched(monkeypatch, ozon, telegram)
+
+    for _ in range(MAX_ATTEMPTS + 1):
+        run_once(FakeSettings(), queue, log, errors)
+
+    # 429 is retried quietly: one error for the whole posting, not one per tick
+    assert len(errors.recent()) == 1
+    assert "429" in errors.recent()[0]["message"]
+    chat_id, text, _, _ = telegram.messages[-1]
+    assert chat_id == "-100123"
+    assert "ТЦ Саларис" in text and "X-1" in text and "скачайте" in text and "LE148 × 1" in text

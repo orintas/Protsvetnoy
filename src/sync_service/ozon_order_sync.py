@@ -233,6 +233,16 @@ def _log_error(log: YandexMarketSyncLog, errors: ErrorLog, kind: str, message: s
     errors.add("ozon_order_sync", message)
 
 
+class LabelRateLimited(Exception):
+    """OZON answered the label download with HTTP 429. Seen live
+    2026-11-03/04: only package-label (old and new endpoints alike) kept
+    answering 429 to even a single request for hours, while every other
+    method of the same account worked — OZON's limits are per seller
+    account, so something else using this account's API is taking all of
+    that method's quota. Retried like "not ready", without an error row on
+    every tick (it used to log 40 per posting)."""
+
+
 def _send_label(
     *,
     posting_number: str,
@@ -250,6 +260,8 @@ def _send_label(
     except ApiError as error:
         if "ready" in str(error).lower():
             return False
+        if "HTTP 429" in str(error):
+            raise LabelRateLimited() from error
         raise
 
     store_name = str((details.get("delivery_method") or {}).get("warehouse") or "OZON")
@@ -269,6 +281,27 @@ def _send_label(
         return True
     _log_error(log, errors, "label_sent", f"Отправление {posting_number}: Telegram не настроен, этикетка не отправлена", posting_number)
     return True  # nothing left to retry — the config problem won't fix itself on a re-attempt
+
+
+def _notify_label_failed(posting_number: str, reason: str, ozon: OzonClient, telegram: TelegramClient | None, telegram_chat_id: str, log: YandexMarketSyncLog, errors: ErrorLog) -> None:
+    """When the label never came, the store waiting on it is told so in the
+    same chat — before this, giving up was silent and staff kept asking
+    there why no label had arrived (2026-11-04, ТЦ Саларис / Авиапарк)."""
+    if telegram is None or not telegram_chat_id:
+        return
+    try:
+        details = ozon.posting_details(posting_number) or {}
+    except Exception:
+        details = {}
+    store_name = str((details.get("delivery_method") or {}).get("warehouse") or "OZON")
+    lines = [f"⚠️ OZON, {store_name}", f"Заказ №{posting_number}: этикетку не удалось получить автоматически — скачайте её в личном кабинете OZON."]
+    lines += [f"{p.get('offer_id')} × {p.get('quantity', 1)}" for p in details.get("products", [])]
+    lines.append(f"Причина: {reason}")
+    try:
+        telegram.send_message(chat_id=telegram_chat_id, text="\n".join(lines))
+        log.add("label_failed_notice", "success", f"Отправление {posting_number}: в Telegram сообщено, что этикетку нужно скачать вручную", posting_number)
+    except Exception as error:
+        _log_error(log, errors, "order_pipeline_error", f"Отправление {posting_number}: не удалось сообщить в Telegram об отсутствии этикетки: {error}", posting_number)
 
 
 def _update_moysklad_description(posting_number: str, details: dict[str, Any], moysklad: MoySkladClient, queue: PendingPostings, log: YandexMarketSyncLog) -> None:
@@ -395,6 +428,7 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
         message = f"Отправление {posting_number}: этикетка не появилась за {MAX_ATTEMPTS} попыток, дальше не пробуем. Последний известный статус: {last_status}"
         _log_error(log, errors, "order_error", message, posting_number)
         queue.mark_done(posting_number)
+        _notify_label_failed(posting_number, last_status, ozon, telegram, telegram_chat_id, log, errors)
         return
 
     details = ozon.posting_details(posting_number)
@@ -452,7 +486,12 @@ def _process_one(row: dict[str, Any], queue: PendingPostings, ozon: OzonClient, 
     if not label_already_sent:
         label_downloadable = LABEL_ACTION in (details.get("available_actions") or [])
         if status in LABEL_READY_STATUSES or already_shipped or label_downloadable:
-            if _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors):
+            try:
+                sent = _send_label(posting_number=posting_number, details=details, ozon=ozon, telegram=telegram, telegram_chat_id=telegram_chat_id, log=log, errors=errors)
+            except LabelRateLimited:
+                queue.update_last_status(posting_number, f"{status}; OZON отвечает на запрос этикетки 429 (лимит запросов аккаунта)")
+                return
+            if sent:
                 queue.mark_label_sent(posting_number)
                 # Keep polling — the courier hasn't necessarily shown up yet
                 # (label readiness and courier pickup are different points
