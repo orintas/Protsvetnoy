@@ -106,6 +106,11 @@ ASSORTMENT_DONORS: dict[str, str] = {
 }
 
 
+# Campaigns already moved to the business-level stock method, one store first
+# so a real sync can be compared with MoySklad before the rest follow.
+WAREHOUSE_STOCKS_CAMPAIGNS = {"149179258"}  # ТЦ Саларис
+
+
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
@@ -155,7 +160,10 @@ def sync_campaign_stock(
     items = [{"sku": offer_id, "count": count} for offer_id, count in to_push.items()]
     warehouse_id = CAMPAIGN_WAREHOUSES[campaign_id]
     for chunk in _chunks(items, MAX_SKUS_PER_REQUEST):
-        yandex.update_stocks(chunk, campaign_id=campaign_id, warehouse_id=warehouse_id)
+        if campaign_id in WAREHOUSE_STOCKS_CAMPAIGNS:
+            yandex.update_warehouse_stocks(chunk, warehouse_id=warehouse_id)
+        else:
+            yandex.update_stocks(chunk, campaign_id=campaign_id, warehouse_id=warehouse_id)
 
     if changes:
         for change in changes:

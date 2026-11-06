@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 
 import httpx
@@ -75,6 +76,20 @@ def test_update_stocks_builds_sku_payload_and_uses_put():
     assert b'"warehouseId":2346789' in body
     assert b'"type":"FIT"' in body
     assert b'"count":5' in body
+
+
+def test_update_warehouse_stocks_posts_sku_items_to_the_business():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"status": "OK"})
+
+    client = _client_with_handler(handler)
+    client.update_warehouse_stocks([{"sku": "ABC", "count": 5}], warehouse_id=2346756)
+    assert requests[0].method == "POST"
+    assert requests[0].url.path.endswith("/offers/stocks/update") and "/v3/businesses/" in requests[0].url.path
+    assert json.loads(requests[0].content) == {"skuItems": [{"sku": "ABC", "partnerWarehouseId": 2346756, "count": 5}]}
 
 
 def test_update_order_status_sends_status_and_substatus():

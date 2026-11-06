@@ -120,6 +120,17 @@ class YandexMarketClient:
         ]
         return self._client.put(f"/v2/campaigns/{campaign_id}/offers/stocks", {"skus": skus})
 
+    def update_warehouse_stocks(self, items: list[dict[str, Any]], *, warehouse_id: int) -> dict[str, Any]:
+        """items: [{"sku": ..., "count": int}, ...] (max 2000).
+
+        The method Market documents for cabinets without warehouse groups,
+        which this one is (5 warehouses, no groups). `count` lands in the
+        same FIT value the campaign-level PUT sets — read back through
+        POST /v3/businesses/{id}/offers/stocks, confirmed live 2026-11-06.
+        """
+        sku_items = [{"sku": item["sku"], "partnerWarehouseId": warehouse_id, "count": item["count"]} for item in items]
+        return self._client.post(f"/v3/businesses/{self._business_id}/offers/stocks/update", {"skuItems": sku_items})
+
     def update_prices(self, items: list[dict[str, Any]], *, campaign_id: str) -> dict[str, Any]:
         """items: [{"offer_id": ..., "value": float, "currency_id": "RUR", "vat": int_optional}, ...] (max 2000)."""
         offers = []
