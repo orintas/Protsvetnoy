@@ -23,11 +23,6 @@ class YandexMarketClient:
     def close(self) -> None:
         self._client.close()
 
-    def campaigns(self) -> list[dict[str, Any]]:
-        payload = self._client.get("/campaigns")
-        rows = payload.get("campaigns", [])
-        return [row for row in rows if isinstance(row, dict)]
-
     def orders(
         self,
         *,
@@ -140,27 +135,6 @@ class YandexMarketClient:
     def get_order_label(self, order_id: int, *, campaign_id: str) -> bytes:
         """PDF with the shipping label(s) for every box in the order."""
         return self._client.get_bytes(f"/v2/campaigns/{campaign_id}/orders/{order_id}/delivery/labels")
-
-    def returns(
-        self,
-        *,
-        campaign_id: str,
-        from_date: str | None = None,
-        to_date: str | None = None,
-        return_type: str | None = None,
-        page_token: str | None = None,
-        limit: int = 50,
-    ) -> dict[str, Any]:
-        params: dict[str, Any] = {"limit": limit}
-        if from_date:
-            params["fromDate"] = from_date
-        if to_date:
-            params["toDate"] = to_date
-        if return_type:
-            params["type"] = return_type
-        if page_token:
-            params["page_token"] = page_token
-        return self._client.get(f"/v2/campaigns/{campaign_id}/returns", params=params)
 
     def feedbacks_needing_reaction(self, limit: int = 50) -> list[dict[str, Any]]:
         """Product reviews still waiting for a seller reply (reactionStatus

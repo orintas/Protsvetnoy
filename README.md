@@ -229,7 +229,7 @@ Make, only a webhook trigger and two constants are still wired up.
 ## Yandex Market synchronization (replacing TopSeller's connector)
 
 `src/sync_service/yandex_market.py` is a Partner API client (`Api-Key` auth,
-orders/status/stocks/prices/returns endpoints). New orders are handled live
+orders/status/stocks/prices endpoints). New orders are handled live
 by the push-notification webhook (below), which creates the `customerorder`
 in MoySklad, confirms assembly, and sends the label — this is the only path
 for orders now. There used to also be a `yandex-market-sync-worker` service
@@ -252,7 +252,7 @@ Configuration (`.env`):
   business-wide (`GET /campaigns` → `/v1/businesses/{id}/orders`) and already
   covers every campaign in one call; this list is only consulted by the
   per-campaign write endpoints (`update_order_status`, `update_stocks`,
-  `update_prices`, `returns`), which take `campaign_id` as an explicit
+  `update_prices`), which take `campaign_id` as an explicit
   argument rather than being fixed per client instance;
 - `YANDEX_MARKET_BASE_URL` — defaults to `https://api.partner.market.yandex.ru`.
 

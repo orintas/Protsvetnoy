@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -183,24 +185,30 @@ def test_notification_list_returns_raw_payload():
     assert result["urls"][0]["availability_status"] == "GREEN"
 
 
-def test_unprocessed_reviews_paginates_via_last_id():
+def test_unprocessed_reviews_merges_new_and_viewed_newest_first():
     requests: list[httpx.Request] = []
-    pages = [
-        {"reviews": [{"id": "r1"}, {"id": "r2"}], "last_id": "cursor-2", "has_next": True},
-        {"reviews": [{"id": "r3"}], "last_id": "", "has_next": False},
-    ]
+    pages = {
+        "NEW": [
+            {"reviews": [{"id": "r1", "published_at": "2026-11-03T10:00:00Z"}], "last_id": "cursor-2", "has_next": True},
+            {"reviews": [{"id": "r2", "published_at": "2026-11-01T10:00:00Z"}], "last_id": "", "has_next": False},
+        ],
+        "VIEWED": [
+            # r2 moved from NEW to VIEWED between the two requests
+            {"reviews": [{"id": "r3", "published_at": "2026-11-02T10:00:00Z"}, {"id": "r2", "published_at": "2026-11-01T10:00:00Z"}], "last_id": "", "has_next": False},
+        ],
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json=pages[len(requests) - 1])
+        return httpx.Response(200, json=pages[json.loads(request.content)["filters"]["status"]].pop(0))
 
     client = _client_with_handler(handler)
     reviews = client.unprocessed_reviews()
 
-    assert [r["id"] for r in reviews] == ["r1", "r2", "r3"]
-    assert requests[0].url.path == "/v1/review/list"
-    assert b'"status":"UNPROCESSED"' in requests[0].content.replace(b" ", b"")
-    assert b'"last_id":"cursor-2"' in requests[1].content.replace(b" ", b"")
+    assert [r["id"] for r in reviews] == ["r1", "r3", "r2"]
+    assert requests[0].url.path == "/v2/review/list"
+    assert json.loads(requests[1].content)["last_id"] == "cursor-2"
+    assert [json.loads(r.content)["filters"]["status"] for r in requests] == ["NEW", "NEW", "VIEWED"]
 
 
 def test_unprocessed_reviews_clamps_limit_to_ozons_allowed_range():
@@ -216,7 +224,7 @@ def test_unprocessed_reviews_clamps_limit_to_ozons_allowed_range():
     assert b'"limit":20' in body
 
     client.unprocessed_reviews(limit=500)  # above the allowed range
-    body = requests[1].content.replace(b" ", b"")
+    body = requests[-1].content.replace(b" ", b"")
     assert b'"limit":100' in body
 
 
@@ -256,7 +264,7 @@ def test_create_review_comment_posts_expected_body_and_returns_comment_id():
 
 def test_mark_review_processed_posts_expected_body():
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/review/change-status"
+        assert request.url.path == "/v2/review/change-status"
         body = request.content.replace(b" ", b"")
         assert b'"review_ids":["review-1"]' in body
         assert b'"status":"PROCESSED"' in body

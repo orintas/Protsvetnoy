@@ -10,6 +10,7 @@ from .http import ApiError, JsonClient
 
 MAX_STOCKS_PER_REQUEST = 100  # OZON's own limit for POST /v2/products/stocks
 PRODUCT_LIST_PAGE_SIZE = 1000
+UNPROCESSED_REVIEW_STATUSES = ("NEW", "VIEWED")
 LABEL_POLL_ATTEMPTS = 10
 LABEL_POLL_SECONDS = 2.0
 
@@ -119,24 +120,28 @@ class OzonClient:
         return self._client.post("/v1/notification/list", {})
 
     def unprocessed_reviews(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Reviews with status UNPROCESSED, newest first, paginated via
-        last_id/has_next (confirmed live shape). `limit` is per OZON's own
-        page-size bound of [20, 100] — values outside that range are clamped
-        rather than left to fail the request."""
+        """Reviews not processed yet, newest first. /v2/review/list replaced
+        v1's single UNPROCESSED status with NEW and VIEWED — the two together
+        matched v1's list exactly (1847 reviews, checked live 2026-11-06) —
+        and takes one status per request, so both are fetched and merged.
+        Paginated via last_id/has_next. `limit` is per OZON's own page-size
+        bound of [20, 100] — values outside that range are clamped rather
+        than left to fail the request."""
         page_size = max(20, min(limit, 100))
-        reviews: list[dict[str, Any]] = []
-        last_id = ""
-        while True:
-            body: dict[str, Any] = {"status": "UNPROCESSED", "limit": page_size, "sort_dir": "DESC"}
-            if last_id:
-                body["last_id"] = last_id
-            payload = self._client.post("/v1/review/list", body)
-            reviews.extend(payload.get("reviews") or [])
-            if not payload.get("has_next"):
-                return reviews
-            last_id = payload.get("last_id") or ""
-            if not last_id:
-                return reviews
+        reviews: dict[str, dict[str, Any]] = {}
+        for status in UNPROCESSED_REVIEW_STATUSES:
+            last_id = ""
+            while True:
+                body: dict[str, Any] = {"filters": {"status": status}, "limit": page_size, "sort_dir": "DESC"}
+                if last_id:
+                    body["last_id"] = last_id
+                payload = self._client.post("/v2/review/list", body)
+                # By id: a review opened between the two requests moves from NEW to VIEWED.
+                reviews.update({str(review.get("id")): review for review in payload.get("reviews") or []})
+                last_id = payload.get("last_id") or ""
+                if not payload.get("has_next") or not last_id:
+                    break
+        return sorted(reviews.values(), key=lambda review: review.get("published_at") or "", reverse=True)
 
     def product_names_by_sku(self, skus: list[int]) -> dict[int, dict[str, str]]:
         """{sku: {"offer_id", "name"}} for a batch of OZON SKUs, via
@@ -179,7 +184,5 @@ class OzonClient:
     def mark_review_processed(self, review_id: str) -> None:
         """Marks a review as processed without posting a comment — the only
         way to clear a text-less (rating-only) review from the unprocessed
-        queue, since create_review_comment rejects those outright. Confirmed
-        live 2026-10-15: /v1/review/change-status, body
-        {"review_ids": [...], "status": "PROCESSED"|"UNPROCESSED"}."""
-        self._client.post("/v1/review/change-status", {"review_ids": [review_id], "status": "PROCESSED"})
+        queue, since create_review_comment rejects those outright."""
+        self._client.post("/v2/review/change-status", {"review_ids": [review_id], "status": "PROCESSED"})
