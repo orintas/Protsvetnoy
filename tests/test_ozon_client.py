@@ -1,7 +1,9 @@
 import httpx
+import pytest
 
 import sync_service.change_log as change_log_module
-from sync_service.ozon_client import OzonClient
+from sync_service.http import ApiError
+from sync_service.ozon_client import LABEL_POLL_ATTEMPTS, OzonClient
 
 
 def _client_with_handler(handler):
@@ -97,13 +99,52 @@ def test_ship_posting_sends_products_as_packages():
     assert b'"quantity":2' in body
 
 
-def test_package_label_returns_raw_pdf_bytes():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v2/posting/fbs/package-label"
-        return httpx.Response(200, content=b"%PDF-fake", headers={"content-type": "application/pdf"})
+def _label_client(statuses, monkeypatch):
+    """`statuses`: the /get answers, in order; the file host serves the PDF."""
+    monkeypatch.setattr("sync_service.ozon_client.time.sleep", lambda seconds: None)
+    requests: list[httpx.Request] = []
+    answers = iter(statuses)
 
-    client = _client_with_handler(handler)
+    def api(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/v3/posting/fbs/package-label/create":
+            return httpx.Response(200, json={"tasks": [{"task_id": 77, "task_type": "small_label"}]})
+        assert request.url.path == "/v2/posting/fbs/package-label/get"
+        return httpx.Response(200, json=next(answers))
+
+    downloads: list[httpx.Request] = []
+
+    def files(request: httpx.Request) -> httpx.Response:
+        downloads.append(request)
+        return httpx.Response(200, content=b"%PDF-fake")
+
+    client = _client_with_handler(api)
+    client._files = httpx.Client(transport=httpx.MockTransport(files))
+    return client, requests, downloads
+
+
+DONE = {"error": None, "file_url": "https://ir.ozone.ru/s3/label.pdf", "status": {"code": "completed"}}
+
+
+def test_package_label_waits_for_the_task_and_downloads_the_file(monkeypatch):
+    client, requests, downloads = _label_client([{"error": None, "file_url": "", "status": {"code": "in_progress"}}, DONE], monkeypatch)
+
     assert client.package_label(["X-1"]) == b"%PDF-fake"
+    assert b'"posting_numbers":["X-1"]' in requests[0].content.replace(b" ", b"")
+    assert b'"task_id":77' in requests[1].content.replace(b" ", b"")
+    assert "api-key" not in downloads[0].headers  # the file host never sees the API key
+
+
+def test_package_label_raises_when_the_task_fails(monkeypatch):
+    client, _, _ = _label_client([{"error": "boom", "file_url": "", "status": {"code": "failed"}}], monkeypatch)
+    with pytest.raises(ApiError, match="boom"):
+        client.package_label(["X-1"])
+
+
+def test_package_label_reports_not_ready_after_the_last_check(monkeypatch):
+    client, _, _ = _label_client([{"error": None, "file_url": "", "status": {"code": "in_progress"}}] * LABEL_POLL_ATTEMPTS, monkeypatch)
+    with pytest.raises(ApiError, match="ready"):
+        client.package_label(["X-1"])
 
 
 def test_ship_posting_records_change_log_entry():

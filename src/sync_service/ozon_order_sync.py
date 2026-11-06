@@ -234,13 +234,9 @@ def _log_error(log: YandexMarketSyncLog, errors: ErrorLog, kind: str, message: s
 
 
 class LabelRateLimited(Exception):
-    """OZON answered the label download with HTTP 429. Seen live
-    2026-11-03/04: only package-label (old and new endpoints alike) kept
-    answering 429 to even a single request for hours, while every other
-    method of the same account worked — OZON's limits are per seller
-    account, so something else using this account's API is taking all of
-    that method's quota. Retried like "not ready", without an error row on
-    every tick (it used to log 40 per posting)."""
+    """OZON answered the label request with HTTP 429. Retried like "not
+    ready", without an error row on every tick (it used to log 40 per
+    posting) — the give-up notice carries the reason instead."""
 
 
 def _send_label(
@@ -258,7 +254,7 @@ def _send_label(
     try:
         label_pdf = ozon.package_label([posting_number])
     except ApiError as error:
-        if "ready" in str(error).lower():
+        if "ready" in str(error).lower() or "NO_POSTINGS_FOR_BATCH_DOWNLOAD" in str(error):
             return False
         if "HTTP 429" in str(error):
             raise LabelRateLimited() from error

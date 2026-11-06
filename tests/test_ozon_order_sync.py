@@ -681,7 +681,7 @@ def test_run_once_tells_the_chat_when_the_label_never_came(tmp_path, monkeypatch
     errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
     queue.add("X-1")
     ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_registration", available_actions=["label_download"])},
-                    fail_label_with={"X-1": 'POST /v2/posting/fbs/package-label failed with HTTP 429: {"code":8}'})
+                    fail_label_with={"X-1": 'POST /v3/posting/fbs/package-label/create failed with HTTP 429: {"code":8}'})
     telegram = FakeTelegram()
     _patched(monkeypatch, ozon, telegram)
 
@@ -694,3 +694,18 @@ def test_run_once_tells_the_chat_when_the_label_never_came(tmp_path, monkeypatch
     chat_id, text, _, _ = telegram.messages[-1]
     assert chat_id == "-100123"
     assert "ТЦ Саларис" in text and "X-1" in text and "скачайте" in text and "LE148 × 1" in text
+
+
+def test_run_once_treats_no_postings_for_batch_download_as_not_ready(tmp_path, monkeypatch):
+    queue = PendingPostings(str(tmp_path / "queue.sqlite3"))
+    log = YandexMarketSyncLog(str(tmp_path / "log.sqlite3"))
+    errors = ErrorLog(str(tmp_path / "errors.sqlite3"))
+    queue.add("X-1")
+    ozon = FakeOzon(details_by_posting={"X-1": _posting("awaiting_deliver")},
+                    fail_label_with={"X-1": 'POST /v3/posting/fbs/package-label/create failed with HTTP 400: {"code":3, "message":"NO_POSTINGS_FOR_BATCH_DOWNLOAD"}'})
+    _patched(monkeypatch, ozon, FakeTelegram())
+
+    run_once(FakeSettings(), queue, log, errors)
+
+    assert errors.recent() == []
+    assert len(queue.pending()) == 1  # retried on the next tick

@@ -1,25 +1,32 @@
 from __future__ import annotations
 
+import time
 from typing import Any
+
+import httpx
 
 from .change_log import record
 from .http import ApiError, JsonClient
 
 MAX_STOCKS_PER_REQUEST = 100  # OZON's own limit for POST /v2/products/stocks
 PRODUCT_LIST_PAGE_SIZE = 1000
+LABEL_POLL_ATTEMPTS = 10
+LABEL_POLL_SECONDS = 2.0
 
 
 class OzonClient:
     """OZON Seller API client — lists the seller's offers, pushes per-warehouse
     stock, and handles the FBS posting→label flow (confirmed live against the
     real account: /v3/product/list, /v2/products/stocks, /v3/posting/fbs/get,
-    /v2/posting/fbs/package-label)."""
+    /v3/posting/fbs/package-label/create, /v2/posting/fbs/package-label/get)."""
 
     def __init__(self, *, client_id: str, api_key: str, base_url: str = "https://api-seller.ozon.ru") -> None:
         self._client = JsonClient(base_url=base_url, headers={"Client-Id": client_id, "Api-Key": api_key})
+        self._files = httpx.Client(timeout=30.0)
 
     def close(self) -> None:
         self._client.close()
+        self._files.close()
 
     def product_offer_ids(self) -> list[str]:
         """Every non-archived offer_id in the seller's catalog, paginated via last_id."""
@@ -72,14 +79,39 @@ class OzonClient:
         record(service="ozon", entity_type="posting.ship", entity_id=posting_number, action="update", after={"products": len(products)})
 
     def package_label(self, posting_numbers: list[str]) -> bytes:
-        """Raw PDF bytes for the given postings' shipping labels — confirmed
-        live: the response is a bare PDF body (content-type: application/pdf),
-        not the JSON-wrapped {content_type, file_name, file_content} some
-        older docs describe. Only works once a posting has reached
-        awaiting_deliver; raises ApiError (message often literally "The next
-        postings aren't ready") if called too early — callers should treat
-        that as "not ready yet, retry later" rather than a hard failure."""
-        return self._client.post_bytes("/v2/posting/fbs/package-label", {"posting_number": posting_numbers})
+        """Raw PDF bytes for the given postings' shipping labels, via OZON's
+        task flow: create a label task, poll it, download the finished file.
+
+        Replaces /v2/posting/fbs/package-label, switched off 2026-11-02 —
+        it has answered HTTP 429 "request rate limit per second" to every
+        request since, which reads like a quota problem but isn't (OZON
+        support, ticket 96712558). Shapes below confirmed live 2026-11-06.
+
+        Raises ApiError containing NO_POSTINGS_FOR_BATCH_DOWNLOAD when no
+        given posting has a label yet (or any more) — callers should treat
+        that as "not ready yet, retry later"; the old method's equivalent
+        was "The next postings aren't ready"."""
+        created = self._client.post("/v3/posting/fbs/package-label/create", {"posting_numbers": posting_numbers})
+        tasks = created.get("tasks") or []
+        if not tasks:
+            raise ApiError(f"OZON label task for {posting_numbers} was not created: {created}")
+        task_id = tasks[0]["task_id"]
+        for _ in range(LABEL_POLL_ATTEMPTS):
+            task = self._client.post("/v2/posting/fbs/package-label/get", {"task_id": task_id})
+            if task.get("error"):
+                raise ApiError(f"OZON label task {task_id} failed: {task['error']}")
+            if (task.get("status") or {}).get("code") == "completed" and task.get("file_url"):
+                return self._download_file(task["file_url"])
+            time.sleep(LABEL_POLL_SECONDS)
+        raise ApiError(f"OZON label task {task_id}: postings aren't ready after {LABEL_POLL_ATTEMPTS} checks")
+
+    def _download_file(self, url: str) -> bytes:
+        """The finished label lives on OZON's file host, not the API — a
+        separate client, so Client-Id/Api-Key don't travel with the request."""
+        response = self._files.get(url)
+        if response.is_error:
+            raise ApiError(f"GET {url} failed with HTTP {response.status_code}")
+        return response.content
 
     def notification_list(self) -> dict[str, Any]:
         """Registered push-notification subscriptions — confirmed live shape:
