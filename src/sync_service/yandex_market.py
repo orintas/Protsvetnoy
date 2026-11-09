@@ -104,29 +104,16 @@ class YandexMarketClient:
             if not page_token:
                 return offer_ids
 
-    def update_stocks(self, items: list[dict[str, Any]], *, campaign_id: str, warehouse_id: int) -> dict[str, Any]:
-        """items: [{"sku": ..., "count": int}, ...] (max 2000).
-
-        Must be PUT, not POST: POST on this exact path silently no-ops and
-        returns an unrelated paginated stock listing instead of applying
-        anything — confirmed against the live API (identical response body
-        for any POST payload, including an obviously-wrong sentinel count).
-        `type: "FIT"` is the physical/settable count; Yandex derives
-        `AVAILABLE` itself from it minus its own pending reservations.
-        """
-        skus = [
-            {"sku": item["sku"], "warehouseId": warehouse_id, "items": [{"type": "FIT", "count": item["count"]}]}
-            for item in items
-        ]
-        return self._client.put(f"/v2/campaigns/{campaign_id}/offers/stocks", {"skus": skus})
-
     def update_warehouse_stocks(self, items: list[dict[str, Any]], *, warehouse_id: int) -> dict[str, Any]:
         """items: [{"sku": ..., "count": int}, ...] (max 2000).
 
         The method Market documents for cabinets without warehouse groups,
-        which this one is (5 warehouses, no groups). `count` lands in the
-        same FIT value the campaign-level PUT sets — read back through
-        POST /v3/businesses/{id}/offers/stocks, confirmed live 2026-11-06.
+        which this one is (5 warehouses, no groups); it replaced the
+        campaign-level PUT /v2/campaigns/{id}/offers/stocks, which Market
+        keeps for cabinets with groups only. `count` is the FIT value read
+        back through POST /v3/businesses/{id}/offers/stocks — ТЦ Саларис ran
+        on this alone for three days with every offer matching MoySklad
+        (checked 2026-11-09) before the other stores followed.
         """
         sku_items = [{"sku": item["sku"], "partnerWarehouseId": warehouse_id, "count": item["count"]} for item in items]
         return self._client.post(f"/v3/businesses/{self._business_id}/offers/stocks/update", {"skuItems": sku_items})

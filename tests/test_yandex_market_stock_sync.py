@@ -34,7 +34,6 @@ class FakeYandex:
         self.fail_campaigns = fail_campaigns or set()
         self.calls = []
         self.warehouse_ids_used = []
-        self.warehouse_stock_calls = []
         self.campaign_offers_calls = []
         self.closed = False
 
@@ -42,16 +41,12 @@ class FakeYandex:
         self.campaign_offers_calls.append(campaign_id)
         return self.offers_by_campaign.get(campaign_id, [])
 
-    def update_stocks(self, items, *, campaign_id, warehouse_id):
+    def update_warehouse_stocks(self, items, *, warehouse_id):
+        campaign_id = next(c for c, w in CAMPAIGN_WAREHOUSES.items() if w == warehouse_id)
         if campaign_id in self.fail_campaigns:
             raise RuntimeError("boom yandex")
         self.calls.append((campaign_id, items))
         self.warehouse_ids_used.append(warehouse_id)
-
-    def update_warehouse_stocks(self, items, *, warehouse_id):
-        campaign_id = next(c for c, w in CAMPAIGN_WAREHOUSES.items() if w == warehouse_id)
-        self.warehouse_stock_calls.append(campaign_id)
-        self.update_stocks(items, campaign_id=campaign_id, warehouse_id=warehouse_id)
 
     def close(self):
         self.closed = True
@@ -260,13 +255,3 @@ def test_campaign_with_a_donor_gets_its_own_and_the_donor_assortment(tmp_path, m
     assert campaign_id == "NEW"
     assert sorted(items, key=lambda item: item["sku"]) == [{"sku": "LC047", "count": 30}, {"sku": "RGL02", "count": 4}]
 
-
-def test_sync_campaign_stock_uses_the_warehouse_method_for_migrated_campaigns(tmp_path):
-    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
-    moysklad = FakeMoySklad(rows_by_store={"store-1": [{"code": "RGL02", "quantity": 3.0}]})
-    yandex = FakeYandex(offers_by_campaign={"149179258": ["RGL02"]})
-
-    sync_campaign_stock(moysklad, yandex, cache, campaign_id="149179258", store_id="store-1")
-
-    assert yandex.warehouse_stock_calls == ["149179258"]
-    assert yandex.calls == [("149179258", [{"sku": "RGL02", "count": 3}])]

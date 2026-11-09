@@ -93,8 +93,9 @@ CAMPAIGN_NAMES: dict[str, str] = {
 # campaignId -> the FBS warehouse id Yandex Market assigned this shop
 # (Настройки → Остатки → Склады) — confirmed both from the live API
 # (POST /v2/campaigns/{id}/offers/stocks response's warehouses[].warehouseId)
-# and from a screenshot of that page. Required by the stock-update PUT call;
-# distinct from campaignId and not derivable from it.
+# and from a screenshot of that page; the same ids come back from
+# POST /v3/businesses/{id}/warehouses. Required by the stock update
+# (partnerWarehouseId); distinct from campaignId and not derivable from it.
 CAMPAIGN_WAREHOUSES: dict[str, int] = {
     "149179204": 2346691,  # ТМ Авиапарк
     "149179258": 2346756,  # ТЦ Саларис
