@@ -40,6 +40,12 @@ def main() -> None:
     subparsers.add_parser("review-poll-worker")
     subparsers.add_parser("review-reply-worker")
     subparsers.add_parser("tilda-sync-worker")
+    subparsers.add_parser("tbank-acquiring-worker")
+    acquiring_check = subparsers.add_parser(
+        "tbank-acquiring-check",
+        description="Run the T-Bank acquiring reconciliation once in dry run (nothing is written to MoySklad) and print its journal.",
+    )
+    acquiring_check.add_argument("--log", default="data/acquiring_check.sqlite3", help="Journal file for this check (kept apart from the worker's)")
     tilda_test = subparsers.add_parser(
         "tilda-stock-test",
         description="Send a CommerceML package with only the given products to Tilda and print each step's answer.",
@@ -120,6 +126,21 @@ def main() -> None:
     if args.command == "review-reply-worker":
         from .review_worker import reply_worker as review_reply_worker
         review_reply_worker()
+        return
+    if args.command == "tbank-acquiring-worker":
+        from .acquiring_sync import worker as acquiring_worker
+        acquiring_worker()
+        return
+    if args.command == "tbank-acquiring-check":
+        from pathlib import Path
+        from .acquiring_sync import AcquiringLog, run_once
+        from .error_log import ErrorLog
+        Path(args.log).unlink(missing_ok=True)
+        log = AcquiringLog(args.log)
+        days = run_once(Settings.from_env(), log, ErrorLog(str(Path(args.log).with_suffix(".errors.sqlite3"))), dry_run=True)
+        for entry in reversed(log.recent(10000)):
+            print(f"[{entry['status']}] {entry['message']}")
+        print(f"Проверено дней: {days} (тестовый режим — в МойСклад ничего не записано)")
         return
     if args.command == "tilda-sync-worker":
         from .tilda_stock_sync import worker as tilda_worker

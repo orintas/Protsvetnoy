@@ -1,0 +1,42 @@
+{
+  "account_number": "40702810110000874313",
+  "start_day": "2026-11-01",
+  "phone_payments_store": "5563daeb-a66e-11eb-0a80-014c002acb3f",
+  "sbp_terminals": {"MEGA KHIMKI SHOPPING C": "5563daeb-a66e-11eb-0a80-014c002acb3f"},
+  "accounts": [
+    {
+      "key": "main",
+      "name": "МойСклад Цветной",
+      "token_env": "MOYSKLAD_TOKEN",
+      "organization_id": "40b2d5fc-22a4-11ec-0a80-02b1002197e3",
+      "organization_account_id": "40b2dddc-22a4-11ec-0a80-02b1002197e4",
+      "group_id": "08e6b024-d269-11e4-90a2-8ecb0004d9d2",
+      "card_agent": {"type": "counterparty", "id": "511022b7-4d00-11f0-0a80-17e2000e33b6"},
+      "sbp_agent": {"type": "organization", "id": "40b2d5fc-22a4-11ec-0a80-02b1002197e3"},
+      "fee_agent": {"type": "counterparty", "id": "911b5474-eaba-11e5-7a69-93a70017ac6b"},
+      "fee_expense_item_id": "6ae477fa-b944-11ea-0a80-059b0004021d",
+      "stores": [
+        {"name": "ТЦ Мега Химки", "retail_store_id": "5563daeb-a66e-11eb-0a80-014c002acb3f", "terminal": "2332102321"},
+        {"name": "ТЦ Ривьера", "retail_store_id": "6209e1e7-16f3-11ed-0a80-0ba0002aaf6f", "terminal": "2332100891"},
+        {"name": "ТЦ Авиапарк", "retail_store_id": "b6a43339-7e21-11ee-0a80-0091000de5b7", "terminal": "2332098030"},
+        {"name": "ТЦ Саларис", "retail_store_id": "90bbd501-6e09-11f0-0a80-062a0023c524", "terminal": "2332101582"},
+        {"name": "ТЦ Зеленопарк", "retail_store_id": "6595180e-3e24-11e8-9ff4-31500002c411", "terminal": "2332095895"}
+      ]
+    },
+    {
+      "key": "shapki",
+      "name": "МойСклад шапок",
+      "token_env": "MOYSKLAD_SHAPKI_TOKEN",
+      "organization_id": "74128d4d-206d-11e7-7a31-d0fd002e1589",
+      "organization_account_id": "509069bb-c6da-11f0-0a80-09d3000f6c74",
+      "group_id": "73f41cb8-206d-11e7-7a69-971100009514",
+      "card_agent": {"type": "counterparty", "id": "354994a2-1363-11ef-0a80-064b00034e2b"},
+      "sbp_agent": {"type": "counterparty", "id": "354994a2-1363-11ef-0a80-064b00034e2b"},
+      "fee_agent": {"type": "counterparty", "id": "98be2588-60ad-11f1-0a80-1cc70002cebc"},
+      "fee_expense_item_id": "326de3e4-2dbd-11e8-9ff4-34e800064aa0",
+      "stores": [
+        {"name": "Шапки, ТЦ Торговый парк №1", "retail_store_id": "25033a52-199b-11e8-9ff4-34e8002319c1", "terminal": "2332098923"}
+      ]
+    }
+  ]
+}

@@ -621,6 +621,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <button class="tab-btn" data-tab="shopify" type="button">Shopify</button>
 <button class="tab-btn" data-tab="ym-log" type="button">Яндекс.Маркет</button>
 <button class="tab-btn" data-tab="site" type="button">Сайт</button>
+<button class="tab-btn" data-tab="acquiring" type="button">Эквайринг</button>
 <button class="tab-btn" data-tab="planfix" type="button">PlanFix</button>
 <button class="tab-btn" data-tab="reviews" type="button">Отзывы</button>
 <button class="tab-btn" data-tab="errors" type="button">Ошибки<span class="tab-badge" id="errors-tab-badge" hidden></span></button>
@@ -707,6 +708,11 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Сайт protsvetnoy.com — журнал</h2><p style="margin:0">Каждые 10 минут, круглосуточно: остатки 5 складов из МойСклад → stock.json для сайта и общий остаток в Tilda (CommerceML). Оплаченные заказы приходят вебхуком Tilda и создаются в МойСклад с резервом; уведомление — в Telegram.</p></div><button class="button secondary" id="refresh-site-log" type="button">Обновить</button></div>
 <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="site-log-kind" class="field"><option value="">Все типы</option></select><input id="site-log-search" class="field" placeholder="Поиск по номеру заказа" style="min-width:220px"></div>
 <div id="site-sync-log" class="log"></div></section>
+</section>
+<section id="tab-acquiring" class="tab-panel">
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Эквайринг ТБанк — журнал</h2><p style="margin:0">Раз в час, за каждый закончившийся день: каждая оплата картой (по терминалам) и по СБП (по выписке счёта) сверяется с чеками российских точек в МойСклад — Цветной и шапки. Оплата не тем способом, оплата без чека и чек без оплаты попадают сюда и в «Ошибки». По каждой точке создаётся входящий платёж за карты и за СБП к смене дня на полную сумму, комиссия банка — отдельным исходящим платежом.</p></div><button class="button secondary" id="refresh-acquiring-log" type="button">Обновить</button></div>
+<div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap"><select id="acquiring-log-kind" class="field"><option value="">Все типы</option></select><input id="acquiring-log-search" class="field" placeholder="Поиск по точке, чеку, сумме" style="min-width:220px"></div>
+<div id="acquiring-sync-log" class="log"></div></section>
 </section>
 <section id="tab-planfix" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">PlanFix — журнал</h2><p style="margin:0">Два независимых сценария: кнопка «Отправить в МойСклад» на карточке компании создаёт или обновляет контрагента в МойСклад (поиск по сохранённому MoySkladID, затем по email); автоматизация «Запуск подзадач с новинками» по завершении задачи «Установить артикулы новинок» создаёт по одной подзадаче «Проработка продукта» на каждый товар из поля «Товары».</p></div><button class="button secondary" id="refresh-planfix-log" type="button">Обновить</button></div>
@@ -933,6 +939,8 @@ createLogSection({target:'shopify-sync-log',endpoint:'/api/shopify-sync-log',kin
 const ozonKindLabels={ozon_stock_sync:'Остаток изменён',ozon_stock_error:'Ошибка остатков',webhook:'Уведомление OZON',order_created:'Упаковка подтверждена',order_cancelled:'Отправление отменено',order_pipeline_error:'Ошибка заказа',order_error:'Не удалось получить этикетку',label_sent:'Этикетка отправлена'};
 createLogSection({target:'ozon-sync-log',endpoint:'/api/ozon-sync-log',kindSelect:'ozon-log-kind',searchInput:'ozon-log-search',refresh:'refresh-ozon-log',kindLabels:ozonKindLabels,emptyMessage:'Проверок пока не было.'});
 const siteKindLabels={stock_sync:'Остатки',stock_test:'Пробная выгрузка',webhook:'Вебхук заказа',webhook_test:'Тест вебхука',order_created:'Заказ создан',order_missing_products:'Товар не найден',order_notified:'Уведомление',order_error:'Ошибка заказа'};
+const acquiringKindLabels={day:'День',mismatch:'Расхождение',payment:'Входящий платёж',payment_manual:'Уже разнесено',payment_error:'Платёж не создан',fee:'Комиссия',fee_manual:'Комиссия уже есть',terminal_error:'Терминал'};
+createLogSection({target:'acquiring-sync-log',endpoint:'/api/acquiring-log',kindSelect:'acquiring-log-kind',searchInput:'acquiring-log-search',refresh:'refresh-acquiring-log',kindLabels:acquiringKindLabels,emptyMessage:'Проверок ещё не было.'});
 createLogSection({target:'site-sync-log',endpoint:'/api/tilda-sync-log',kindSelect:'site-log-kind',searchInput:'site-log-search',refresh:'refresh-site-log',kindLabels:siteKindLabels,emptyMessage:'Событий пока не было.',rowExtra:e=>e.external_id?' · заказ '+escapeHtml(e.external_id):''});
 let allChangesLogEntries=[];
 let changesSearchResults=null;
@@ -1113,6 +1121,14 @@ else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.foc
         query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
         tilda_log = YandexMarketSyncLog("data/tilda_sync.sqlite3")
         entries = tilda_log.search(query) if query else tilda_log.recent()
+        payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [payload]
+    if path == "/api/acquiring-log":
+        from .acquiring_sync import AcquiringLog
+        query = parse_qs(environ.get("QUERY_STRING", "")).get("q", [""])[0].strip()
+        acquiring_log = AcquiringLog()
+        entries = acquiring_log.search(query) if query else acquiring_log.recent(days=14)
         payload = dumps(entries, ensure_ascii=False, default=str).encode("utf-8")
         start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
         return [payload]

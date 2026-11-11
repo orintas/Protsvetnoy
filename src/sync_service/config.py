@@ -46,6 +46,9 @@ class Settings:
     telegram_site_delivery_chat_id: str
     dry_run: bool
     moysklad_shift_close_dry_run: bool
+    tbank_api_token: str = ""
+    tbank_base_url: str = "https://business.tbank.ru/openapi"
+    tbank_acquiring_dry_run: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -98,6 +101,9 @@ class Settings:
             telegram_site_delivery_chat_id=os.getenv("TELEGRAM_SITE_DELIVERY_CHAT_ID") or os.getenv("TELEGRAM_LABEL_CHAT_ID", ""),
             dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes"},
             moysklad_shift_close_dry_run=os.getenv("MOYSKLAD_SHIFT_CLOSE_DRY_RUN", "true").lower() in {"1", "true", "yes"},
+            tbank_api_token=os.getenv("TBANK_API_KEY") or os.getenv("TBANK_API_TOKEN", ""),
+            tbank_base_url=os.getenv("TBANK_BASE_URL", "https://business.tbank.ru/openapi").rstrip("/"),
+            tbank_acquiring_dry_run=os.getenv("TBANK_ACQUIRING_DRY_RUN", "true").lower() in {"1", "true", "yes"},
         )
 
 

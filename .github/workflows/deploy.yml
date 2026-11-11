@@ -67,6 +67,13 @@ jobs:
             sed -i "s#^PLANFIX_BASE_URL=.*#PLANFIX_BASE_URL=${{ secrets.PLANFIX_BASE_URL }}#" .env
             grep -q '^PLANFIX_WEBHOOK_SECRET=' .env || echo 'PLANFIX_WEBHOOK_SECRET=' >> .env
             sed -i "s#^PLANFIX_WEBHOOK_SECRET=.*#PLANFIX_WEBHOOK_SECRET=${{ secrets.PLANFIX_WEBHOOK_SECRET }}#" .env
+            # T-Bank acquiring: tokens are only written when the secret is set,
+            # so an unset secret never blanks a value entered on the VPS by hand.
+            grep -q '^TBANK_API_KEY=' .env || echo 'TBANK_API_KEY=' >> .env
+            if [ -n "${{ secrets.TBANK_API_KEY }}" ]; then sed -i "s#^TBANK_API_KEY=.*#TBANK_API_KEY=${{ secrets.TBANK_API_KEY }}#" .env; fi
+            grep -q '^MOYSKLAD_SHAPKI_TOKEN=' .env || echo 'MOYSKLAD_SHAPKI_TOKEN=' >> .env
+            if [ -n "${{ secrets.MOYSKLAD_SHAPKI_TOKEN }}" ]; then sed -i "s#^MOYSKLAD_SHAPKI_TOKEN=.*#MOYSKLAD_SHAPKI_TOKEN=${{ secrets.MOYSKLAD_SHAPKI_TOKEN }}#" .env; fi
+            grep -q '^TBANK_ACQUIRING_DRY_RUN=' .env || echo 'TBANK_ACQUIRING_DRY_RUN=true' >> .env
             docker compose up -d --build --remove-orphans
             # The Caddyfile is a single-file bind mount: git replaces the file, so
             # the running container keeps the old copy until it is restarted.

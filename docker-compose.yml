@@ -96,6 +96,14 @@ services:
       - sync-data:/app/data
     depends_on:
       - telegram-proxy
+  tbank-acquiring-worker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["tbank-acquiring-worker"]
+    volumes:
+      - sync-data:/app/data
   telegram-qa-worker:
     build: .
     restart: unless-stopped

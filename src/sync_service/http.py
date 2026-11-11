@@ -21,12 +21,14 @@ class JsonClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         retry_backoff: float = 1.5,
+        verify: Any = True,
     ) -> None:
         self._client = httpx.Client(
             base_url=base_url,
             headers=dict(headers or {}),
             auth=auth,
             timeout=timeout,
+            verify=verify,
         )
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff

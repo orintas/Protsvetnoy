@@ -599,5 +599,79 @@ class MoySkladClient:
         body = {"slot": {"meta": {"href": f"{self._client.base_url}/entity/store/{store_id}/slots/{slot_id}", "type": "slot", "mediaType": "application/json"}}}
         return self._client.put(f"/entity/demand/{demand_id}/positions/{position_id}", body)
 
+    def create_payment_in(
+        self,
+        *,
+        organization_id: str,
+        organization_account_id: str,
+        group_id: str,
+        agent_type: str,
+        agent_id: str,
+        amount: int,
+        moment: str,
+        retail_shift_id: str,
+        external_code: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """Входящий платёж linked to a retail shift — the way acquiring payouts are booked by hand."""
+        body: dict[str, Any] = {
+            "moment": moment,
+            "applicable": True,
+            "sum": amount,
+            "externalCode": external_code,
+            "description": description,
+            "organization": self._meta("organization", organization_id),
+            "organizationAccount": {"meta": {
+                "href": f"{self._client.base_url}/entity/organization/{organization_id}/accounts/{organization_account_id}",
+                "type": "account", "mediaType": "application/json",
+            }},
+            "agent": self._meta(agent_type, agent_id),
+            "group": self._meta("group", group_id),
+            "operations": [{**self._meta("retailshift", retail_shift_id), "linkedSum": amount}],
+        }
+        result = self._client.post("/entity/paymentin", body)
+        record(service="moysklad", entity_type="paymentin", entity_id=result.get("name") or external_code, action="create",
+               after={"sum": amount, "retail_shift_id": retail_shift_id, "agent": agent_id, "external_code": external_code},
+               link=result.get("meta", {}).get("uuidHref"))
+        return result
+
+    def create_payment_out(
+        self,
+        *,
+        organization_id: str,
+        organization_account_id: str,
+        group_id: str,
+        agent_type: str,
+        agent_id: str,
+        expense_item_id: str,
+        amount: int,
+        moment: str,
+        external_code: str,
+        payment_purpose: str,
+        description: str,
+    ) -> dict[str, Any]:
+        """Исходящий платёж — used for the bank's acquiring fee."""
+        body: dict[str, Any] = {
+            "moment": moment,
+            "applicable": True,
+            "sum": amount,
+            "externalCode": external_code,
+            "paymentPurpose": payment_purpose,
+            "description": description,
+            "organization": self._meta("organization", organization_id),
+            "organizationAccount": {"meta": {
+                "href": f"{self._client.base_url}/entity/organization/{organization_id}/accounts/{organization_account_id}",
+                "type": "account", "mediaType": "application/json",
+            }},
+            "agent": self._meta(agent_type, agent_id),
+            "expenseItem": self._meta("expenseitem", expense_item_id),
+            "group": self._meta("group", group_id),
+        }
+        result = self._client.post("/entity/paymentout", body)
+        record(service="moysklad", entity_type="paymentout", entity_id=result.get("name") or external_code, action="create",
+               after={"sum": amount, "agent": agent_id, "external_code": external_code},
+               link=result.get("meta", {}).get("uuidHref"))
+        return result
+
     def close(self) -> None:
         self._client.close()
