@@ -723,7 +723,7 @@ select.field{-webkit-appearance:none;appearance:none;background-image:url("data:
 <div id="reviews-sync-log" class="log"></div></section>
 </section>
 <section id="tab-errors" class="tab-panel">
-<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><div id="error-log" class="log"></div></section>
+<section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал ошибок</h2><p style="margin:0">Все ошибки API и синхронизаций сервиса — МойСклад, Novicloud, Яндекс.Маркет, веб-интерфейс — с полной трассировкой. Нажмите на запись, чтобы увидеть подробности.</p></div><button class="button secondary" id="refresh-errors" type="button">Обновить</button></div><label class="muted" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px"><input type="checkbox" id="show-info-errors"> Показывать уведомления — временные сбои сети, которые прошли сами, и сообщения о восстановлении</label><div id="error-log" class="log"></div></section>
 </section>
 <section id="tab-changes" class="tab-panel">
 <section class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Журнал изменений</h2><p style="margin:0">Всё, что сервис записал через API — МойСклад, Яндекс.Маркет, OZON, Shopify, Telegram — по принципу «было → стало». Хранится 6 месяцев. Нажмите на запись для подробностей.</p></div><button class="button secondary" id="refresh-changes-log" type="button">Обновить</button></div>
@@ -1023,11 +1023,16 @@ function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 function entityLink(payloadRaw){try{const p=typeof payloadRaw==='string'?JSON.parse(payloadRaw):payloadRaw;if(p&&p.moysklad_url)return ' · <a href="'+escapeHtml(p.moysklad_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(p.moysklad_label||p.moysklad_url)+'</a>';}catch(error){}return '';}
 function makeRowsKeyboardAccessible(rows){rows.forEach(row=>{row.setAttribute('tabindex','0');row.setAttribute('role','button');row.onkeydown=e=>{if(e.target.closest('a'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();row.onclick&&row.onclick();}};});}
 let lastErrors=[];
+const showInfoErrors=document.getElementById('show-info-errors');
+try{showInfoErrors.checked=localStorage.getItem('showInfoErrors')==='1';}catch(error){}
+showInfoErrors.onchange=()=>{try{localStorage.setItem('showInfoErrors',showInfoErrors.checked?'1':'0');}catch(error){}renderErrors();};
 function renderErrors(){const target=document.getElementById('error-log');
-target.innerHTML=lastErrors.length?lastErrors.map((e,i)=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+(e.level==='info'?'success':'error')+'">'+escapeHtml(e.source)+(e.level==='info'?' · восстановлено':'')+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>';
+const shown=lastErrors.map((e,i)=>[e,i]).filter(([e])=>showInfoErrors.checked||e.level!=='info');
+const hidden=lastErrors.length-shown.length;
+target.innerHTML=(shown.length?shown.map(([e,i])=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+(e.level==='info'?'success':'error')+'">'+escapeHtml(e.source)+(e.level==='info'?' · уведомление':'')+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>')+(hidden?'<p class="muted" style="font-size:13px">Скрыто уведомлений: '+hidden+'.</p>':'');
 const rows=target.querySelectorAll('[data-error-index]');rows.forEach(row=>row.onclick=()=>showErrorDetail(lastErrors[Number(row.dataset.errorIndex)]));makeRowsKeyboardAccessible(rows);}
 function showErrorDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
-title.textContent=(entry.level==='info'?'Восстановлено · ':'Ошибка · ')+entry.source;
+title.textContent=(entry.level==='info'?'Уведомление · ':'Ошибка · ')+entry.source;
 body.innerHTML='<dt>Время</dt><dd>'+new Date(entry.created_at).toLocaleString()+'</dd><dt>Источник</dt><dd>'+escapeHtml(entry.source)+'</dd><dt>Сообщение</dt><dd>'+escapeHtml(entry.message)+'</dd><dt>Подробности</dt><dd><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;max-height:320px;overflow:auto">'+escapeHtml(entry.details||'')+'</pre></dd>';
 modal.classList.add('open');}
 function updateErrorStatus(count){const indicator=document.getElementById('status-indicator'), badge=document.getElementById('errors-tab-badge');
