@@ -53,7 +53,7 @@ from .tbank_client import TBankClient
 from .yandex_market_sync import YandexMarketSyncLog
 
 LOG_PATH = "data/acquiring_sync.sqlite3"
-LOOKBACK_DAYS = 10
+LOOKBACK_DAYS = 14
 # T-API card operations may lag up to two hours — a day is checked only once
 # it is safely over.
 DAY_SETTLED_HOUR = 3

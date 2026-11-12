@@ -74,6 +74,8 @@ jobs:
             grep -q '^MOYSKLAD_SHAPKI_TOKEN=' .env || echo 'MOYSKLAD_SHAPKI_TOKEN=' >> .env
             if [ -n "${{ secrets.MOYSKLAD_SHAPKI_TOKEN }}" ]; then sed -i "s#^MOYSKLAD_SHAPKI_TOKEN=.*#MOYSKLAD_SHAPKI_TOKEN=${{ secrets.MOYSKLAD_SHAPKI_TOKEN }}#" .env; fi
             grep -q '^TBANK_ACQUIRING_DRY_RUN=' .env || echo 'TBANK_ACQUIRING_DRY_RUN=true' >> .env
+            # Live since 2026-11-12; set the repo variable TBANK_ACQUIRING_DRY_RUN=true to go back to a dry run.
+            sed -i "s#^TBANK_ACQUIRING_DRY_RUN=.*#TBANK_ACQUIRING_DRY_RUN=${{ vars.TBANK_ACQUIRING_DRY_RUN || 'false' }}#" .env
             docker compose up -d --build --remove-orphans
             # The Caddyfile is a single-file bind mount: git replaces the file, so
             # the running container keeps the old copy until it is restarted.
