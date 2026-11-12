@@ -4,7 +4,7 @@ from sync_service.acquiring_reconcile import (
     MOSCOW,
     Payment,
     Receipt,
-    absorb_phone_payments,
+    absorb_payout_residual,
     parse_card_operation,
     parse_receipt,
     parse_statement_line,
@@ -99,16 +99,33 @@ def test_card_refund_matches_a_return():
 
 def test_phone_payments_explain_card_receipts_without_terminal_operation():
     result = reconcile_day([], [receipt("14:52", "19437", card_=756000), receipt("21:20", "19436", card_=657400)], card_stores={A})
-    assert absorb_phone_payments(result, A, 1413400) == 0
+    assert absorb_payout_residual(result, 1413400, A) == 0
     assert codes(result) == []
     assert result.assigned[A]["card"] == 1413400
 
 
 def test_unexplained_phone_residual_is_not_credited_to_the_store():
     result = reconcile_day([], [receipt("14:52", "19437", card_=756000)], card_stores={A})
-    assert absorb_phone_payments(result, A, 549000) == 549000
+    assert absorb_payout_residual(result, 549000, A) == 549000
     assert codes(result) == ["receipt_without_card"]
     assert A not in result.assigned
+
+
+def test_qr_on_a_card_terminal_punched_as_card_is_found_in_the_payout_residual():
+    # Confirmed live: Шапки 08.11.2026, чек 02827 на 1 900 ₽ проведён картой, а на терминале
+    # прошла оплата по QR — её нет в T-API, деньги пришли вместе с картами.
+    result = reconcile_day([], [receipt("19:57", "02827", card_=190000, store=B)], card_stores={A, B})
+    assert absorb_payout_residual(result, 649000, A) == 459000
+    assert codes(result) == ["qr_as_card"]
+    assert "02827" in result.findings[0].message
+    assert result.assigned[B]["card"] == 190000
+
+
+def test_qr_receipt_paid_on_a_card_terminal_is_not_an_error():
+    result = reconcile_day([], [receipt("12:00", "5", qr_=250000, store=B)], card_stores={A, B})
+    assert absorb_payout_residual(result, 250000, A) == 0
+    assert codes(result) == []
+    assert result.assigned[B]["card"] == 250000
 
 
 def test_parse_card_operation_converts_utc_to_moscow():

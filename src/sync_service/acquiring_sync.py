@@ -15,8 +15,9 @@ is over:
 3. one Исходящий платёж per MoySklad account per day for its share of the fee.
 
 Card money arrives as one credit per day for every terminal and also
-carries phone (SoftPOS) payments that T-API doesn't list; that difference
-is attributed to `phone_payments_store`.
+carries what T-API doesn't list: phone (SoftPOS) payments of
+`phone_payments_store` and QR payments taken on any store's card terminal;
+that difference is matched to receipts left without a payment.
 """
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ from .acquiring_reconcile import (
     Payment,
     Receipt,
     StatementLine,
-    absorb_phone_payments,
+    absorb_payout_residual,
     parse_card_operation,
     parse_receipt,
     parse_statement_line,
@@ -246,15 +247,22 @@ class Run:
                     "card_payout_short", "",
                     f"Зачислено по картам {rub(plan.card_payout.amount)}, а по терминалам оплат на {rub(all_debits)} — банк недоплатил {rub(-residual)}",
                     f"payout:{plan.card_payout.operation_id}"))
-            elif residual > 0 and self.config.phone_payments_store:
-                phone_account = self.config.store(self.config.phone_payments_store).account
-                debits[phone_account] = debits.get(phone_account, 0) + residual
-                unexplained = absorb_phone_payments(result, self.config.phone_payments_store, residual)
+            elif residual > 0:
+                before = {store: dict(amounts) for store, amounts in result.assigned.items()}
+                unexplained = absorb_payout_residual(result, residual, self.config.phone_payments_store)
+                for store_id, amounts in result.assigned.items():
+                    gained = amounts["card"] - before.get(store_id, {}).get("card", 0)
+                    if gained:
+                        account = self.config.store(store_id).account
+                        debits[account] = debits.get(account, 0) + gained
+                if unexplained and self.config.phone_payments_store:
+                    phone_account = self.config.store(self.config.phone_payments_store).account
+                    debits[phone_account] = debits.get(phone_account, 0) + unexplained
                 if unexplained:
                     result.findings.append(Finding(
                         "card_payout_unexplained", "",
-                        f"В зачислении по картам на {rub(residual)} больше, чем по терминалам (оплаты на телефоне), "
-                        f"но чеков картой без операции на эту сумму нет — {rub(unexplained)} не разнесены ни в одну точку, разнесите вручную",
+                        f"В зачислении по картам {rub(unexplained)} без операции в T-API (оплата на телефоне в Мега Химки "
+                        f"или по QR на терминале любой точки), и чеков без оплаты на эту сумму нет — не разнесено ни в одну точку, разнесите вручную",
                         f"payout:{plan.card_payout.operation_id}"))
             total = sum(debits.values())
             plan.card_share = {account: amount / total for account, amount in debits.items()} if total else {}

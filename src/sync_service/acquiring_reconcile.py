@@ -309,28 +309,48 @@ def reconcile_day(payments: list[Payment], receipts: list[Receipt], *, window: t
     return m.result
 
 
-def absorb_phone_payments(result: DayResult, store: str, residual: int) -> int:
-    """Card payments taken on a phone (T-Bank SoftPOS) are paid out with the
-    terminals but are invisible to T-API — confirmed live for ТЦ Мега Химки.
-    `residual` = the day's card payout minus every terminal's payments. The
-    store's card receipts left without a terminal operation whose amounts
-    add up to exactly that residual are those phone payments, not errors.
-    Only an explained residual is credited to the store — unexplained money
-    may just as well be another store's phone payment with no receipt.
-    Returns the part no receipt accounts for (0 when fully explained)."""
+def absorb_payout_residual(result: DayResult, residual: int, phone_store: str) -> int:
+    """`residual` = the day's card payout minus every terminal's card payments
+    in T-API. Two kinds of money are in the payout but not in T-API:
+    - card payments taken on a phone (T-Bank SoftPOS) — `phone_store`
+      (ТЦ Мега Химки), confirmed live;
+    - QR (СБП) payments taken on a store's card terminal — they are paid out
+      with the cards, not as a separate СБП credit (confirmed live: Шапки
+      08.11.2026, чек 02827, QR RRN 2099911978).
+    Receipts left without a payment whose amounts add up to the residual
+    (exactly if possible, else as close as possible from below) are those
+    payments. A card receipt explained this way outside `phone_store` was a
+    QR payment punched as card — reported as such. Money no receipt accounts
+    for is not credited anywhere. Returns that unexplained part."""
     if residual <= 0:
         return residual
-    candidates = [f for f in result.findings if f.code == "receipt_without_card" and f.store == store and f.amount > 0][:16]
-    best: tuple[Finding, ...] | None = None
+    candidates = [f for f in result.findings if f.amount > 0 and (
+        f.code == "receipt_without_qr" or (f.code == "receipt_without_card" and f.store))][:16]
+    best: tuple[Finding, ...] = ()
+    best_sum = 0
     for size in range(len(candidates), 0, -1):
-        best = next((c for c in itertools.combinations(candidates, size) if sum(f.amount for f in c) == residual), None)
-        if best:
+        for combo in itertools.combinations(candidates, size):
+            total = sum(f.amount for f in combo)
+            if best_sum < total <= residual:
+                best, best_sum = combo, total
+                if total == residual:
+                    break
+        if best_sum == residual:
             break
     if not best:
         return residual
     result.findings = [f for f in result.findings if f not in best]
-    result.assigned.setdefault(store, {"card": 0, "qr": 0})["card"] += residual
-    return 0
+    for f in best:
+        result.assigned.setdefault(f.store, {"card": 0, "qr": 0})["card"] += f.amount
+        if f.code == "receipt_without_card" and f.store != phone_store:
+            name = f.ref.split(":")[1] if ":" in f.ref else f.ref
+            result.findings.append(Finding(
+                "qr_as_card", f.store,
+                f"Чек {name} проведён картой на {rub(f.amount)}, а оплатили по QR (СБП) на терминале — "
+                f"в T-API этой операции нет, деньги пришли в зачислении по картам",
+                f"terminal-qr:{f.ref}", f.receipt_url, amount=f.amount,
+            ))
+    return residual - best_sum
 
 
 # --- statement ------------------------------------------------------------
