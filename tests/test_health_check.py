@@ -85,6 +85,13 @@ def test_check_yandex_market_stock_fails_when_every_recent_attempt_errored(tmp_p
     assert result.ok is False
 
 
+def test_check_yandex_market_stock_gives_the_first_morning_run_time_to_happen(tmp_path):
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    morning = datetime(2026, 11, 15, 6, 1, tzinfo=timezone.utc)  # 9:01 Moscow, last success was last night
+    assert check_yandex_market_stock(log, morning).ok is True
+    assert check_yandex_market_stock(log, morning + timedelta(minutes=30)).ok is False  # 9:31, still nothing
+
+
 def test_check_shopify_catalog_ok_on_a_recent_run_with_no_changes(tmp_path):
     """A quiet night (nothing changed) legitimately produces zero
     catalog_created/catalog_update/catalog_error rows — only the unconditional

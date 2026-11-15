@@ -90,10 +90,18 @@ def check_yandex_market_stock(log: YandexMarketSyncLog, now: datetime) -> CheckR
     every 10 minutes but failing every single time (confirmed live
     2026-10-01: Yandex's own API returned 500 for this account's offer
     listing for hours) still produces fresh "stock_sync" log rows, so
-    counting any status here would have reported healthy the whole time."""
+    counting any status here would have reported healthy the whole time.
+
+    The worker sleeps 10 min between ticks from whenever it was started, so
+    its first run of the day can land as late as ~9:10 — until then the last
+    success is legitimately last night's (confirmed live 2026-11-15: "667
+    мин назад" at 9:01). Like the Shopify stock check, the staleness clock
+    starts at the window opening, not overnight."""
     now_moscow = now.astimezone(MOSCOW)
     applicable = 9 <= now_moscow.hour < 22
+    window_start = now_moscow.replace(hour=9, minute=0, second=0, microsecond=0)
     entries = [e for e in log.recent(limit=40) if e["kind"] == "stock_sync" and e["status"] == "success"]
+    entries.append({"created_at": window_start.isoformat()})
     return _heartbeat_check("yandex_market_stock", "Остатки Яндекс.Маркет", applicable=applicable, entries=entries, now=now, max_age_minutes=18)
 
 
