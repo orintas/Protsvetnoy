@@ -32,6 +32,7 @@ class FakeMoySklad:
         self.shifts = shifts
         self.created_in: list[dict] = []
         self.created_out: list[dict] = []
+        self.updated: list[tuple[str, int]] = []
 
     def documents(self, entity, *, document_filter, limit=1000):
         if entity == "retaildemand":
@@ -46,6 +47,10 @@ class FakeMoySklad:
     def create_payment_in(self, **kwargs):
         self.created_in.append(kwargs)
         return {"name": str(len(self.created_in)), "meta": {"uuidHref": "https://ms/pin"}}
+
+    def update_payment_in_sum(self, payment, amount):
+        self.updated.append((payment["externalCode"], amount))
+        return {"name": payment["name"], "meta": {"uuidHref": "https://ms/pin"}}
 
     def create_payment_out(self, **kwargs):
         self.created_out.append(kwargs)
@@ -159,3 +164,24 @@ def test_day_waits_for_the_card_payout(tmp_path):
               dry_run=False, now=datetime(2026, 11, 3, 10, 0, tzinfo=MOSCOW))
     assert run.execute() == 0
     assert clients[MAIN].created_in == []
+
+
+def test_a_payment_booked_short_is_corrected_once_receipts_explain_more(tmp_path):
+    # Booked earlier while the 1 000 ₽ phone payment had no receipt yet.
+    own = {"id": "p1", "name": "030090645", "externalCode": "tbank-card-mega-id-2026-11-02", "sum": 600000.0,
+           "agent": {"meta": {"href": "https://ms/counterparty/tbank-main"}},
+           "operations": [{"meta": {"href": "https://ms/retailshift/shift-mega-id-2026-11-02", "type": "retailshift"}}]}
+    clients = _clients(payments_in=[own])
+    run, log, _ = _run(tmp_path, clients, dry_run=False)
+    run.execute()
+    assert clients[MAIN].updated == [("tbank-card-mega-id-2026-11-02", 700000)]
+    assert [p["agent_id"] for p in clients[MAIN].created_in] == ["org-main"]  # card not duplicated
+    assert any("исправлен: 6 000,00 ₽ → 7 000,00 ₽" in e["message"] for e in log.recent())
+
+
+def test_a_day_with_findings_stays_open(tmp_path):
+    clients = _clients(shifts=False)
+    run, log, _ = _run(tmp_path, clients, dry_run=False)
+    run.execute()
+    clients[MAIN].receipts[MEGA].append(_rd("4", "2026-11-02 19:00:00.000"))
+    assert run.execute() == 1  # checked again, not skipped as done

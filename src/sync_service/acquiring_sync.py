@@ -310,12 +310,15 @@ class Run:
                 what = "картам" if channel == "card" else "СБП"
                 external_code = f"tbank-{channel}-{store_id}-{plan.day}"
                 if external_code in codes:
+                    self.correct(store, plan, what, amount, external_code, existing_in, client)
                     continue
                 if amount < 0:
+                    self.unbooked += 1
                     self.error("payment_error", f"{store.name}, {plan.day:%d.%m.%Y}: возвраты по {what} превышают оплаты ({rub(amount)}) — платёж не создан, разнесите вручную", external_code)
                     continue
                 shift = client.retail_shift_for_day(store_id, plan.day.isoformat())
                 if shift is None:
+                    self.unbooked += 1
                     self.error("payment_error", f"{store.name}, {plan.day:%d.%m.%Y}: оплат по {what} на {rub(amount)}, а смены за этот день в МойСклад нет — входящий платёж не создан", external_code)
                     continue
                 agent = account.card_agent if channel == "card" else account.sbp_agent
@@ -342,6 +345,25 @@ class Run:
         for account in self.config.accounts:
             if account.key in self.moysklad:
                 self.book_fee(plan, account, existing[account.key][1])
+
+    def correct(self, store: AcquiringStore, plan: DayPlan, what: str, amount: int, external_code: str,
+                existing_in: list[dict[str, Any]], client: MoySkladClient) -> None:
+        """A payment this service booked earlier whose amount no longer
+        matches — receipts punched later (e.g. from a seller's notebook while
+        the till was down) explained money that had been left unassigned —
+        is corrected in place rather than duplicated."""
+        payment = next(p for p in existing_in if str(p.get("externalCode") or "") == external_code)
+        booked = int(round(float(payment.get("sum") or 0)))
+        if amount <= 0 or booked == amount:
+            return
+        message = (f"{store.name}, {plan.day:%d.%m.%Y}: входящий платёж №{payment.get('name')} по {what} "
+                   f"{'был бы исправлен' if self.dry_run else 'исправлен'}: {rub(booked)} → {rub(amount)}")
+        if self.dry_run:
+            self.log.add_once("payment", "dry-run", message, f"{external_code}:{amount}")
+            return
+        result = client.update_payment_in_sum(payment, amount)
+        payment["sum"] = amount
+        self.log.add("payment", "success", message, f"{external_code}:{amount}", moysklad_link_fields(result, f"Платёж №{result.get('name')}"))
 
     def book_fee(self, plan: DayPlan, account: AcquiringAccount, existing_out: list[dict[str, Any]]) -> None:
         share = plan.card_share.get(account.key, 0.0)
@@ -377,7 +399,10 @@ class Run:
 
     # -- run ---------------------------------------------------------------
     def execute(self) -> int:
-        days = [d for d in self.days() if not self.log.has_success("day", d.isoformat())]
+        # A day is done once it reconciles without findings. A day with findings
+        # stays open for the whole lookback: receipts punched later (a till
+        # that was down, a seller's notebook) then correct its payments.
+        days = [d for d in self.days() if not self.log.has_success("day", f"clean:{d}")]
         if not days:
             return 0
         keys = self.terminal_keys()
@@ -396,16 +421,19 @@ class Run:
             if not plan.final:
                 continue  # the card payout isn't credited yet — next run
             self.report(plan)
+            self.unbooked = 0
             self.book(plan, existing)
-            errors = len(plan.result.findings)
+            errors = len(plan.result.findings) + self.unbooked
             summary = {"assigned": {self.config.store_name(k): {c: v / 100 for c, v in a.items() if v} for k, a in plan.result.assigned.items() if k}}
             message = f"{day:%d.%m.%Y}: сопоставлено оплат {len(plan.result.matched)}, расхождений {errors}"
             if self.dry_run:
                 # status "dry-run" never counts as done (has_success), so the day
                 # is checked for real once dry run is switched off
                 self.log.add_once("day", "dry-run", message + " (тестовый режим — платежи не создаются)", f"dry-run:{day}", summary)
+            elif errors:
+                self.log.add_once("day", "warning", message + " — день перепроверяется, пока расхождения не исчезнут", f"open:{day}:{errors}", summary)
             else:
-                self.log.add("day", "success", message, day.isoformat(), summary)
+                self.log.add_once("day", "success", message, f"clean:{day}", summary)
             finished += 1
         return finished
 

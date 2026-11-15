@@ -635,6 +635,16 @@ class MoySkladClient:
                link=result.get("meta", {}).get("uuidHref"))
         return result
 
+    def update_payment_in_sum(self, payment: dict[str, Any], amount: int) -> dict[str, Any]:
+        """Change the amount of a Входящий платёж linked to one retail shift —
+        both its sum and the shift's linkedSum, which MoySklad keeps apart."""
+        operations = [{"meta": op["meta"], "linkedSum": amount} for op in payment.get("operations", []) if op.get("meta", {}).get("type") == "retailshift"][:1]
+        body: dict[str, Any] = {"sum": amount, **({"operations": operations} if operations else {})}
+        result = self._client.put(f"/entity/paymentin/{payment['id']}", body)
+        record(service="moysklad", entity_type="paymentin.sum", entity_id=result.get("name") or str(payment.get("id")), action="update",
+               before=payment.get("sum"), after=amount, link=result.get("meta", {}).get("uuidHref"))
+        return result
+
     def create_payment_out(
         self,
         *,
