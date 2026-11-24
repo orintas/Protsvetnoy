@@ -1030,14 +1030,17 @@ categoriesModal.onclick=e=>{if(e.target===categoriesModal)closeCategoriesModal()
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function entityLink(payloadRaw){try{const p=typeof payloadRaw==='string'?JSON.parse(payloadRaw):payloadRaw;if(p&&p.moysklad_url)return ' · <a href="'+escapeHtml(p.moysklad_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escapeHtml(p.moysklad_label||p.moysklad_url)+'</a>';}catch(error){}return '';}
 function makeRowsKeyboardAccessible(rows){rows.forEach(row=>{row.setAttribute('tabindex','0');row.setAttribute('role','button');row.onkeydown=e=>{if(e.target.closest('a'))return;if(e.key==='Enter'||e.key===' '){e.preventDefault();row.onclick&&row.onclick();}};});}
-let lastErrors=[];
+// null until the first successful load, so "not loaded" is never shown as "no errors".
+let lastErrors=null,errorsLoading=false,errorsLoadError='';
 const showInfoErrors=document.getElementById('show-info-errors');
 try{showInfoErrors.checked=localStorage.getItem('showInfoErrors')==='1';}catch(error){}
 showInfoErrors.onchange=()=>{try{localStorage.setItem('showInfoErrors',showInfoErrors.checked?'1':'0');}catch(error){}renderErrors();};
 function renderErrors(){const target=document.getElementById('error-log');
+const notice=errorsLoading?'<p class="muted">Загрузка журнала…</p>':errorsLoadError?'<p class="error">Журнал ошибок не загрузился: '+escapeHtml(errorsLoadError)+'. Нажмите «Обновить».</p>':'';
+if(lastErrors===null){target.innerHTML=notice;return;}
 const shown=lastErrors.map((e,i)=>[e,i]).filter(([e])=>showInfoErrors.checked||e.level!=='info');
 const hidden=lastErrors.length-shown.length;
-target.innerHTML=(shown.length?shown.map(([e,i])=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+(e.level==='info'?'success':'error')+'">'+escapeHtml(e.source)+(e.level==='info'?' · уведомление':'')+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):'<p class="muted">Ошибок не было.</p>')+(hidden?'<p class="muted" style="font-size:13px">Скрыто уведомлений: '+hidden+'.</p>':'');
+target.innerHTML=notice+(shown.length?shown.map(([e,i])=>'<div class="log-row clickable'+(!e.read_at?' unread':'')+'" data-error-index="'+i+'"><span class="log-time">'+new Date(e.created_at).toLocaleString()+'</span><b class="badge '+(e.level==='info'?'success':'error')+'">'+escapeHtml(e.source)+(e.level==='info'?' · уведомление':'')+'</b><span>'+escapeHtml(e.message)+'</span></div>').join(''):notice?'':'<p class="muted">Ошибок не было.</p>')+(hidden?'<p class="muted" style="font-size:13px">Скрыто уведомлений: '+hidden+'.</p>':'');
 const rows=target.querySelectorAll('[data-error-index]');rows.forEach(row=>row.onclick=()=>showErrorDetail(lastErrors[Number(row.dataset.errorIndex)]));makeRowsKeyboardAccessible(rows);}
 function showErrorDetail(entry){if(!entry)return;const modal=document.getElementById('log-detail-modal'), body=document.getElementById('log-detail-body'), title=document.getElementById('log-detail-title');
 title.textContent=(entry.level==='info'?'Уведомление · ':'Ошибка · ')+entry.source;
@@ -1047,11 +1050,18 @@ function updateErrorStatus(count){const indicator=document.getElementById('statu
 if(count>0){indicator.textContent='Есть ошибки ('+count+')';indicator.classList.add('has-errors');badge.textContent=String(count);badge.hidden=false;}
 else{indicator.textContent='Система готова';indicator.classList.remove('has-errors');badge.hidden=true;}}
 async function refreshErrorStatus(){try{const response=await fetch('/api/errors');const data=await response.json();updateErrorStatus(data.unread_count);}catch(error){}}
+async function loadErrors(){const button=document.getElementById('refresh-errors');
+if(errorsLoading)return false;
+errorsLoading=true;button.disabled=true;renderErrors();
+const timeout=new AbortController(),timer=setTimeout(()=>timeout.abort(),60000);
+try{const response=await fetch('/api/errors',{signal:timeout.signal});if(!response.ok)throw new Error('сервер ответил '+response.status);
+const data=await response.json();if(!Array.isArray(data.errors))throw new Error('неожиданный ответ сервера');
+lastErrors=data.errors;errorsLoadError='';return true;}
+catch(error){errorsLoadError=error.name==='AbortError'?'сервер не ответил за минуту':error instanceof TypeError?'нет связи с сервером':error instanceof SyntaxError?'неожиданный ответ сервера':error.message;return false;}
+finally{clearTimeout(timer);errorsLoading=false;button.disabled=false;renderErrors();}}
 async function openErrorsTab(){activateTab('errors');hero.classList.add('compact');updateHash('errors');
-try{const response=await fetch('/api/errors');const data=await response.json();lastErrors=data.errors||[];renderErrors();
-fetch('/api/errors/read',{method:'POST'}).then(()=>updateErrorStatus(0));}
-catch(error){document.getElementById('error-log').innerHTML='<p class="error">Журнал ошибок недоступен: '+escapeHtml(error.message)+'</p>';}}
-document.getElementById('refresh-errors').onclick=async()=>{const response=await fetch('/api/errors');const data=await response.json();lastErrors=data.errors||[];renderErrors();};
+if(await loadErrors())fetch('/api/errors/read',{method:'POST'}).then(response=>{if(response.ok)updateErrorStatus(0);}).catch(()=>{});}
+document.getElementById('refresh-errors').onclick=loadErrors;
 document.getElementById('status-indicator').onclick=openErrorsTab;
 refreshErrorStatus();setInterval(refreshErrorStatus,60000);
 const hero=document.getElementById('hero');
