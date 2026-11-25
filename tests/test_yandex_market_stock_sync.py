@@ -1,5 +1,7 @@
 import sync_service.change_log as change_log_module
+import sync_service.yandex_market_stock_sync as stock_module
 from sync_service.error_log import ErrorLog
+from sync_service.http import ApiError
 from sync_service.yandex_market_order_sync import CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
 from sync_service.yandex_market_stock_sync import AssortmentCache, run_once, sync_campaign_stock
 from sync_service.yandex_market_sync import YandexMarketSyncLog
@@ -14,6 +16,8 @@ class FakeSettings:
 
 
 class FakeMoySklad:
+    error: Exception = RuntimeError("boom moysklad")
+
     def __init__(self, rows_by_store=None, fail_stores=None):
         self.rows_by_store = rows_by_store or {}
         self.fail_stores = fail_stores or set()
@@ -21,7 +25,7 @@ class FakeMoySklad:
 
     def stock_by_store(self, store_id):
         if store_id in self.fail_stores:
-            raise RuntimeError("boom moysklad")
+            raise self.error
         return self.rows_by_store.get(store_id, [])
 
     def close(self):
@@ -199,6 +203,77 @@ def test_run_once_logs_error_for_one_campaign_but_continues_others(tmp_path, mon
     shared_errors = errors.recent()
     assert len(shared_errors) == 1
     assert "ТЦ Ривьера" in shared_errors[0]["message"]
+
+
+def _gateway_outage(tmp_path, monkeypatch, fail_stores):
+    moysklad = FakeMoySklad(rows_by_store={s: [{"code": "X", "quantity": 1.0}] for s in CAMPAIGN_STORES.values()}, fail_stores=fail_stores)
+    moysklad.error = ApiError("GET https://api.moysklad.ru/x failed with HTTP 502: Bad Gateway")
+    yandex = FakeYandex(offers_by_campaign={c: ["X"] for c in CAMPAIGN_STORES})
+    _patched(monkeypatch, moysklad, yandex)
+    log = YandexMarketSyncLog(str(tmp_path / "ym.sqlite3"))
+    cache = AssortmentCache(str(tmp_path / "assortment.sqlite3"))
+    return moysklad, yandex, log, cache, ErrorLog(str(tmp_path / "errors.sqlite3"))
+
+
+def test_short_gateway_outage_is_retried_and_stays_out_of_the_error_journal(tmp_path, monkeypatch):
+    failing = {CAMPAIGN_STORES["149179260"]}
+    moysklad, yandex, log, cache, errors = _gateway_outage(tmp_path, monkeypatch, failing)
+    outages = {}
+
+    failed = run_once(FakeSettings(), log, cache, errors, outages=outages)
+    assert failed == {"149179260"}
+
+    moysklad.fail_stores = set()
+    yandex.calls.clear()
+    assert run_once(FakeSettings(), log, cache, errors, outages=outages, only=failed) == set()
+    assert [call[0] for call in yandex.calls] == ["149179260"]
+    assert [e["level"] for e in errors.recent()] == ["info"]
+    assert errors.unread_count() == 0
+
+
+def test_gateway_outage_still_there_on_the_next_tick_becomes_one_error(tmp_path, monkeypatch):
+    _, _, log, cache, errors = _gateway_outage(tmp_path, monkeypatch, {CAMPAIGN_STORES["149179260"]})
+    outages = {}
+    clock = [1000.0]
+    monkeypatch.setattr("sync_service.error_log.time.monotonic", lambda: clock[0])
+    for at in (1000.0, 1060.0, 1660.0, 2260.0):
+        clock[0] = at
+        run_once(FakeSettings(), log, cache, errors, outages=outages)
+    assert errors.unread_count() == 1
+    assert "ТЦ Ривьера" in next(e for e in errors.recent() if e["level"] == "error")["message"]
+
+
+def test_non_network_failure_is_not_retried_early(tmp_path, monkeypatch):
+    moysklad, _, log, cache, errors = _gateway_outage(tmp_path, monkeypatch, {CAMPAIGN_STORES["149179260"]})
+    moysklad.error = RuntimeError("boom moysklad")
+    assert run_once(FakeSettings(), log, cache, errors) == set()
+    assert errors.unread_count() == 1
+
+
+class _Stop(Exception):
+    pass
+
+
+def test_worker_retries_only_the_failed_campaigns_once_before_the_normal_pause(monkeypatch, tmp_path):
+    from datetime import datetime as real_datetime
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stock_module.Settings, "from_env", classmethod(lambda cls: FakeSettings()))
+    monkeypatch.setattr(stock_module, "datetime", type("D", (real_datetime,), {"now": classmethod(lambda cls, tz=None: real_datetime(2026, 11, 25, 12, tzinfo=tz))}))
+    runs, sleeps = [], []
+    monkeypatch.setattr(stock_module, "run_once", lambda *a, only=None, **k: runs.append(only) or {"149179260"})
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise _Stop
+
+    monkeypatch.setattr(stock_module.time, "sleep", sleep)
+    try:
+        stock_module.worker()
+    except _Stop:
+        pass
+    assert runs == [None, {"149179260"}]
+    assert sleeps == [stock_module.OUTAGE_RETRY_SECONDS, stock_module.SYNC_INTERVAL_SECONDS]
 
 
 def test_run_once_message_lists_changed_skus_before_and_after(tmp_path, monkeypatch):

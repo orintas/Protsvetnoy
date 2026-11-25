@@ -110,3 +110,36 @@ def test_run_once_pushes_totals_of_all_stores_and_logs_changes(tmp_path, monkeyp
     first, second = reversed([e["message"] for e in log.recent()])
     assert "первая синхронизация" in first
     assert "изменений нет" in second
+
+
+def test_worker_retries_a_gateway_outage_once_early_then_keeps_its_normal_pace(tmp_path, monkeypatch):
+    import sync_service.tilda_order_sync as order_module
+    from sync_service.error_log import ErrorLog
+    from sync_service.http import ApiError
+
+    class Stop(Exception):
+        pass
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stock_module.Settings, "from_env", classmethod(lambda cls: _settings(False)))
+    monkeypatch.setattr(order_module, "retry_pending", lambda *a: None)
+    clock, runs = [0.0], []
+    monkeypatch.setattr(stock_module.time, "monotonic", lambda: clock[0])
+
+    def failing_run(*a, **k):
+        runs.append(clock[0])
+        raise ApiError("GET https://api.moysklad.ru/x failed with HTTP 502: Bad Gateway")
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] > 1400:
+            raise Stop
+
+    monkeypatch.setattr(stock_module, "run_once", failing_run)
+    monkeypatch.setattr(stock_module.time, "sleep", sleep)
+    try:
+        stock_module.worker()
+    except Stop:
+        pass
+    assert runs == [0.0, 60.0, 660.0, 720.0, 1320.0, 1380.0]
+    assert ErrorLog().unread_count() == 1

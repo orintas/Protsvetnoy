@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .change_log import record
 from .config import Settings
-from .error_log import ErrorLog
+from .error_log import ErrorLog, OutageTracker, is_transient_network_error
 from .moysklad import MoySkladClient
 from .yandex_market import YandexMarketClient
 from .yandex_market_order_sync import CAMPAIGN_NAMES, CAMPAIGN_STORES, CAMPAIGN_WAREHOUSES
@@ -23,6 +23,14 @@ ASSORTMENT_TTL = timedelta(hours=24)
 MOSCOW = ZoneInfo("Europe/Moscow")
 STOCK_SYNC_START_HOUR = 9
 STOCK_SYNC_END_HOUR = 22
+
+SYNC_INTERVAL_SECONDS = 600
+# MoySklad's gateway drops out for a minute or so (HTTP 502/504, confirmed
+# live 2026-11-23..25: e.g. four stores in a row failed within 40 seconds,
+# the next tick was fine) — longer than JsonClient's own ~9 seconds of
+# retries. One more pass over just the failed stores catches that instead
+# of leaving their stock stale until the next tick.
+OUTAGE_RETRY_SECONDS = 60
 
 
 class AssortmentCache:
@@ -182,7 +190,21 @@ def _changes_summary(changes: list[dict[str, Any]] | None) -> str:
     return f"изменилось {len(changes)}: {preview}" + (f" и ещё {extra}" if extra > 0 else "")
 
 
-def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCache, errors: ErrorLog) -> None:
+def run_once(
+    settings: Settings,
+    log: YandexMarketSyncLog,
+    cache: AssortmentCache,
+    errors: ErrorLog,
+    *,
+    outages: dict[str, OutageTracker] | None = None,
+    only: set[str] | None = None,
+) -> set[str]:
+    """`outages` (one tracker per campaign, kept by the worker between runs)
+    keeps a short outage out of the error journal; `only` limits the run to
+    those campaigns. Returns the campaigns that failed on a transient network
+    error, i.e. the ones worth retrying soon."""
+    outages = {} if outages is None else outages
+    retryable: set[str] = set()
     moysklad = MoySkladClient(base_url=settings.moysklad_base_url, token=settings.moysklad_token)
     yandex = YandexMarketClient(
         base_url=settings.yandex_market_base_url,
@@ -191,11 +213,15 @@ def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCach
     )
     try:
         for campaign_id, store_id in CAMPAIGN_STORES.items():
+            if only is not None and campaign_id not in only:
+                continue
             store_name = CAMPAIGN_NAMES.get(campaign_id, campaign_id)
+            outage = outages.setdefault(campaign_id, OutageTracker(errors, "yandex_market_stock_sync"))
             try:
                 count, changes = sync_campaign_stock(moysklad, yandex, cache, campaign_id=campaign_id, store_id=store_id)
                 message = f"{store_name}: остатки обновлены, офферов {count}, {_changes_summary(changes)}"
                 log.add("stock_sync", "success", message, None, {"campaign_id": campaign_id, "count": count, "changes": changes})
+                outage.succeeded()
             except Exception as error:
                 # Also surfaced in the shared error journal, not just this
                 # campaign's own log row — a per-campaign try/except here
@@ -208,10 +234,13 @@ def run_once(settings: Settings, log: YandexMarketSyncLog, cache: AssortmentCach
                 # reported healthy (see health_check.check_yandex_market_stock).
                 message = f"{store_name}: ошибка синхронизации остатков: {error}"
                 log.add("stock_sync", "error", message, None, {"campaign_id": campaign_id})
-                errors.log_exception("yandex_market_stock_sync", error, context=f"{store_name}: ошибка синхронизации остатков")
+                outage.failed(error, context=f"{store_name}: ошибка синхронизации остатков")
+                if is_transient_network_error(error):
+                    retryable.add(campaign_id)
     finally:
         moysklad.close()
         yandex.close()
+    return retryable
 
 
 def worker() -> None:
@@ -219,11 +248,18 @@ def worker() -> None:
     log = YandexMarketSyncLog()
     cache = AssortmentCache()
     errors = ErrorLog()
+    outages: dict[str, OutageTracker] = {}
     while True:
         now = datetime.now(MOSCOW)
         if STOCK_SYNC_START_HOUR <= now.hour < STOCK_SYNC_END_HOUR:
             try:
-                run_once(settings, log, cache, errors)
+                failed = run_once(settings, log, cache, errors, outages=outages)
+                if failed:
+                    time.sleep(OUTAGE_RETRY_SECONDS)
+                    run_once(settings, log, cache, errors, outages=outages, only=failed)
             except Exception as error:
                 errors.log_exception("yandex_market_stock_sync_worker", error, context="Ошибка синхронизации остатков с Яндекс.Маркетом")
-        time.sleep(600)
+        else:
+            # An evening failure must not count the closed hours as outage.
+            outages.clear()
+        time.sleep(SYNC_INTERVAL_SECONDS)

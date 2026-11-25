@@ -10,10 +10,10 @@ from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
 from .config import Settings
-from .error_log import ErrorLog
+from .error_log import ErrorLog, OutageTracker, is_transient_network_error
 from .moysklad import MoySkladClient
 from .tilda_client import TildaCommerceMLClient, transcript_text
-from .yandex_market_stock_sync import AssortmentCache, _changes_summary
+from .yandex_market_stock_sync import OUTAGE_RETRY_SECONDS, AssortmentCache, _changes_summary
 from .yandex_market_sync import YandexMarketSyncLog
 
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -208,15 +208,25 @@ def worker() -> None:
     state = AssortmentCache("data/tilda_stock_state.sqlite3")
     queue = TildaOrderQueue()
     errors = ErrorLog()
+    outage = OutageTracker(errors, "tilda_stock_sync")
     last_stock_run: float | None = None
+    interval = SYNC_INTERVAL_SECONDS
     while True:
-        if last_stock_run is None or time.monotonic() - last_stock_run >= SYNC_INTERVAL_SECONDS:
+        if last_stock_run is None or time.monotonic() - last_stock_run >= interval:
+            # One early retry after a transient failure, then back to the
+            # normal pace — not a full catalogue read every minute for as
+            # long as MoySklad's maintenance lasts.
+            is_retry = interval != SYNC_INTERVAL_SECONDS
+            interval = SYNC_INTERVAL_SECONDS
             last_stock_run = time.monotonic()
             try:
                 run_once(settings, log, state)
+                outage.succeeded()
             except Exception as error:
                 log.add("stock_sync", "error", f"Ошибка синхронизации остатков сайта: {error}", None)
-                errors.log_exception("tilda_stock_sync", error, context="Ошибка синхронизации остатков сайта (Tilda)")
+                outage.failed(error, context="Ошибка синхронизации остатков сайта (Tilda)")
+                if is_transient_network_error(error) and not is_retry:
+                    interval = OUTAGE_RETRY_SECONDS
         try:
             retry_pending(settings, queue, log, errors)
         except Exception as error:
